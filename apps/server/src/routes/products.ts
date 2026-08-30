@@ -1,58 +1,52 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { createProductSchema, updateProductSchema, CreateProductInput, UpdateProductInput } from '../validators/products';
+
 const router = Router();
 
-const productSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  price: z.number().positive(),
-  stock: z.number().int().min(0).default(0),
-  categoryId: z.string().optional(),
-  isActive: z.boolean().default(true),
-});
-
-router.get('/', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const products = await prisma.product.findMany({
       where: { businessId: req.auth!.businessId },
       include: { category: true },
       orderBy: { sortOrder: 'asc' },
     });
     res.json(products);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.post('/', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const data = productSchema.parse(req.body);
+router.post(
+  '/',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(createProductSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as CreateProductInput;
     const product = await prisma.product.create({
       data: { ...data, businessId: req.auth!.businessId },
     });
     res.status(201).json(product);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-      return;
-    }
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.put('/:id', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const data = productSchema.partial().parse(req.body);
+router.put(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(updateProductSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as UpdateProductInput;
     const product = await prisma.product.update({
-      where: { id: req.params.id, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data,
     });
     res.json(product);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as productsRouter };

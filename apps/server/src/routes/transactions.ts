@@ -1,21 +1,19 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { createTransactionSchema, CreateTransactionInput } from '../validators/transactions';
+import { paginationSchema, toSkipTake } from '../validators/common';
 
 const router = Router();
 
-const createTransactionSchema = z.object({
-  amount: z.number().positive(),
-  type: z.enum(['SALE', 'REFUND', 'PARTIAL']).default('SALE'),
-  paymentMethod: z.enum(['CASH', 'CARD', 'TRANSFER', 'QR']),
-  reference: z.string().optional(),
-  notes: z.string().optional(),
-});
-
-router.get('/', requireAuth, async (req, res) => {
-  try {
-    const { from, to, type, page = '1', pageSize = '50' } = req.query;
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { from, to, type, page, pageSize } = req.query;
+    const pagination = paginationSchema.parse({ page, pageSize });
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
 
     if (type) where.type = type;
@@ -29,33 +27,33 @@ router.get('/', requireAuth, async (req, res) => {
       prisma.transaction.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        skip: (Number(page) - 1) * Number(pageSize),
-        take: Number(pageSize),
+        ...toSkipTake(pagination),
       }),
       prisma.transaction.count({ where }),
     ]);
 
-    res.json({ data: transactions, total, page: Number(page), pageSize: Number(pageSize) });
-  } catch (error) {
-    console.error('Get transactions error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+    res.json({
+      data: transactions,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalPages: Math.ceil(total / pagination.pageSize),
+    });
+  })
+);
 
-router.post('/', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const data = createTransactionSchema.parse(req.body);
+router.post(
+  '/',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(createTransactionSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as CreateTransactionInput;
     const transaction = await prisma.transaction.create({
       data: { ...data, businessId: req.auth!.businessId },
     });
     res.status(201).json(transaction);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-      return;
-    }
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as transactionsRouter };

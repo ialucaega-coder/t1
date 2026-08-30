@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Save, Upload, Palette, Globe, Bell, Shield, Bot } from 'lucide-react';
+import { AI_PROVIDERS, THEME_OPTIONS } from '@/constants/settings';
 
 export default function ConfiguracionPage() {
   const [theme, setTheme] = useState('onyx');
@@ -59,7 +60,7 @@ export default function ConfiguracionPage() {
         <div className="flex items-center gap-3 mb-4">
           <Palette className="h-5 w-5 text-brand-400" />
           <h3 className="font-semibold text-white">White-label</h3>
-          <span className="badge-premium">PRO+</span>
+          <span className="badge-active">ACTIVO</span>
         </div>
         <p className="text-sm text-slate-400 mb-4">
           Tu panel, con tu marca. Ponle a tus bots un panel con tu logo, tu color y uno de tres estilos.

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { authRouter } from './routes/auth';
@@ -16,7 +17,17 @@ import { categoriesRouter } from './routes/categories';
 import { professionalsRouter } from './routes/professionals';
 import { statsRouter } from './routes/stats';
 import { schedulesRouter } from './routes/schedules';
+import { aiRouter } from './routes/ai';
 import { apiRateLimit } from './middleware/rateLimit';
+import {
+  extraSecurityHeaders,
+  sanitizeRequest,
+  validateRequestSize,
+  csrfProtection,
+  issueCsrfToken,
+} from './middleware/security';
+import { auditDataMutations, auditRateLimitViolations } from './middleware/audit';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
 if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === 'dev-secret') {
   if (process.env.NODE_ENV === 'production') {
@@ -47,8 +58,20 @@ app.use(cors({
   credentials: true,
 }));
 app.use(morgan('dev'));
-app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
+
+// Middlewares de seguridad propios (ver src/middleware/security.ts)
+app.use(extraSecurityHeaders);
+app.use(validateRequestSize({ maxBodyBytes: 5 * 1024 * 1024 })); // 5 MB
+
+app.use(express.json({ limit: '5mb' }));
+app.use(sanitizeRequest);
+app.use(issueCsrfToken);
+app.use(csrfProtection);
+
 app.use(apiRateLimit);
+app.use(auditRateLimitViolations);
+app.use(auditDataMutations);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -66,11 +89,12 @@ app.use('/api/categories', categoriesRouter);
 app.use('/api/professionals', professionalsRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/schedules', schedulesRouter);
+app.use('/api/ai', aiRouter);
 
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
-});
+// Ruta no encontrada (404) y manejador de errores centralizado.
+// Deben registrarse al final, después de montar todas las rutas.
+app.use('/api', notFoundHandler);
+app.use(errorHandler);
 
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);

@@ -1,14 +1,21 @@
+'use client';
+
 import { Terminal, Sparkles, Calendar, ShoppingBag, Users, BarChart3 } from 'lucide-react';
 import Link from 'next/link';
-
-const quickStats = [
-  { label: 'Reservas hoy', value: '0', icon: Calendar, href: '/reservas' },
-  { label: 'Servicios activos', value: '0', icon: Sparkles, href: '/servicios' },
-  { label: 'Productos', value: '0', icon: ShoppingBag, href: '/productos' },
-  { label: 'Clientes', value: '0', icon: Users, href: '/clientes' },
-];
+import { useStats } from '@/hooks/use-stats';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function DashboardPage() {
+  const { overview, isLoading, error, refetch } = useStats();
+
+  const quickStats = [
+    { label: 'Reservas hoy', value: overview ? String(overview.todayBookings) : '0', icon: Calendar, href: '/reservas' },
+    { label: 'Servicios activos', value: overview ? String(overview.activeServices) : '0', icon: Sparkles, href: '/servicios' },
+    { label: 'Productos', value: overview ? String(overview.totalProducts) : '0', icon: ShoppingBag, href: '/productos' },
+    { label: 'Clientes', value: overview ? String(overview.totalClients) : '0', icon: Users, href: '/clientes' },
+  ];
+
   return (
     <div className="space-y-8">
       <div className="card-accent">
@@ -36,63 +43,60 @@ export default function DashboardPage() {
         </a>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {quickStats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Link key={stat.label} href={stat.href} className="card group">
-              <div className="flex items-center justify-between mb-3">
-                <Icon className="h-5 w-5 text-brand-400" />
-                <span className="text-2xl font-bold text-white">{stat.value}</span>
-              </div>
-              <p className="text-sm text-slate-400 group-hover:text-slate-300">{stat.label}</p>
-            </Link>
-          );
-        })}
-      </div>
+      {error && <ErrorAlert message={error} onRetry={refetch} />}
+
+      {isLoading ? (
+        <LoadingSpinner label="Cargando estadísticas..." />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {quickStats.map((stat) => {
+            const Icon = stat.icon;
+            return (
+              <Link key={stat.label} href={stat.href} className="card group">
+                <div className="flex items-center justify-between mb-3">
+                  <Icon className="h-5 w-5 text-brand-400" />
+                  <span className="text-2xl font-bold text-white">{stat.value}</span>
+                </div>
+                <p className="text-sm text-slate-400 group-hover:text-slate-300">{stat.label}</p>
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
       <div className="card-accent">
         <div className="flex items-start gap-3">
           <Sparkles className="h-5 w-5 text-brand-400 mt-0.5" />
           <div>
-            <p className="mono-label mb-1">LOCAL B+</p>
+            <p className="mono-label mb-1">PLAN COMPLETO</p>
             <h3 className="text-lg font-bold text-white mb-2">
-              Únete a Local B+ — todo para{' '}
-              <span className="text-brand-400">vivir de esto.</span>
+              Todas las funciones <span className="text-brand-400">desbloqueadas.</span>
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
               <div className="flex items-start gap-2">
-                <span className="text-brand-400 mt-0.5">⚡</span>
+                <span className="text-brand-400 mt-0.5">&#x2713;</span>
                 <p className="text-sm text-slate-400">
-                  Los 13 superpoderes: Blindaje anti-invento, Vigilante, Cazador de ventas, Cobros por WhatsApp, Reportes y más
+                  12 superpoderes activos: Blindaje, Vigilante, Cazador de ventas, Cobros, Reportes y más
                 </p>
               </div>
               <div className="flex items-start gap-2">
-                <span className="text-brand-400 mt-0.5">📦</span>
+                <span className="text-brand-400 mt-0.5">&#x2713;</span>
                 <p className="text-sm text-slate-400">
-                  Los 14 bots por giro, listos para revender a $2,000–3,000 c/u
+                  15 plantillas por giro de negocio listas para usar
                 </p>
               </div>
               <div className="flex items-start gap-2">
-                <span className="text-brand-400 mt-0.5">📖</span>
+                <span className="text-brand-400 mt-0.5">&#x2713;</span>
                 <p className="text-sm text-slate-400">
-                  Los 2 cursos + el Kit de Agencia completos
+                  Kit de Agencia, cursos y comunidad incluidos
                 </p>
               </div>
               <div className="flex items-start gap-2">
-                <span className="text-brand-400 mt-0.5">💬</span>
+                <span className="text-brand-400 mt-0.5">&#x2713;</span>
                 <p className="text-sm text-slate-400">
-                  Comunidad + updates continuos de las plantillas
+                  Multi-canal: WhatsApp, Telegram, Web y voz
                 </p>
               </div>
-            </div>
-            <div className="flex items-center gap-4 mt-6">
-              <button className="btn-primary">
-                Únete a Local B+ ↗
-              </button>
-              <span className="text-sm text-slate-500">
-                <span className="line-through">$64/mes</span> · un cliente paga tu año
-              </span>
             </div>
           </div>
         </div>

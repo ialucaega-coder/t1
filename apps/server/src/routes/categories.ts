@@ -1,18 +1,16 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { createCategorySchema, updateCategorySchema, CreateCategoryInput, UpdateCategoryInput } from '../validators/categories';
 
 const router = Router();
 
-const categorySchema = z.object({
-  name: z.string().min(1),
-  icon: z.string().optional(),
-  sortOrder: z.number().int().default(0),
-});
-
-router.get('/', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const categories = await prisma.category.findMany({
       where: { businessId: req.auth!.businessId },
       include: {
@@ -21,49 +19,48 @@ router.get('/', requireAuth, async (req, res) => {
       orderBy: { sortOrder: 'asc' },
     });
     res.json(categories);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.post('/', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const data = categorySchema.parse(req.body);
+router.post(
+  '/',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(createCategorySchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as CreateCategoryInput;
     const category = await prisma.category.create({
       data: { ...data, businessId: req.auth!.businessId },
     });
     res.status(201).json(category);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-      return;
-    }
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.put('/:id', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const data = categorySchema.partial().parse(req.body);
+router.put(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(updateCategorySchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as UpdateCategoryInput;
     const category = await prisma.category.update({
-      where: { id: req.params.id, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data,
     });
     res.json(category);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.delete('/:id', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
+router.delete(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
     await prisma.category.delete({
-      where: { id: req.params.id, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
     });
     res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as categoriesRouter };

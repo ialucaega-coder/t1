@@ -1,23 +1,19 @@
 import { Router } from 'express';
-import { z } from 'zod';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrderStatusInput } from '../validators/orders';
+import { paginationSchema, toSkipTake } from '../validators/common';
 
 const router = Router();
 
-const createOrderSchema = z.object({
-  items: z.array(z.object({
-    productId: z.string(),
-    quantity: z.number().int().positive(),
-  })).min(1),
-  paymentMethod: z.enum(['CASH', 'CARD', 'TRANSFER', 'QR']),
-  clientId: z.string().optional(),
-  notes: z.string().optional(),
-});
-
-router.get('/', requireAuth, async (req, res) => {
-  try {
-    const { status, page = '1', pageSize = '20' } = req.query;
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { status, page, pageSize } = req.query;
+    const pagination = paginationSchema.parse({ page, pageSize });
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
     if (status) where.status = status;
 
@@ -29,35 +25,39 @@ router.get('/', requireAuth, async (req, res) => {
           items: { include: { product: { select: { name: true, price: true } } } },
         },
         orderBy: { createdAt: 'desc' },
-        skip: (Number(page) - 1) * Number(pageSize),
-        take: Number(pageSize),
+        ...toSkipTake(pagination),
       }),
       prisma.order.count({ where }),
     ]);
 
-    res.json({ data: orders, total, page: Number(page), pageSize: Number(pageSize), totalPages: Math.ceil(total / Number(pageSize)) });
-  } catch (error) {
-    console.error('Get orders error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+    res.json({
+      data: orders,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalPages: Math.ceil(total / pagination.pageSize),
+    });
+  })
+);
 
-router.post('/', requireAuth, async (req, res) => {
-  try {
-    const data = createOrderSchema.parse(req.body);
+router.post(
+  '/',
+  requireAuth,
+  validate(createOrderSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as CreateOrderInput;
 
     const products = await prisma.product.findMany({
-      where: { id: { in: data.items.map(i => i.productId) }, businessId: req.auth!.businessId },
+      where: { id: { in: data.items.map((i) => i.productId) }, businessId: req.auth!.businessId },
     });
 
     if (products.length !== data.items.length) {
-      res.status(400).json({ error: 'One or more products not found' });
-      return;
+      throw new AppError(400, 'One or more products not found');
     }
 
     const totalPrice = data.items.reduce((sum, item) => {
-      const product = products.find(p => p.id === item.productId)!;
-      return sum + product.price * item.quantity;
+      const product = products.find((p) => p.id === item.productId)!;
+      return sum + Number(product.price) * item.quantity;
     }, 0);
 
     const order = await prisma.$transaction(async (tx) => {
@@ -68,8 +68,8 @@ router.post('/', requireAuth, async (req, res) => {
           clientId: data.clientId || req.auth!.userId,
           businessId: req.auth!.businessId,
           items: {
-            create: data.items.map(item => {
-              const product = products.find(p => p.id === item.productId)!;
+            create: data.items.map((item) => {
+              const product = products.find((p) => p.id === item.productId)!;
               return {
                 productId: item.productId,
                 quantity: item.quantity,
@@ -102,28 +102,22 @@ router.post('/', requireAuth, async (req, res) => {
     });
 
     res.status(201).json(order);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-      return;
-    }
-    console.error('Create order error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.patch('/:id/status', requireAuth, async (req, res) => {
-  try {
-    const { status } = req.body;
+router.patch(
+  '/:id/status',
+  requireAuth,
+  validate(updateOrderStatusSchema),
+  asyncHandler(async (req, res) => {
+    const { status } = req.body as UpdateOrderStatusInput;
     const order = await prisma.order.update({
-      where: { id: req.params.id, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { status },
       include: { items: { include: { product: true } } },
     });
     res.json(order);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as ordersRouter };

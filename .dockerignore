@@ -1,0 +1,45 @@
+# .dockerignore
+# Excluye archivos innecesarios del contexto de build para acelerar
+# "docker build" y evitar filtrar secretos dentro de las imagenes.
+
+# Dependencias (se reinstalan dentro del contenedor)
+node_modules
+**/node_modules
+
+# Builds y cache
+.next
+**/.next
+dist
+**/dist
+.turbo
+**/.turbo
+coverage
+**/coverage
+
+# Variables de entorno y secretos — NUNCA deben entrar en la imagen
+.env
+.env.local
+.env.*.local
+.env.production
+**/.env
+**/.env.local
+
+# Control de versiones
+.git
+.gitignore
+.github
+
+# Configuracion del editor / IDE
+.vscode
+.idea
+*.log
+
+# Archivos de Claude Code / herramientas de desarrollo
+.claude
+
+# Documentacion y artefactos varios
+README.md
+*.md
+
+# macOS
+.DS_Store

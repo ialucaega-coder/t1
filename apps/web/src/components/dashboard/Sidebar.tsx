@@ -3,64 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import {
-  LayoutGrid, Zap, Terminal, MessageSquare, Bell, Link2,
-  MessageCircle, Bot, Sparkles, BarChart3, Users,
-  PaintBucket, TrendingUp, Store, Trophy, Building2, UserCheck,
-  Settings, CreditCard, Calendar, ShoppingBag, Shield,
-  Map, Flame,
-} from 'lucide-react';
-
-const navigation = [
-  {
-    label: 'PANEL',
-    items: [
-      { name: 'Mis bots', href: '/dashboard', icon: LayoutGrid },
-      { name: 'Habilidades', href: '/habilidades', icon: Zap },
-      { name: 'Comandos', href: '/comandos', icon: Terminal },
-      { name: 'Prompt', href: '/prompt', icon: MessageSquare },
-      { name: 'Novedades', href: '/novedades', icon: Bell },
-      { name: 'Conexiones', href: '/conexiones', icon: Link2 },
-      { name: 'Plantillas WhatsApp', href: '/plantillas', icon: MessageCircle },
-      { name: 'IA', href: '/ia', icon: Bot },
-    ],
-  },
-  {
-    label: 'LOCAL B+',
-    items: [
-      { name: 'Superpoderes', href: '/superpoderes', icon: Shield, badge: 'premium' },
-      { name: 'Análisis', href: '/analisis', icon: BarChart3, badge: 'premium' },
-      { name: 'Plantillas', href: '/plantillas-negocio', icon: Store, badge: 'premium' },
-      { name: 'Equipo', href: '/equipo', icon: Users, badge: 'new' },
-      { name: 'White-label', href: '/whitelabel', icon: PaintBucket, badge: 'premium' },
-      { name: 'Estadísticas', href: '/estadisticas', icon: TrendingUp, badge: 'premium' },
-      { name: 'Marketplace', href: '/marketplace', icon: Map, badge: 'premium' },
-      { name: 'Arena', href: '/arena', icon: Trophy, badge: 'prizes' },
-    ],
-  },
-  {
-    label: 'NEGOCIO',
-    items: [
-      { name: 'Reservas', href: '/reservas', icon: Calendar },
-      { name: 'Servicios', href: '/servicios', icon: Sparkles },
-      { name: 'Productos', href: '/productos', icon: ShoppingBag },
-      { name: 'POS / Caja', href: '/pos', icon: CreditCard, badge: 'new' },
-      { name: 'Clientes', href: '/clientes', icon: UserCheck },
-    ],
-  },
-  {
-    label: 'AGENCIA',
-    items: [
-      { name: 'Modo Agencia', href: '/agencia', icon: Building2, badge: 'premium' },
-    ],
-  },
-  {
-    label: 'CUENTA',
-    items: [
-      { name: 'Configuración', href: '/configuracion', icon: Settings },
-    ],
-  },
-];
+import { Flame } from 'lucide-react';
+import { NAVIGATION } from '@/config';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -74,13 +18,13 @@ export function Sidebar() {
         <div>
           <h1 className="text-base font-bold text-white">Local B</h1>
           <p className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
-            CLOUD · FREE
+            CLOUD · COMPLETO
           </p>
         </div>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-        {navigation.map((group) => (
+        {NAVIGATION.map((group) => (
           <div key={group.label}>
             <p className="section-label">{group.label}</p>
             <div className="space-y-0.5">
@@ -102,8 +46,8 @@ export function Sidebar() {
                   >
                     <Icon className="h-4 w-4 shrink-0" />
                     <span className="flex-1 truncate">{item.name}</span>
-                    {item.badge === 'premium' && (
-                      <span className="badge-premium text-[9px]">LOCAL+</span>
+                    {item.badge === 'active' && (
+                      <span className="badge-active text-[9px]">ACTIVO</span>
                     )}
                     {item.badge === 'new' && (
                       <span className="badge-new text-[9px]">NUEVO</span>

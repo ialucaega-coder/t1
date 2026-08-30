@@ -1,12 +1,14 @@
 import { Router } from 'express';
-import { z } from 'zod';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 
 const router = Router();
 
-router.get('/', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const professionals = await prisma.professional.findMany({
       where: { businessId: req.auth!.businessId },
       include: {
@@ -17,15 +19,15 @@ router.get('/', requireAuth, async (req, res) => {
       orderBy: { sortOrder: 'asc' },
     });
     res.json(professionals);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.get('/:id', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/:id',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const professional = await prisma.professional.findUnique({
-      where: { id: req.params.id },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
       include: {
         user: { select: { name: true, email: true, phone: true } },
         schedules: true,
@@ -34,28 +36,26 @@ router.get('/:id', requireAuth, async (req, res) => {
       },
     });
     if (!professional) {
-      res.status(404).json({ error: 'Professional not found' });
-      return;
+      throw new AppError(404, 'Professional not found');
     }
     res.json(professional);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.get('/:id/availability', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/:id/availability',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const { date } = req.query;
     if (!date) {
-      res.status(400).json({ error: 'Date is required' });
-      return;
+      throw new AppError(400, 'Date is required');
     }
 
     const targetDate = new Date(date as string);
     const dayOfWeek = targetDate.getDay() === 0 ? 7 : targetDate.getDay();
 
     const schedule = await prisma.schedule.findFirst({
-      where: { professionalId: req.params.id, dayOfWeek, isActive: true },
+      where: { professionalId: String(req.params.id), businessId: req.auth!.businessId, dayOfWeek, isActive: true },
     });
 
     if (!schedule) {
@@ -65,7 +65,7 @@ router.get('/:id/availability', requireAuth, async (req, res) => {
 
     const bookings = await prisma.booking.findMany({
       where: {
-        professionalId: req.params.id,
+        professionalId: String(req.params.id),
         date: targetDate,
         status: { in: ['PENDING', 'CONFIRMED', 'IN_PROGRESS'] },
       },
@@ -78,7 +78,7 @@ router.get('/:id/availability', requireAuth, async (req, res) => {
 
     for (let m = startH * 60 + startM; m < endH * 60 + endM; m += 30) {
       const time = `${Math.floor(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}`;
-      const isBooked = bookings.some(b => {
+      const isBooked = bookings.some((b) => {
         const bStart = b.startTime.split(':').map(Number);
         const bEnd = b.endTime.split(':').map(Number);
         const bStartMin = bStart[0] * 60 + bStart[1];
@@ -89,9 +89,7 @@ router.get('/:id/availability', requireAuth, async (req, res) => {
     }
 
     res.json({ available: true, schedule, slots });
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as professionalsRouter };

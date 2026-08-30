@@ -1,50 +1,57 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
+import { paginationSchema, toSkipTake } from '../validators/common';
+
 const router = Router();
 
-const createBookingSchema = z.object({
-  date: z.string(),
-  startTime: z.string(),
-  serviceId: z.string(),
-  professionalId: z.string(),
-  clientId: z.string().optional(),
-  notes: z.string().optional(),
-  source: z.enum(['WEB', 'TELEGRAM', 'WHATSAPP', 'VOICE', 'WALK_IN']).default('WEB'),
-});
-
-router.get('/', requireAuth, async (req, res) => {
-  try {
-    const { date, status, professionalId } = req.query;
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { date, status, professionalId, page, pageSize } = req.query;
+    const pagination = paginationSchema.parse({ page, pageSize });
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
     if (date) where.date = new Date(date as string);
     if (status) where.status = status;
     if (professionalId) where.professionalId = professionalId;
 
-    const bookings = await prisma.booking.findMany({
-      where,
-      include: {
-        client: { select: { id: true, name: true, phone: true, email: true } },
-        professional: { include: { user: { select: { name: true } } } },
-        service: { select: { id: true, name: true, duration: true, price: true } },
-      },
-      orderBy: { startTime: 'asc' },
-    });
-    res.json(bookings);
-  } catch (error) {
-    console.error('Get bookings error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+    const [bookings, total] = await Promise.all([
+      prisma.booking.findMany({
+        where,
+        include: {
+          client: { select: { id: true, name: true, phone: true, email: true } },
+          professional: { include: { user: { select: { name: true } } } },
+          service: { select: { id: true, name: true, duration: true, price: true } },
+        },
+        orderBy: { startTime: 'asc' },
+        ...toSkipTake(pagination),
+      }),
+      prisma.booking.count({ where }),
+    ]);
 
-router.post('/', requireAuth, async (req, res) => {
-  try {
-    const data = createBookingSchema.parse(req.body);
+    res.json({
+      data: bookings,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalPages: Math.ceil(total / pagination.pageSize),
+    });
+  })
+);
+
+router.post(
+  '/',
+  requireAuth,
+  validate(createBookingSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as CreateBookingInput;
     const service = await prisma.service.findUnique({ where: { id: data.serviceId } });
     if (!service) {
-      res.status(404).json({ error: 'Service not found' });
-      return;
+      throw new AppError(404, 'Service not found');
     }
 
     const [hours, minutes] = data.startTime.split(':').map(Number);
@@ -72,40 +79,33 @@ router.post('/', requireAuth, async (req, res) => {
     });
 
     res.status(201).json(booking);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-      return;
-    }
-    console.error('Create booking error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.patch('/:id/status', requireAuth, async (req, res) => {
-  try {
-    const { status } = req.body;
+router.patch(
+  '/:id/status',
+  requireAuth,
+  validate(updateBookingStatusSchema),
+  asyncHandler(async (req, res) => {
+    const { status } = req.body as UpdateBookingStatusInput;
     const booking = await prisma.booking.update({
-      where: { id: req.params.id, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { status },
     });
     res.json(booking);
-  } catch (error) {
-    console.error('Update booking status error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.delete('/:id', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  try {
+router.delete(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
     await prisma.booking.delete({
-      where: { id: req.params.id, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
     });
     res.status(204).send();
-  } catch (error) {
-    console.error('Delete booking error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as bookingsRouter };

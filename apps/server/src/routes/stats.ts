@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
+import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 
 const router = Router();
 
-router.get('/overview', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/overview',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -36,8 +39,8 @@ router.get('/overview', requireAuth, async (req, res) => {
       prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: { gte: startOfLastMonth, lt: startOfMonth } } }),
     ]);
 
-    const currentRevenue = monthRevenue._sum.amount || 0;
-    const prevRevenue = lastMonthRevenue._sum.amount || 0;
+    const currentRevenue = Number(monthRevenue._sum.amount || 0);
+    const prevRevenue = Number(lastMonthRevenue._sum.amount || 0);
     const revenueChange = prevRevenue > 0 ? ((currentRevenue - prevRevenue) / prevRevenue * 100).toFixed(1) : '0';
     const bookingChange = lastMonthBookings > 0 ? ((monthBookings - lastMonthBookings) / lastMonthBookings * 100).toFixed(1) : '0';
     const noShowRate = monthBookings > 0 ? ((noShows / monthBookings) * 100).toFixed(1) : '0';
@@ -55,14 +58,13 @@ router.get('/overview', requireAuth, async (req, res) => {
       noShowRate: `${noShowRate}%`,
       noShowChange: `${Number(noShowRate) <= Number(lastNoShowRate) ? '-' : '+'}${Math.abs(Number(noShowRate) - Number(lastNoShowRate)).toFixed(1)}%`,
     });
-  } catch (error) {
-    console.error('Stats overview error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.get('/weekly', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/weekly',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const now = new Date();
     const days = [];
@@ -88,13 +90,13 @@ router.get('/weekly', requireAuth, async (req, res) => {
     }
 
     res.json(days);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
-router.get('/top-services', requireAuth, async (req, res) => {
-  try {
+router.get(
+  '/top-services',
+  requireAuth,
+  asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
@@ -107,19 +109,17 @@ router.get('/top-services', requireAuth, async (req, res) => {
     });
 
     const serviceDetails = await prisma.service.findMany({
-      where: { id: { in: services.map(s => s.serviceId) } },
+      where: { id: { in: services.map((s) => s.serviceId) } },
       select: { id: true, name: true },
     });
 
-    const result = services.map(s => ({
-      ...serviceDetails.find(d => d.id === s.serviceId),
+    const result = services.map((s) => ({
+      ...serviceDetails.find((d) => d.id === s.serviceId),
       bookingCount: s._count.id,
     }));
 
     res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as statsRouter };

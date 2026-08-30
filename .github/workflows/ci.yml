@@ -1,0 +1,219 @@
+# .github/workflows/ci.yml
+# Pipeline de Integracion Continua para el monorepo "Local B".
+# Se ejecuta en push a main y en cada Pull Request.
+# Jobs: lint -> type-check -> test -> build (con cache de node_modules).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Evita ejecuciones redundantes cuando se hace push varias veces al mismo PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # -------------------------------------------------------------------
+  # Job: lint — ESLint/Next lint sobre todos los workspaces (via turbo)
+  # -------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Cachea node_modules entre ejecuciones usando el hash de package-lock.json.
+      - name: Cachear node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar lint (turbo run lint)
+        run: npm run lint
+
+  # -------------------------------------------------------------------
+  # Job: type-check — verificacion de tipos TypeScript en cada workspace
+  # -------------------------------------------------------------------
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cachear node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # El cliente de Prisma es requerido para que el type-check de
+      # server/web resuelva los tipos generados (@prisma/client).
+      - name: Generar Prisma Client
+        run: npm run db:generate
+
+      - name: Type-check del workspace server (tsc --noEmit)
+        run: npx tsc --noEmit -p apps/server/tsconfig.json
+
+      - name: Type-check del workspace web (next lint incluye tsc via next build --dry no aplica)
+        run: npx tsc --noEmit -p apps/web/tsconfig.json
+
+  # -------------------------------------------------------------------
+  # Job: test — pruebas unitarias/integracion (si existen en cada workspace)
+  # -------------------------------------------------------------------
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # Servicios necesarios para pruebas de integracion contra una DB real.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: localb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d localb_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/localb_test?schema=public
+      NODE_ENV: test
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cachear node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Generar Prisma Client
+        run: npm run db:generate
+
+      # --if-present evita que el job falle si un workspace todavia no
+      # tiene script "test" definido (util mientras se agrega cobertura).
+      - name: Ejecutar tests de todos los workspaces
+        run: npm run test --workspaces --if-present
+
+  # -------------------------------------------------------------------
+  # Job: build — build de produccion de todos los workspaces (turbo)
+  # -------------------------------------------------------------------
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, type-check, test]
+    env:
+      # Valores dummy suficientes para que el build de Next.js/tsc no falle
+      # por variables de entorno ausentes. Los valores reales se inyectan
+      # en el deploy real via secrets.
+      DATABASE_URL: postgresql://user:password@localhost:5432/localb?schema=public
+      NEXTAUTH_SECRET: ci-build-secret-not-for-production
+      NEXTAUTH_URL: http://localhost:3000
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cachear node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      # Cache de artefactos de Turborepo para acelerar builds incrementales.
+      - name: Cachear Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Generar Prisma Client
+        run: npm run db:generate
+
+      - name: Build de todos los workspaces
+        run: npm run build
+
+      - name: Subir artefactos de build (apps/web/.next)
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: apps/web/.next
+          retention-days: 3
+
+      - name: Subir artefactos de build (apps/server/dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-build
+          path: apps/server/dist
+          retention-days: 3

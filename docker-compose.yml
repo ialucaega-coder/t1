@@ -1,0 +1,132 @@
+# docker-compose.yml
+# Orquestacion local/produccion para la plataforma "Local B".
+# Servicios: postgres (base de datos), redis (cache/sesiones futuras),
+# server (API Express) y web (frontend Next.js).
+
+services:
+  # ---------------------------------------------------------------------
+  # PostgreSQL 16 — base de datos principal (Prisma)
+  # ---------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: localb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-localb}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      # Volumen nombrado: persiste los datos entre reinicios del contenedor.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-localb}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - localb-network
+
+  # ---------------------------------------------------------------------
+  # Redis 7 — cache y almacenamiento de sesiones (uso futuro)
+  # ---------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: localb-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - localb-network
+
+  # ---------------------------------------------------------------------
+  # Server — API Express (apps/server)
+  # ---------------------------------------------------------------------
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: localb-server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://user:password@postgres:5432/localb?schema=public}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN}
+      WHATSAPP_PHONE_ID: ${WHATSAPP_PHONE_ID}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - '4000:4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:4000/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - localb-network
+
+  # ---------------------------------------------------------------------
+  # Web — Frontend Next.js (apps/web)
+  # ---------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: localb-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://user:password@postgres:5432/localb?schema=public}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - localb-network
+
+# Red interna dedicada para que los servicios se resuelvan por nombre.
+networks:
+  localb-network:
+    driver: bridge
+
+# Volumenes nombrados para persistencia de datos.
+volumes:
+  postgres_data:
+  redis_data:
