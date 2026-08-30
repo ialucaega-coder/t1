@@ -9,7 +9,7 @@ export const PAGE_TITLES: Record<string, PageMeta> = {
   '/habilidades': { breadcrumb: 'PANEL / HABILIDADES', title: 'Habilidades', counter: '8 SKILLS' },
   '/comandos': { breadcrumb: 'PANEL / COMANDOS', title: 'Comandos', counter: '33 COMANDOS' },
   '/prompt': { breadcrumb: 'PANEL / PROMPT', title: 'Gestión de prompts' },
-  '/novedades': { breadcrumb: 'PANEL / NOVEDADES', title: 'Novedades' },
+  '/novedades': { breadcrumb: 'PANEL / NOTIFICACIONES', title: 'Notificaciones' },
   '/conexiones': { breadcrumb: 'PANEL / CONEXIONES', title: 'Conexiones', counter: '5 CANALES' },
   '/plantillas': { breadcrumb: 'PANEL / PLANTILLAS DE WHATSAPP', title: 'Plantillas de WhatsApp', counter: '6 PROMPTS' },
   '/ia': { breadcrumb: 'PANEL / IA', title: 'IA', counter: '4 PROVEEDORES' },

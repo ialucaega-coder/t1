@@ -1,21 +1,39 @@
-import { Building2, Users, BarChart3, DollarSign, Settings, Eye } from 'lucide-react';
+'use client';
 
-const agencyClients = [
-  { name: 'Barbería Don Carlos', plan: 'Local B+', bots: 3, status: 'active', revenue: '$2,500/mes' },
-  { name: 'Spa Relax', plan: 'Free', bots: 1, status: 'active', revenue: '$1,200/mes' },
-  { name: 'Studio Ana', plan: 'Local B+', bots: 2, status: 'active', revenue: '$3,100/mes' },
-  { name: 'Clínica Dental Sonrisa', plan: 'Local B+', bots: 4, status: 'active', revenue: '$4,500/mes' },
-  { name: 'Gym Fitness Pro', plan: 'Free', bots: 1, status: 'trial', revenue: '$0' },
-];
-
-const features = [
-  { icon: Eye, title: 'Prospecta con ROI y demo en vivo', description: 'Muéstrale al prospecto cómo funcionaría su bot antes de cerrar.' },
-  { icon: DollarSign, title: 'Monta, cotiza y propon con tu marca', description: 'Propuestas white-label con tu logo y colores.' },
-  { icon: Settings, title: 'Configura, enciende superpoderes y cobra', description: 'Todo desde un solo panel, sin cambiar de cuenta.' },
-  { icon: BarChart3, title: 'Retén con reporte de valor mensual', description: 'Cada cliente recibe un reporte automático de lo que su bot hizo.' },
-];
+import { useState } from 'react';
+import { Building2, Users, Bot, DollarSign, Plus, Copy, Check, Eye, Settings, BarChart3, Link2 } from 'lucide-react';
+import { MOCK_AGENCY_CLIENTS, AGENCY_STATS } from '@/constants/agency';
+import { SearchInput } from '@/components/ui/SearchInput';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 
 export default function AgenciaPage() {
+  const [search, setSearch] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const filtered = MOCK_AGENCY_CLIENTS.filter((c) =>
+    c.name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(AGENCY_STATS.referralLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const stats = [
+    { label: 'Negocios', value: AGENCY_STATS.totalBusinesses, icon: Building2 },
+    { label: 'Bots activos', value: AGENCY_STATS.totalBots, icon: Bot },
+    { label: 'Ingresos recurrentes', value: AGENCY_STATS.totalRevenue, icon: DollarSign },
+    { label: 'Clientes activos', value: AGENCY_STATS.activeClients, icon: Users },
+  ];
+
+  const features = [
+    { icon: Eye, title: 'Prospecta con ROI y demo en vivo', description: 'Muéstrale al prospecto cómo funcionaría su bot antes de cerrar.' },
+    { icon: DollarSign, title: 'Monta, cotiza y propon con tu marca', description: 'Propuestas white-label con tu logo y colores.' },
+    { icon: Settings, title: 'Configura, enciende superpoderes y cobra', description: 'Todo desde un solo panel, sin cambiar de cuenta.' },
+    { icon: BarChart3, title: 'Retén con reporte de valor mensual', description: 'Cada cliente recibe un reporte automático de lo que su bot hizo.' },
+  ];
+
   return (
     <div className="space-y-8">
       <p className="text-sm text-slate-400 max-w-2xl">
@@ -23,6 +41,27 @@ export default function AgenciaPage() {
         y cotiza, propon y cóbrale sin salir de aquí.
       </p>
 
+      {/* Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {stats.map((stat) => {
+          const Icon = stat.icon;
+          return (
+            <div key={stat.label} className="card-accent">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-lg bg-brand-400/10 flex items-center justify-center">
+                  <Icon className="h-5 w-5 text-brand-400" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-white">{stat.value}</p>
+                  <p className="text-xs text-slate-400">{stat.label}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Features */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {features.map((feature) => {
           const Icon = feature.icon;
@@ -36,8 +75,23 @@ export default function AgenciaPage() {
         })}
       </div>
 
+      {/* Client list */}
       <div>
-        <h3 className="mono-label mb-4">TUS CLIENTES</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="mono-label">TUS CLIENTES</h3>
+          <div className="flex items-center gap-3">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Buscar negocio..."
+              className="max-w-[220px]"
+            />
+            <button className="btn-primary text-xs">
+              <Plus className="h-3.5 w-3.5" /> Agregar negocio
+            </button>
+          </div>
+        </div>
+
         <div className="card overflow-hidden p-0">
           <table className="w-full">
             <thead>
@@ -47,11 +101,12 @@ export default function AgenciaPage() {
                 <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Bots</th>
                 <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Estado</th>
                 <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Ingreso</th>
+                <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Actividad</th>
               </tr>
             </thead>
             <tbody>
-              {agencyClients.map((client) => (
-                <tr key={client.name} className="border-b border-slate-700/30 hover:bg-surface-100 cursor-pointer transition-colors">
+              {filtered.map((client) => (
+                <tr key={client.id} className="border-b border-slate-700/30 hover:bg-surface-100 cursor-pointer transition-colors">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="h-8 w-8 rounded-full bg-brand-400/20 flex items-center justify-center text-xs font-bold text-brand-400">
@@ -61,38 +116,63 @@ export default function AgenciaPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`badge border text-[9px] ${
-                      client.plan === 'Local B+'
-                        ? 'bg-brand-400/10 text-brand-400 border-brand-400/20'
-                        : 'bg-slate-500/10 text-slate-400 border-slate-500/20'
-                    }`}>
+                    <StatusBadge variant={client.plan === 'Local B+' ? 'premium' : 'inactive'}>
                       {client.plan}
-                    </span>
+                    </StatusBadge>
                   </td>
                   <td className="px-4 py-3 text-sm text-white">{client.bots}</td>
                   <td className="px-4 py-3">
-                    <span className={`badge border text-[9px] ${
-                      client.status === 'active'
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                        : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                    }`}>
-                      {client.status === 'active' ? 'ACTIVO' : 'TRIAL'}
-                    </span>
+                    <StatusBadge variant={client.status === 'active' ? 'active' : client.status === 'trial' ? 'warning' : 'inactive'}>
+                      {client.status === 'active' ? 'ACTIVO' : client.status === 'trial' ? 'TRIAL' : 'INACTIVO'}
+                    </StatusBadge>
                   </td>
                   <td className="px-4 py-3 text-sm font-mono text-slate-300">{client.revenue}</td>
+                  <td className="px-4 py-3 text-xs text-slate-500">{client.lastActivity}</td>
                 </tr>
               ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                    No se encontraron negocios
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
+      {/* Referral link */}
+      <div className="card-accent">
+        <div className="flex items-center gap-3 mb-4">
+          <Link2 className="h-5 w-5 text-brand-400" />
+          <div>
+            <p className="text-sm text-white font-medium">Link de referido</p>
+            <p className="text-xs text-slate-400">
+              Comparte tu link y gana {AGENCY_STATS.commission} de comisión por cada cliente que se registre.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex-1 bg-surface rounded-lg px-4 py-2.5 border border-slate-700">
+            <code className="text-sm text-slate-300 font-mono">{AGENCY_STATS.referralLink}</code>
+          </div>
+          <button onClick={handleCopy} className="btn-secondary text-xs">
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied ? 'Copiado' : 'Copiar'}
+          </button>
+        </div>
+      </div>
+
+      {/* Summary */}
       <div className="card-accent">
         <div className="flex items-center gap-3">
           <Building2 className="h-5 w-5 text-brand-400" />
           <div>
             <p className="text-sm text-white font-medium">Resumen de agencia</p>
-            <p className="text-xs text-slate-400">5 clientes · 11 bots activos · $11,300/mes en ingresos recurrentes</p>
+            <p className="text-xs text-slate-400">
+              {AGENCY_STATS.totalBusinesses} clientes · {AGENCY_STATS.totalBots} bots activos · {AGENCY_STATS.totalRevenue} en ingresos recurrentes
+            </p>
           </div>
         </div>
       </div>

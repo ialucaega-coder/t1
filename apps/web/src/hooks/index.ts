@@ -14,3 +14,4 @@ export * from './use-pos';
 export * from './use-skills';
 export * from './use-superpowers';
 export * from './use-settings';
+export * from './use-connections';

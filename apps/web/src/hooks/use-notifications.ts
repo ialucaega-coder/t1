@@ -1,31 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { notificationsApi } from '@/lib/api/index';
 import type { AppNotification } from '@/types';
-
-// No existe un archivo de constantes para notificaciones todavía; se define
-// un fallback mínimo aquí mismo para cuando la API no está disponible.
-const MOCK_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: 'mock-1',
-    type: 'BOOKING',
-    channel: 'SYSTEM',
-    title: 'Nueva reserva',
-    body: 'María García reservó Corte + Peinado para hoy a las 09:00.',
-    isRead: false,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'mock-2',
-    type: 'ORDER',
-    channel: 'SYSTEM',
-    title: 'Pedido completado',
-    body: 'Se registró una venta de $8.500.',
-    isRead: true,
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-  },
-];
 
 export interface UseNotificationsResult {
   notifications: AppNotification[];
@@ -37,12 +14,17 @@ export interface UseNotificationsResult {
   markAllRead: () => Promise<void>;
 }
 
+/**
+ * Hook para consumir notificaciones desde la API.
+ * Soporta filtrado por no leídas y polling automático cada 30s.
+ */
 export function useNotifications(unreadOnly = false): UseNotificationsResult {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,8 +41,6 @@ export function useNotifications(unreadOnly = false): UseNotificationsResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar notificaciones');
-          setNotifications(MOCK_NOTIFICATIONS);
-          setUnreadCount(MOCK_NOTIFICATIONS.filter((n) => !n.isRead).length);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -68,8 +48,15 @@ export function useNotifications(unreadOnly = false): UseNotificationsResult {
     }
 
     load();
+
+    // Polling cada 30s para mantener el badge actualizado
+    intervalRef.current = setInterval(() => {
+      if (!cancelled) load();
+    }, 30_000);
+
     return () => {
       cancelled = true;
+      if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [unreadOnly, reloadToken]);
 

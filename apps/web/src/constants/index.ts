@@ -11,3 +11,6 @@ export * from './superpowers';
 export * from './templates';
 export * from './business-templates';
 export * from './settings';
+export * from './agency';
+export * from './marketplace';
+export * from './team';

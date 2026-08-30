@@ -18,6 +18,8 @@ import { professionalsRouter } from './routes/professionals';
 import { statsRouter } from './routes/stats';
 import { schedulesRouter } from './routes/schedules';
 import { aiRouter } from './routes/ai';
+import { telegramRouter } from './routes/telegram';
+import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
   extraSecurityHeaders,
@@ -90,6 +92,7 @@ app.use('/api/professionals', professionalsRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/schedules', schedulesRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/telegram', telegramRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
 // Deben registrarse al final, después de montar todas las rutas.
@@ -111,6 +114,11 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 4000;
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+
+  // Restaurar bots de Telegram activos al iniciar el servidor
+  restoreActiveBots().catch((err) => {
+    console.error('Error al restaurar bots de Telegram:', err);
+  });
 });
 
 export { io };

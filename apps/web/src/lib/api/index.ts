@@ -18,3 +18,4 @@ export * as posApi from './pos';
 export * as skillsApi from './skills';
 export * as superpowersApi from './superpowers';
 export * as settingsApi from './settings';
+export * as connectionsApi from './connections';

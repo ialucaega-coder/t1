@@ -1,64 +1,130 @@
-import { ThumbsUp, Lightbulb } from 'lucide-react';
+'use client';
 
-const ideas = [
-  { id: 1, title: 'Atención por llamada (voz)', votes: 47, status: 'popular' },
-  { id: 2, title: 'Sincronización con Google Calendar', votes: 42, status: 'popular' },
-  { id: 3, title: 'White Label Agencia', votes: 38, status: 'building' },
-  { id: 4, title: 'Voz Premium', votes: 35, status: 'popular' },
-  { id: 5, title: 'Panel multi-negocio', votes: 33, status: 'popular' },
-  { id: 6, title: 'Catálogo visual en el chat', votes: 31, status: 'planned' },
-  { id: 7, title: 'Conexión con tu CRM', votes: 28, status: 'planned' },
-  { id: 8, title: 'Voz Clínica', votes: 25, status: 'popular' },
-  { id: 9, title: 'Pagos recurrentes automáticos', votes: 22, status: 'new' },
-  { id: 10, title: 'Dashboard multi-idioma', votes: 19, status: 'new' },
-  { id: 11, title: 'App móvil nativa', votes: 18, status: 'new' },
-  { id: 12, title: 'Integración con Rappi/PedidosYa', votes: 15, status: 'new' },
-];
+import { useState } from 'react';
+import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift } from 'lucide-react';
+import { MOCK_MARKETPLACE_ITEMS, MARKETPLACE_CATEGORIES, type MarketplaceCategory } from '@/constants/marketplace';
+import { SearchInput } from '@/components/ui/SearchInput';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 
-const statusConfig: Record<string, { label: string; class: string }> = {
-  popular: { label: 'POPULAR', class: 'bg-brand-400/10 text-brand-400 border-brand-400/20' },
-  building: { label: 'EN DESARROLLO', class: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
-  planned: { label: 'PLANEADO', class: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
-  new: { label: 'NUEVA', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
+const iconMap: Record<string, React.ElementType> = {
+  'calendar': Calendar,
+  'shopping-bag': ShoppingBag,
+  'heart-pulse': HeartPulse,
+  'utensils': UtensilsCrossed,
+  'credit-card': CreditCard,
+  'message-square': MessageSquare,
+  'graduation-cap': GraduationCap,
+  'truck': Truck,
+  'clipboard-list': ClipboardList,
+  'gift': Gift,
 };
 
+function StarRating({ rating }: { rating: number }) {
+  return (
+    <div className="flex items-center gap-1">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <Star
+          key={star}
+          className={`h-3 w-3 ${star <= Math.round(rating) ? 'text-amber-400 fill-amber-400' : 'text-slate-600'}`}
+        />
+      ))}
+      <span className="text-xs text-slate-400 ml-1">{rating}</span>
+    </div>
+  );
+}
+
 export default function MarketplacePage() {
+  const [search, setSearch] = useState('');
+  const [activeCategory, setActiveCategory] = useState<MarketplaceCategory | 'Todos'>('Todos');
+
+  const filtered = MOCK_MARKETPLACE_ITEMS.filter((item) => {
+    const matchesSearch =
+      item.name.toLowerCase().includes(search.toLowerCase()) ||
+      item.description.toLowerCase().includes(search.toLowerCase());
+    const matchesCategory = activeCategory === 'Todos' || item.category === activeCategory;
+    return matchesSearch && matchesCategory;
+  });
+
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-400 max-w-2xl">
-        El roadmap de Local B lo votan los miembros. Vota los nichos, features y voces que quieres
-        que se sumen — o propon la tuya. Lo más votado es lo que sigue.
+        Templates y extensiones para potenciar tu bot. Instala en un clic y personaliza
+        con tu agente.
       </p>
 
-      <div className="flex items-center gap-3">
-        <button className="btn-primary text-xs">
-          <Lightbulb className="h-3.5 w-3.5" /> Proponer idea
-        </button>
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Buscar templates..."
+        />
+        <div className="flex flex-wrap gap-2">
+          {(['Todos', ...MARKETPLACE_CATEGORIES] as const).map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                activeCategory === cat
+                  ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
+                  : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="space-y-2">
-        {ideas.map((idea, index) => {
-          const config = statusConfig[idea.status];
+      {/* Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filtered.map((item) => {
+          const Icon = iconMap[item.icon] || ShoppingBag;
           return (
-            <div key={idea.id} className="card-accent flex items-center gap-4">
-              <div className="text-center min-w-[50px]">
-                <button className="flex flex-col items-center gap-1 text-slate-400 hover:text-brand-400 transition-colors">
-                  <ThumbsUp className="h-4 w-4" />
-                  <span className="text-sm font-bold">{idea.votes}</span>
-                </button>
+            <div key={item.id} className="card-accent flex flex-col">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="h-10 w-10 rounded-lg bg-brand-400/10 flex items-center justify-center shrink-0">
+                  <Icon className="h-5 w-5 text-brand-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-sm font-semibold text-white truncate">{item.name}</h4>
+                  <p className="text-[10px] text-slate-500">por {item.author}</p>
+                </div>
               </div>
-              <div className="h-8 w-px bg-slate-700" />
-              <div className="flex-1">
-                <h4 className="text-sm font-medium text-white">{idea.title}</h4>
+
+              <p className="text-xs text-slate-400 mb-4 flex-1">{item.description}</p>
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-700/50">
+                <div className="flex flex-col gap-1">
+                  <StarRating rating={item.rating} />
+                  <span className="text-[10px] text-slate-500">{item.reviews} reseñas</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-semibold ${item.price === 'Gratis' ? 'text-emerald-400' : 'text-white'}`}>
+                    {item.price}
+                  </span>
+                  {item.installed ? (
+                    <StatusBadge variant="active">
+                      <Check className="h-3 w-3 mr-0.5" /> Instalado
+                    </StatusBadge>
+                  ) : (
+                    <button className="btn-primary text-xs py-1 px-2.5">
+                      <Download className="h-3 w-3" /> Instalar
+                    </button>
+                  )}
+                </div>
               </div>
-              <span className={`badge border text-[9px] ${config.class}`}>
-                {config.label}
-              </span>
-              <span className="text-xs font-mono text-slate-500 w-8 text-right">#{index + 1}</span>
             </div>
           );
         })}
       </div>
+
+      {filtered.length === 0 && (
+        <div className="text-center py-12">
+          <p className="text-sm text-slate-500">No se encontraron templates para esta búsqueda.</p>
+        </div>
+      )}
     </div>
   );
 }
