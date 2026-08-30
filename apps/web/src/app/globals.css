@@ -1,0 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #0B0F14;
+    --bg-secondary: #141B24;
+    --bg-tertiary: #1E2836;
+    --border-primary: #2D3B4E;
+    --border-accent: #38BDF8;
+    --text-primary: #F0F9FF;
+    --text-secondary: #94A3B8;
+    --text-muted: #64748B;
+    --accent: #38BDF8;
+    --accent-hover: #0EA5E9;
+    --accent-light: #7DD3FC;
+    --success: #22C55E;
+    --warning: #EAB308;
+    --error: #EF4444;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-primary) transparent;
+  }
+
+  body {
+    @apply bg-surface text-slate-50 antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-slate-700/50 bg-surface-50 p-5 transition-colors hover:border-slate-600;
+  }
+
+  .card-accent {
+    @apply rounded-lg border border-sky-900/40 bg-surface-50 p-5 transition-colors hover:border-brand-400/50;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-brand-600 active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-surface-50 px-4 py-2.5 text-sm font-medium text-slate-300 transition-all hover:bg-surface-100 hover:text-white active:scale-[0.98];
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-mono font-medium uppercase tracking-wider;
+  }
+
+  .badge-active {
+    @apply badge bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
+  }
+
+  .badge-premium {
+    @apply badge bg-brand-500/10 text-brand-400 border border-brand-500/20;
+  }
+
+  .badge-new {
+    @apply badge bg-sky-500/10 text-sky-400 border border-sky-500/20;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-slate-700 bg-surface px-4 py-2.5 text-sm text-slate-50 placeholder:text-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-surface-100 hover:text-white;
+  }
+
+  .sidebar-link-active {
+    @apply sidebar-link bg-surface-100 text-white border-l-2 border-brand-500;
+  }
+
+  .section-label {
+    @apply text-[10px] font-mono font-semibold uppercase tracking-[0.2em] text-slate-500 px-3 mb-2;
+  }
+
+  .counter-badge {
+    @apply inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-surface-50 px-3 py-1 text-xs font-mono text-slate-400;
+  }
+
+  .mono-label {
+    @apply font-mono text-xs uppercase tracking-wider text-brand-400;
+  }
+}

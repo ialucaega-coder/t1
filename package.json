@@ -1,0 +1,27 @@
+{
+  "name": "local-b",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "db:generate": "prisma generate --schema=prisma/schema.prisma",
+    "db:push": "prisma db push --schema=prisma/schema.prisma",
+    "db:seed": "ts-node prisma/seed.ts",
+    "db:studio": "prisma studio --schema=prisma/schema.prisma"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.0",
+    "prisma": "^6.0.0",
+    "ts-node": "^10.9.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0"
+  },
+  "packageManager": "npm@10.8.0"
+}

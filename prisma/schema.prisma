@@ -1,0 +1,405 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  PROFESSIONAL
+  CLIENT
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum BookingSource {
+  WEB
+  TELEGRAM
+  WHATSAPP
+  VOICE
+  WALK_IN
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+enum TransactionType {
+  SALE
+  REFUND
+  PARTIAL
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  QR
+}
+
+enum NotificationType {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_REMINDER
+  BOOKING_CANCELLED
+  ORDER_STATUS
+  PROMOTION
+  GENERAL
+}
+
+enum NotificationChannel {
+  EMAIL
+  WHATSAPP
+  TELEGRAM
+  SMS
+  PUSH
+}
+
+model Business {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  logo        String?
+  coverImage  String?
+  phone       String?
+  email       String?
+  address     String?
+  city        String?
+  country     String?
+  timezone    String   @default("America/Argentina/Buenos_Aires")
+  currency    String   @default("ARS")
+  theme       String   @default("onyx")
+  accentColor String   @default("#F97316")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users         User[]
+  professionals Professional[]
+  services      Service[]
+  bookings      Booking[]
+  products      Product[]
+  orders        Order[]
+  promotions    Promotion[]
+  transactions  Transaction[]
+  notifications Notification[]
+  schedules     Schedule[]
+  categories    Category[]
+  skills        Skill[]
+  commands      Command[]
+  connections   Connection[]
+  templates     Template[]
+
+  @@map("businesses")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String
+  phone         String?
+  avatar        String?
+  role          Role     @default(CLIENT)
+  isActive      Boolean  @default(true)
+  failedLogins  Int      @default(0)
+  lockedUntil   DateTime?
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  businessId    String
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  professional  Professional?
+  bookingsAsClient Booking[] @relation("ClientBookings")
+  orders        Order[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model Professional {
+  id          String   @id @default(cuid())
+  bio         String?
+  specialties String[]
+  isAvailable Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  schedules   Schedule[]
+  bookings    Booking[]
+  services    Service[] @relation("ProfessionalServices")
+
+  @@map("professionals")
+}
+
+model Schedule {
+  id        String   @id @default(cuid())
+  dayOfWeek Int
+  startTime String
+  endTime   String
+  isActive  Boolean  @default(true)
+
+  professionalId String
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("schedules")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  icon      String?
+  sortOrder Int      @default(0)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  services  Service[]
+  products  Product[]
+
+  @@map("categories")
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  duration    Int
+  price       Float
+  currency    String   @default("ARS")
+  image       String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  professionals Professional[] @relation("ProfessionalServices")
+  bookings      Booking[]
+
+  @@map("services")
+}
+
+model Booking {
+  id        String        @id @default(cuid())
+  date      DateTime
+  startTime String
+  endTime   String
+  status    BookingStatus @default(PENDING)
+  source    BookingSource @default(WEB)
+  notes     String?
+  totalPrice Float
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  clientId       String
+  client         User          @relation("ClientBookings", fields: [clientId], references: [id])
+
+  professionalId String
+  professional   Professional  @relation(fields: [professionalId], references: [id])
+
+  serviceId      String
+  service        Service       @relation(fields: [serviceId], references: [id])
+
+  businessId     String
+  business       Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("bookings")
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  stock       Int      @default(0)
+  image       String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  orderItems  OrderItem[]
+
+  @@map("products")
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  status     OrderStatus @default(PENDING)
+  totalPrice Float
+  notes      String?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  clientId   String
+  client     User        @relation(fields: [clientId], references: [id])
+
+  businessId String
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  items      OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id       String @id @default(cuid())
+  quantity Int
+  price    Float
+
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+model Promotion {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  discount    Float
+  isPercent   Boolean  @default(true)
+  code        String?  @unique
+  startDate   DateTime
+  endDate     DateTime
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("promotions")
+}
+
+model Transaction {
+  id            String          @id @default(cuid())
+  amount        Float
+  type          TransactionType @default(SALE)
+  paymentMethod PaymentMethod   @default(CASH)
+  reference     String?
+  notes         String?
+  createdAt     DateTime        @default(now())
+
+  businessId    String
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  type      NotificationType
+  channel   NotificationChannel
+  title     String
+  body      String
+  isRead    Boolean             @default(false)
+  sentAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model Skill {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  icon        String?
+  isActive    Boolean @default(true)
+  config      Json?
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("skills")
+}
+
+model Command {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  template    String
+  category    String?
+  sortOrder   Int     @default(0)
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("commands")
+}
+
+model Connection {
+  id       String  @id @default(cuid())
+  name     String
+  type     String
+  icon     String?
+  config   Json?
+  isActive Boolean @default(false)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("connections")
+}
+
+model Template {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  type        String
+  content     String
+  category    String?
+
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("templates")
+}
