@@ -1,11 +1,14 @@
 'use client';
 
 import { Plus } from 'lucide-react';
-import { MOCK_PROMPTS as mockPrompts } from '@/constants/prompts';
+import { usePrompts } from '@/hooks/use-prompts';
 import { useClipboard } from '@/hooks';
 import { PromptCard } from '@/components/prompts/PromptCard';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function PromptPage() {
+  const { prompts, isLoading, error, refetch } = usePrompts();
   const { copiedId, copy } = useClipboard();
 
   return (
@@ -20,16 +23,22 @@ export default function PromptPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {mockPrompts.map((prompt) => (
-          <PromptCard
-            key={prompt.id}
-            prompt={prompt}
-            isCopied={copiedId === prompt.id}
-            onCopy={() => copy(prompt.id, prompt.content)}
-          />
-        ))}
-      </div>
+      {error && <ErrorAlert message={error} onRetry={refetch} />}
+
+      {isLoading ? (
+        <LoadingSpinner label="Cargando prompts..." />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {prompts.map((prompt) => (
+            <PromptCard
+              key={prompt.id}
+              prompt={prompt}
+              isCopied={copiedId === prompt.id}
+              onCopy={() => copy(prompt.id, prompt.content)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

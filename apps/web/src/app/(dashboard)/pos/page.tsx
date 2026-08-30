@@ -1,19 +1,29 @@
 'use client';
 
 import { useCart } from '@/hooks';
-import { QUICK_ITEMS as quickItems } from '@/constants/pos';
+import { usePos } from '@/hooks/use-pos';
 import { QuickItemGrid } from '@/components/pos/QuickItemGrid';
 import { CartItem } from '@/components/pos/CartItem';
 import { PaymentButtons } from '@/components/pos/PaymentButtons';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function POSPage() {
+  const { items, isLoading, error, refetch } = usePos();
   const { cart, addToCart, removeFromCart, updateQty, total } = useCart();
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-180px)]">
       <div className="lg:col-span-2 space-y-4">
         <h3 className="mono-label">PRODUCTOS Y SERVICIOS</h3>
-        <QuickItemGrid items={quickItems} onAdd={addToCart} />
+
+        {error && <ErrorAlert message={error} onRetry={refetch} />}
+
+        {isLoading ? (
+          <LoadingSpinner label="Cargando productos..." />
+        ) : (
+          <QuickItemGrid items={items} onAdd={addToCart} />
+        )}
       </div>
 
       <div className="card flex flex-col">

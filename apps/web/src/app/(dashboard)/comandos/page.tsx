@@ -2,12 +2,15 @@
 
 import { useState } from 'react';
 import { Search } from 'lucide-react';
-import { COMMANDS as commands } from '@/constants/commands';
+import { useCommands } from '@/hooks/use-commands';
 import { useClipboard } from '@/hooks';
 import { CommandRow } from '@/components/commands/CommandRow';
 import { CommandGroup } from '@/components/commands/CommandGroup';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function ComandosPage() {
+  const { commands, isLoading, error, refetch } = useCommands();
   const { copiedId: copiedCmd, copy } = useClipboard();
   const [search, setSearch] = useState('');
 
@@ -25,41 +28,49 @@ export default function ComandosPage() {
         Haz click en el ícono para copiar.
       </p>
 
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-        <input
-          type="text"
-          placeholder="Buscar comando..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="input pl-10"
-        />
-      </div>
+      {error && <ErrorAlert message={error} onRetry={refetch} />}
 
-      {filtered ? (
-        <div className="space-y-1">
-          {filtered.map((cmd) => (
-            <CommandRow
-              key={cmd.name}
-              name={cmd.name}
-              desc={cmd.desc}
-              isCopied={copiedCmd === cmd.name}
-              onCopy={() => copyToClipboard(cmd.name)}
-            />
-          ))}
-          {filtered.length === 0 && (
-            <p className="text-sm text-slate-500 py-8 text-center">No se encontraron comandos</p>
-          )}
-        </div>
+      {isLoading ? (
+        <LoadingSpinner label="Cargando comandos..." />
       ) : (
-        commands.map((group) => (
-          <CommandGroup
-            key={group.category}
-            group={group}
-            copiedCmd={copiedCmd}
-            onCopy={copyToClipboard}
-          />
-        ))
+        <>
+          <div className="relative max-w-md">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Buscar comando..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="input pl-10"
+            />
+          </div>
+
+          {filtered ? (
+            <div className="space-y-1">
+              {filtered.map((cmd) => (
+                <CommandRow
+                  key={cmd.name}
+                  name={cmd.name}
+                  desc={cmd.desc}
+                  isCopied={copiedCmd === cmd.name}
+                  onCopy={() => copyToClipboard(cmd.name)}
+                />
+              ))}
+              {filtered.length === 0 && (
+                <p className="text-sm text-slate-500 py-8 text-center">No se encontraron comandos</p>
+              )}
+            </div>
+          ) : (
+            commands.map((group) => (
+              <CommandGroup
+                key={group.category}
+                group={group}
+                copiedCmd={copiedCmd}
+                onCopy={copyToClipboard}
+              />
+            ))
+          )}
+        </>
       )}
     </div>
   );

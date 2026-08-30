@@ -151,7 +151,7 @@ export default function Home() {
             }}
           />
 
-          <div className="mx-auto max-w-5xl px-6 pb-24 pt-20 text-center sm:pt-28 md:pb-32">
+          <div className="mx-auto max-w-5xl px-6 pb-16 pt-20 text-center sm:pt-28 md:pb-20">
             <div className="mb-6 flex justify-center animate-fade-in-up">
               <span className="badge-new">
                 <Sparkles className="mr-1.5 h-3 w-3" />
@@ -200,7 +200,7 @@ export default function Home() {
         </section>
 
         {/* Features */}
-        <section id="features" className="mx-auto max-w-7xl px-6 py-24 sm:py-32">
+        <section id="features" className="mx-auto max-w-7xl px-6 py-16 sm:py-20">
           <div className="mx-auto max-w-2xl text-center">
             <span className="mono-label">Funciones</span>
             <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
@@ -225,7 +225,7 @@ export default function Home() {
         </section>
 
         {/* How it works */}
-        <section id="how-it-works" className="border-y border-slate-800/60 bg-surface-50/50 py-24 sm:py-32">
+        <section id="how-it-works" className="border-y border-slate-800/60 bg-surface-50/50 py-16 sm:py-20">
           <div className="mx-auto max-w-7xl px-6">
             <div className="mx-auto max-w-2xl text-center">
               <span className="mono-label">Cómo funciona</span>
@@ -254,7 +254,7 @@ export default function Home() {
         </section>
 
         {/* Templates */}
-        <section id="templates" className="mx-auto max-w-7xl px-6 py-24 sm:py-32">
+        <section id="templates" className="mx-auto max-w-7xl px-6 py-16 sm:py-20">
           <div className="mx-auto max-w-2xl text-center">
             <span className="mono-label">Plantillas listas para usar</span>
             <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
@@ -290,7 +290,7 @@ export default function Home() {
                 'radial-gradient(50% 80% at 50% 50%, rgba(56,189,248,0.14) 0%, rgba(56,189,248,0) 70%)',
             }}
           />
-          <div className="mx-auto max-w-3xl px-6 py-24 text-center sm:py-32">
+          <div className="mx-auto max-w-3xl px-6 py-16 text-center sm:py-20">
             <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
               Empieza gratis hoy
             </h2>
@@ -332,7 +332,7 @@ export default function Home() {
             </Link>
           </nav>
 
-          <p className="text-xs text-slate-500">&copy; 2024 Local B. Todos los derechos reservados.</p>
+          <p className="text-xs text-slate-500">&copy; 2025 Local B. Todos los derechos reservados.</p>
         </div>
       </footer>
     </div>
