@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -19,6 +20,10 @@ import { statsRouter } from './routes/stats';
 import { schedulesRouter } from './routes/schedules';
 import { aiRouter } from './routes/ai';
 import { telegramRouter } from './routes/telegram';
+import { settingsRouter } from './routes/settings';
+import { commandsRouter } from './routes/commands';
+import { promptsRouter } from './routes/prompts';
+import { createCatalogFeaturesRouter } from './routes/catalogFeatures';
 import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -40,8 +45,26 @@ if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === 'dev-secret'
 
 const app = express();
 const httpServer = createServer(app);
+const defaultAllowedOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'];
+const allowedOrigins = Array.from(
+  new Set([
+    ...defaultAllowedOrigins,
+    ...(process.env.FRONTEND_URLS || '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+    process.env.FRONTEND_URL,
+  ].filter(Boolean) as string[])
+);
+const corsOrigin: cors.CorsOptions['origin'] = (origin, callback) => {
+  if (!origin || allowedOrigins.includes(origin)) {
+    callback(null, true);
+    return;
+  }
+  callback(new Error(`CORS origin not allowed: ${origin}`));
+};
 const io = new Server(httpServer, {
-  cors: { origin: process.env.FRONTEND_URL || 'http://localhost:3000' },
+  cors: { origin: allowedOrigins },
 });
 
 app.use(helmet({
@@ -56,7 +79,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(morgan('dev'));
@@ -93,6 +116,11 @@ app.use('/api/stats', statsRouter);
 app.use('/api/schedules', schedulesRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/telegram', telegramRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/commands', commandsRouter);
+app.use('/api/prompts', promptsRouter);
+app.use('/api/skills', createCatalogFeaturesRouter('skill'));
+app.use('/api/superpowers', createCatalogFeaturesRouter('superpower'));
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
 // Deben registrarse al final, después de montar todas las rutas.

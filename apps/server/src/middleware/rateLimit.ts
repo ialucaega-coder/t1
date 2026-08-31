@@ -12,6 +12,10 @@ function getKey(req: Request): string {
 
 export function rateLimit(max = maxRequests) {
   return (req: Request, res: Response, next: NextFunction) => {
+    if (process.env.NODE_ENV === 'development') {
+      return next();
+    }
+
     const key = getKey(req);
     const now = Date.now();
     const entry = hits.get(key);

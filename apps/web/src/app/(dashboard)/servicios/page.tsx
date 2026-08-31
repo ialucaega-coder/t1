@@ -1,15 +1,15 @@
 'use client';
 
+import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useServices } from '@/hooks/use-services';
 import type { Service as ApiService } from '@/types';
 import { type Service as LegacyService } from '@/constants/services';
 import { ServiceCard } from '@/components/services/ServiceCard';
+import { ServiceFormModal } from '@/components/services/ServiceFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
-// Adapta el shape de `Service` de la API (categoría como objeto anidado) al
-// shape simplificado que consume `ServiceCard` (categoría como string).
 function toLegacyService(service: ApiService): LegacyService {
   return {
     id: service.id,
@@ -23,7 +23,13 @@ function toLegacyService(service: ApiService): LegacyService {
 
 export default function ServiciosPage() {
   const { services, isLoading, error, refetch } = useServices();
+  const [showCreate, setShowCreate] = useState(false);
   const legacyServices = services.map(toLegacyService);
+
+  const handleSave = async (data: { name: string; description: string; duration: number; price: number; category: string }) => {
+    // TODO: connect to real API when backend is available
+    refetch();
+  };
 
   return (
     <div className="space-y-6">
@@ -31,7 +37,7 @@ export default function ServiciosPage() {
         <p className="text-sm text-slate-400">
           Tus servicios disponibles para reserva. Cada servicio tiene duración, precio y categoría.
         </p>
-        <button className="btn-primary text-xs">
+        <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
           <Plus className="h-3.5 w-3.5" /> Nuevo servicio
         </button>
       </div>
@@ -47,6 +53,8 @@ export default function ServiciosPage() {
           ))}
         </div>
       )}
+
+      <ServiceFormModal isOpen={showCreate} onClose={() => setShowCreate(false)} onSave={handleSave} />
     </div>
   );
 }

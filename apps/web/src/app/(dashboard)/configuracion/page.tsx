@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Save, Palette, Globe, Bell, Shield, Bot } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
 import { THEME_OPTIONS } from '@/constants/settings';
@@ -9,14 +9,33 @@ import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function ConfiguracionPage() {
   const { settings, isLoading, error, refetch, updateSettings } = useSettings();
-  const [theme, setTheme] = useState(settings.theme || 'onyx');
+  const [form, setForm] = useState(settings);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    setForm(settings);
+  }, [settings]);
+
+  const updateField = (field: keyof typeof form, value: string) => {
+    setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSaving(true);
+    try {
+      await updateSettings(form);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   if (isLoading) {
     return <LoadingSpinner label="Cargando configuración..." />;
   }
 
   return (
-    <div className="max-w-3xl space-y-8">
+    <form onSubmit={handleSubmit} className="max-w-3xl space-y-8">
       {error && <ErrorAlert message={error} onRetry={refetch} />}
 
       <section className="card">
@@ -27,27 +46,27 @@ export default function ConfiguracionPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Nombre del negocio</label>
-            <input className="input" defaultValue={settings.businessName} />
+            <input className="input" value={form.businessName} onChange={(e) => updateField('businessName', e.target.value)} />
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Slug (URL)</label>
-            <input className="input" defaultValue={settings.slug} />
+            <input className="input" value={form.slug} onChange={(e) => updateField('slug', e.target.value)} />
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Teléfono</label>
-            <input className="input" defaultValue={settings.phone} />
+            <input className="input" value={form.phone} onChange={(e) => updateField('phone', e.target.value)} />
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Email</label>
-            <input className="input" defaultValue={settings.email} />
+            <input className="input" value={form.email} onChange={(e) => updateField('email', e.target.value)} />
           </div>
           <div className="md:col-span-2">
             <label className="text-xs text-slate-500 mb-1 block">Dirección</label>
-            <input className="input" defaultValue={settings.address} />
+            <input className="input" value={form.address} onChange={(e) => updateField('address', e.target.value)} />
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Zona horaria</label>
-            <select className="input" defaultValue={settings.timezone}>
+            <select className="input" value={form.timezone} onChange={(e) => updateField('timezone', e.target.value)}>
               <option>America/Argentina/Buenos_Aires</option>
               <option>America/Mexico_City</option>
               <option>America/Bogota</option>
@@ -56,7 +75,7 @@ export default function ConfiguracionPage() {
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Moneda</label>
-            <select className="input" defaultValue={settings.currency}>
+            <select className="input" value={form.currency} onChange={(e) => updateField('currency', e.target.value)}>
               <option>ARS</option>
               <option>USD</option>
               <option>MXN</option>
@@ -79,9 +98,10 @@ export default function ConfiguracionPage() {
           {THEME_OPTIONS.map((t) => (
             <button
               key={t.name}
-              onClick={() => setTheme(t.name.toLowerCase())}
+              type="button"
+              onClick={() => updateField('theme', t.name.toLowerCase())}
               className={`rounded-lg p-4 border-2 transition-all ${
-                theme === t.name.toLowerCase()
+                form.theme === t.name.toLowerCase()
                   ? 'border-brand-500'
                   : 'border-slate-700 hover:border-slate-600'
               } ${t.bg}`}
@@ -94,8 +114,17 @@ export default function ConfiguracionPage() {
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Color de acento</label>
           <div className="flex items-center gap-3">
-            <input type="color" defaultValue={settings.accentColor} className="h-10 w-10 rounded border border-slate-700 bg-transparent cursor-pointer" />
-            <input className="input max-w-[120px]" defaultValue={settings.accentColor} />
+            <input
+              type="color"
+              value={form.accentColor}
+              onChange={(e) => updateField('accentColor', e.target.value)}
+              className="h-10 w-10 rounded border border-slate-700 bg-transparent cursor-pointer"
+            />
+            <input
+              className="input max-w-[120px]"
+              value={form.accentColor}
+              onChange={(e) => updateField('accentColor', e.target.value)}
+            />
           </div>
         </div>
       </section>
@@ -109,7 +138,7 @@ export default function ConfiguracionPage() {
           Enchufa tu propia cuenta de Claude, ChatGPT, Gemini o Grok como cerebro del bot.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {(settings.aiProviders ?? ['Claude (Anthropic)', 'ChatGPT (OpenAI)', 'Gemini (Google)', 'Grok (xAI)']).map((provider) => (
+          {(form.aiProviders ?? ['Claude (Anthropic)', 'ChatGPT (OpenAI)', 'Gemini (Google)', 'Grok (xAI)']).map((provider) => (
             <div key={provider} className="card-accent flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface">
                 <Bot className="h-5 w-5 text-brand-400" />
@@ -125,10 +154,10 @@ export default function ConfiguracionPage() {
       </section>
 
       <div className="flex justify-end">
-        <button className="btn-primary">
-          <Save className="h-4 w-4" /> Guardar cambios
+        <button className="btn-primary" type="submit" disabled={isSaving}>
+          <Save className="h-4 w-4" /> {isSaving ? 'Guardando...' : 'Guardar cambios'}
         </button>
       </div>
-    </div>
+    </form>
   );
 }

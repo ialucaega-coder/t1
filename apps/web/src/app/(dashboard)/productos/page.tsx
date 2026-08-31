@@ -1,15 +1,15 @@
 'use client';
 
+import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useProducts } from '@/hooks/use-products';
 import type { Product as ApiProduct } from '@/types';
 import { type Product as LegacyProduct } from '@/constants/products';
 import { ProductCard } from '@/components/products/ProductCard';
+import { ProductFormModal } from '@/components/products/ProductFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
-// Adapta el shape de `Product` de la API (categoría como objeto anidado) al
-// shape simplificado que consume `ProductCard` (categoría como string).
 function toLegacyProduct(product: ApiProduct): LegacyProduct {
   return {
     id: product.id,
@@ -23,7 +23,12 @@ function toLegacyProduct(product: ApiProduct): LegacyProduct {
 
 export default function ProductosPage() {
   const { products, isLoading, error, refetch } = useProducts();
+  const [showCreate, setShowCreate] = useState(false);
   const legacyProducts = products.map(toLegacyProduct);
+
+  const handleSave = async (data: { name: string; description: string; price: number; stock: number; category: string; sku: string }) => {
+    refetch();
+  };
 
   return (
     <div className="space-y-6">
@@ -31,7 +36,7 @@ export default function ProductosPage() {
         <p className="text-sm text-slate-400">
           Tu catálogo de productos. Los clientes pueden verlos desde el chat y hacer pedidos.
         </p>
-        <button className="btn-primary text-xs">
+        <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
           <Plus className="h-3.5 w-3.5" /> Nuevo producto
         </button>
       </div>
@@ -47,6 +52,8 @@ export default function ProductosPage() {
           ))}
         </div>
       )}
+
+      <ProductFormModal isOpen={showCreate} onClose={() => setShowCreate(false)} onSave={handleSave} />
     </div>
   );
 }

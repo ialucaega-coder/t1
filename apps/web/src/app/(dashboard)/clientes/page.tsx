@@ -6,20 +6,16 @@ import { useClients } from '@/hooks/use-clients';
 import type { Client as ApiClient } from '@/types';
 import { type Client as LegacyClient, type ClientStatus } from '@/constants/clients';
 import { ClientTable } from '@/components/clients/ClientTable';
+import { ClientFormModal } from '@/components/clients/ClientFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
-// La API no expone un "temperature" de cliente (hot/warm/cold); se deriva a
-// partir de la cantidad de reservas históricas para mantener el mismo tipo
-// de badge que la UI legacy.
 function deriveStatus(totalBookings: number): ClientStatus {
   if (totalBookings >= 10) return 'hot';
   if (totalBookings >= 5) return 'warm';
   return 'cold';
 }
 
-// Adapta el shape de `Client` de la API (createdAt/bookingsAsClient/_count)
-// al shape simplificado que consume `ClientTable` (lastVisit/totalBookings/status).
 function toLegacyClient(client: ApiClient): LegacyClient {
   const totalBookings = client._count?.bookingsAsClient ?? 0;
   const lastVisit = client.bookingsAsClient?.[0]?.date ?? client.createdAt;
@@ -36,11 +32,16 @@ function toLegacyClient(client: ApiClient): LegacyClient {
 
 export default function ClientesPage() {
   const [search, setSearch] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
   const { clients, isLoading, error, refetch, searchClients } = useClients();
 
   const handleSearchChange = (value: string) => {
     setSearch(value);
     searchClients(value);
+  };
+
+  const handleSave = async (data: { name: string; email: string; phone: string; notes: string }) => {
+    refetch();
   };
 
   const legacyClients = clients.map(toLegacyClient);
@@ -66,7 +67,7 @@ export default function ClientesPage() {
         <button className="btn-secondary text-xs">
           <Filter className="h-3.5 w-3.5" /> Filtrar
         </button>
-        <button className="btn-primary text-xs">
+        <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
           <UserPlus className="h-3.5 w-3.5" /> Agregar cliente
         </button>
       </div>
@@ -74,6 +75,8 @@ export default function ClientesPage() {
       {error && <ErrorAlert message={error} onRetry={refetch} />}
 
       {isLoading ? <LoadingSpinner label="Cargando clientes..." /> : <ClientTable clients={legacyClients} />}
+
+      <ClientFormModal isOpen={showCreate} onClose={() => setShowCreate(false)} onSave={handleSave} />
     </div>
   );
 }
