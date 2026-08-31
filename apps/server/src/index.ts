@@ -24,6 +24,14 @@ import { settingsRouter } from './routes/settings';
 import { commandsRouter } from './routes/commands';
 import { promptsRouter } from './routes/prompts';
 import { createCatalogFeaturesRouter } from './routes/catalogFeatures';
+import { botsRouter } from './routes/bots';
+import { teamRouter } from './routes/team';
+import { marketplaceRouter } from './routes/marketplace';
+import { agencyRouter } from './routes/agency';
+import { analyticsRouter } from './routes/analytics';
+import { campaignsRouter } from './routes/campaigns';
+import { whitelabelRouter } from './routes/whitelabel';
+import { arenaRouter } from './routes/arena';
 import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -121,6 +129,14 @@ app.use('/api/commands', commandsRouter);
 app.use('/api/prompts', promptsRouter);
 app.use('/api/skills', createCatalogFeaturesRouter('skill'));
 app.use('/api/superpowers', createCatalogFeaturesRouter('superpower'));
+app.use('/api/bots', botsRouter);
+app.use('/api/team', teamRouter);
+app.use('/api/marketplace', marketplaceRouter);
+app.use('/api/agency', agencyRouter);
+app.use('/api/analytics', analyticsRouter);
+app.use('/api/campaigns', campaignsRouter);
+app.use('/api/whitelabel', whitelabelRouter);
+app.use('/api/arena', arenaRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
 // Deben registrarse al final, después de montar todas las rutas.

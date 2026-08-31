@@ -98,9 +98,16 @@ model Business {
   country     String?
   timezone    String   @default("America/Argentina/Buenos_Aires")
   currency    String   @default("ARS")
-  theme       String   @default("onyx")
-  accentColor String   @default("#38BDF8") // Celeste (sky blue) por defecto
-  isActive    Boolean  @default(true)
+  theme           String   @default("onyx")
+  accentColor     String   @default("#38BDF8")
+  primaryColor    String?
+  secondaryColor  String?
+  customDomain    String?
+  whatsappNumber  String?
+  instagramUrl    String?
+  facebookUrl     String?
+  websiteUrl      String?
+  isActive        Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -119,6 +126,14 @@ model Business {
   commands      Command[]
   connections   Connection[]
   templates     Template[]
+  bots          Bot[]
+  conversations Conversation[]
+  teamMembers   TeamMember[]
+  marketplaceInstalls MarketplaceInstall[]
+  agencyClients AgencyClient[]
+  campaigns     Campaign[]
+  arenaBuilders ArenaBuilder[]
+  arenaIdeas    ArenaIdea[]
 
   @@map("businesses")
 }
@@ -480,4 +495,227 @@ model Template {
 
   @@index([businessId])
   @@map("templates")
+}
+
+enum BotStatus {
+  ACTIVE
+  PAUSED
+  DRAFT
+  ERROR
+}
+
+enum BotChannel {
+  TELEGRAM
+  WHATSAPP
+  WEBCHAT
+  INSTAGRAM
+}
+
+model Bot {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  channel     BotChannel @default(TELEGRAM)
+  status      BotStatus  @default(DRAFT)
+  token       String?
+  webhookUrl  String?
+  config      Json?
+  lastActiveAt DateTime?
+  messageCount Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  conversations Conversation[]
+
+  @@index([businessId])
+  @@map("bots")
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+  HANDOFF
+}
+
+model Conversation {
+  id        String             @id @default(cuid())
+  status    ConversationStatus @default(OPEN)
+  channel   BotChannel         @default(TELEGRAM)
+  contactName String?
+  contactPhone String?
+  contactEmail String?
+  metadata  Json?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  botId String
+  bot   Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  messages Message[]
+
+  @@index([businessId])
+  @@index([botId])
+  @@map("conversations")
+}
+
+enum MessageRole {
+  USER
+  BOT
+  SYSTEM
+}
+
+model Message {
+  id           String      @id @default(cuid())
+  role         MessageRole
+  text         String
+  responseTime Int?
+  metadata     Json?
+  createdAt    DateTime    @default(now())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+enum TeamRole {
+  ADMIN
+  PROFESSIONAL
+  VIEWER
+}
+
+enum InviteStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+model TeamMember {
+  id       String       @id @default(cuid())
+  name     String
+  email    String
+  role     TeamRole     @default(VIEWER)
+  avatar   String?
+  status   InviteStatus @default(PENDING)
+  joinedAt DateTime     @default(now())
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, email])
+  @@index([businessId])
+  @@map("team_members")
+}
+
+model MarketplaceItem {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  category    String
+  rating      Float   @default(0)
+  reviews     Int     @default(0)
+  price       String  @default("Gratis")
+  author      String
+  icon        String?
+  isPublished Boolean @default(true)
+  createdAt   DateTime @default(now())
+
+  installations MarketplaceInstall[]
+
+  @@map("marketplace_items")
+}
+
+model MarketplaceInstall {
+  id          String   @id @default(cuid())
+  installedAt DateTime @default(now())
+
+  itemId String
+  item   MarketplaceItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, businessId])
+  @@map("marketplace_installs")
+}
+
+model AgencyClient {
+  id           String   @id @default(cuid())
+  name         String
+  plan         String   @default("Free")
+  bots         Int      @default(0)
+  status       String   @default("trial")
+  revenue      Decimal  @db.Decimal(10, 2) @default(0)
+  lastActivity DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("agency_clients")
+}
+
+model Campaign {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String   @default("draft")
+  channel     String   @default("whatsapp")
+  sentCount   Int      @default(0)
+  openRate    Float    @default(0)
+  clickRate   Float    @default(0)
+  scheduledAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("campaigns")
+}
+
+model ArenaBuilder {
+  id           String  @id @default(cuid())
+  name         String
+  title        String  @default("")
+  description  String?
+  systemPrompt String  @default("")
+  model        String  @default("claude-sonnet-5")
+  temperature  Float   @default(0.7)
+  status       String  @default("active")
+  github       Boolean @default(false)
+  votes        Int     @default(0)
+  rank         Int     @default(0)
+  createdAt    DateTime @default(now())
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("arena_builders")
+}
+
+model ArenaIdea {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+  category    String  @default("general")
+  votes       Int     @default(0)
+  status      String  @default("proposed")
+  createdAt   DateTime @default(now())
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("arena_ideas")
 }
