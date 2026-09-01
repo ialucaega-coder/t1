@@ -22,3 +22,4 @@ export * from './use-whitelabel';
 export * from './use-arena';
 export * from './use-team';
 export * from './use-bots';
+export * from './use-conversations';

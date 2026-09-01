@@ -31,6 +31,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Conexiones', href: '/conexiones', icon: Link2 },
       { name: 'Plantillas WhatsApp', href: '/plantillas', icon: MessageCircle },
       { name: 'IA', href: '/ia', icon: Bot },
+      { name: 'Conversaciones', href: '/conversaciones', icon: MessageCircle },
     ],
   },
   {
