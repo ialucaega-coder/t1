@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Terminal, Sparkles, Calendar, ShoppingBag, Users, Bot, Plus, Pause, Play, Trash2, Settings, MessageSquare, Send } from 'lucide-react';
+import { Terminal, Sparkles, Calendar, ShoppingBag, Users, Bot, Plus, Pause, Play, Trash2, Settings, MessageSquare, Send, ExternalLink, Code, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
 import { useStats } from '@/hooks/use-stats';
 import { useBots } from '@/hooks/use-bots';
@@ -30,6 +30,13 @@ export default function DashboardPage() {
   const [newBotChannel, setNewBotChannel] = useState<'TELEGRAM' | 'WHATSAPP' | 'WEBCHAT' | 'INSTAGRAM'>('WHATSAPP');
   const [newBotDesc, setNewBotDesc] = useState('');
   const [creating, setCreating] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   const isLoading = statsLoading || botsLoading;
   const error = statsError || botsError;
@@ -172,6 +179,16 @@ export default function DashboardPage() {
                     <span>{bot._count?.conversations ?? bot.messageCount}</span>
                   </div>
                   <div className="flex items-center gap-1">
+                    {bot.status === 'ACTIVE' && (
+                      <>
+                        <a href={`/chat/${bot.id}`} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-lg hover:bg-surface-100 text-slate-400 hover:text-brand-400 transition-colors" title="Abrir webchat">
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                        <button onClick={() => copyToClipboard(`<iframe src="${window.location.origin}/chat/${bot.id}" width="400" height="600" frameborder="0"></iframe>`, bot.id)} className="p-1.5 rounded-lg hover:bg-surface-100 text-slate-400 hover:text-brand-400 transition-colors" title="Copiar código embed">
+                          {copiedId === bot.id ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Code className="h-3.5 w-3.5" />}
+                        </button>
+                      </>
+                    )}
                     <button onClick={() => handleToggleStatus(bot)} className="p-1.5 rounded-lg hover:bg-surface-100 text-slate-400 hover:text-white transition-colors" title={bot.status === 'ACTIVE' ? 'Pausar' : 'Activar'}>
                       {bot.status === 'ACTIVE' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                     </button>
