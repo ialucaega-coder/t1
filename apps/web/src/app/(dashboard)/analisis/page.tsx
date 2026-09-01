@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle } from 'lucide-react';
+import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock } from 'lucide-react';
 import { useAnalytics } from '@/hooks/use-analytics';
+import { useCampaigns } from '@/hooks/use-campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
@@ -85,7 +86,12 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
 
 export default function AnalisisPage() {
   const { kpi, conversations, satisfaction, improvements, costs, isLoading, error, refetch } = useAnalytics();
+  const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
+  const [showNewCampaign, setShowNewCampaign] = useState(false);
+  const [campaignName, setCampaignName] = useState('');
+  const [campaignDesc, setCampaignDesc] = useState('');
+  const [creatingCampaign, setCreatingCampaign] = useState(false);
 
   if (isLoading) return <LoadingSpinner label="Cargando análisis..." />;
 
@@ -219,11 +225,87 @@ export default function AnalisisPage() {
       )}
 
       {activeTab === 'campanas' && (
-        <div className="card-accent text-center py-12">
-          <Megaphone className="h-12 w-12 text-slate-700 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-slate-400 mb-2">Campañas de difusión</h3>
-          <p className="text-sm text-slate-500 mb-4 max-w-sm mx-auto">Manda mensajes a tus segmentos de clientes por WhatsApp — promociones, avisos, seguimientos.</p>
-          <button className="btn-primary text-sm">Crear primera campaña</button>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-400">Mandá mensajes a tus segmentos de clientes por WhatsApp — promociones, avisos, seguimientos.</p>
+            <button onClick={() => setShowNewCampaign(!showNewCampaign)} className="btn-primary text-xs">
+              <Plus className="h-3.5 w-3.5" /> Nueva campaña
+            </button>
+          </div>
+
+          {showNewCampaign && (
+            <div className="card-accent">
+              <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                <Megaphone className="h-4 w-4 text-brand-400" /> Crear campaña
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 block">Nombre</label>
+                  <input type="text" value={campaignName} onChange={(e) => setCampaignName(e.target.value)} placeholder="Promo verano 2026" className="input w-full" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 block">Descripción</label>
+                  <input type="text" value={campaignDesc} onChange={(e) => setCampaignDesc(e.target.value)} placeholder="Descuento 20% en todos los servicios" className="input w-full" />
+                </div>
+              </div>
+              <div className="flex justify-end mt-3 gap-2">
+                <button onClick={() => setShowNewCampaign(false)} className="btn-secondary text-xs">Cancelar</button>
+                <button
+                  onClick={async () => {
+                    if (!campaignName.trim()) return;
+                    setCreatingCampaign(true);
+                    try {
+                      await createCampaign({ name: campaignName.trim(), description: campaignDesc.trim() || null, channel: 'whatsapp' });
+                      setCampaignName('');
+                      setCampaignDesc('');
+                      setShowNewCampaign(false);
+                    } catch {}
+                    finally { setCreatingCampaign(false); }
+                  }}
+                  disabled={creatingCampaign || !campaignName.trim()}
+                  className="btn-primary text-xs disabled:opacity-50"
+                >
+                  {creatingCampaign ? 'Creando...' : 'Crear'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {campaignsLoading ? (
+            <LoadingSpinner label="Cargando campañas..." />
+          ) : campaigns.length === 0 ? (
+            <div className="card-accent text-center py-12">
+              <Megaphone className="h-12 w-12 text-slate-700 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-slate-400 mb-2">Sin campañas todavía</h3>
+              <p className="text-sm text-slate-500 max-w-sm mx-auto">Creá tu primera campaña para enviar mensajes masivos por WhatsApp.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {campaigns.map((c) => (
+                <div key={c.id} className="card flex items-center gap-4">
+                  <div className="h-9 w-9 rounded-lg bg-brand-400/10 flex items-center justify-center shrink-0">
+                    <Send className="h-4 w-4 text-brand-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{c.name}</p>
+                    {c.description && <p className="text-xs text-slate-500 truncate">{c.description}</p>}
+                  </div>
+                  <span className={`badge border text-[9px] ${
+                    c.status === 'SENT' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    : c.status === 'SCHEDULED' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                    : 'bg-slate-500/10 text-slate-400 border-slate-500/20'
+                  }`}>{c.status === 'SENT' ? 'Enviada' : c.status === 'SCHEDULED' ? 'Programada' : 'Borrador'}</span>
+                  <span className="text-[10px] text-slate-500 flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {new Date(c.createdAt).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+                  </span>
+                  <button onClick={() => deleteCampaign(c.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

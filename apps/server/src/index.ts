@@ -33,6 +33,7 @@ import { campaignsRouter } from './routes/campaigns';
 import { whitelabelRouter } from './routes/whitelabel';
 import { arenaRouter } from './routes/arena';
 import { conversationsRouter } from './routes/conversations';
+import { whatsappRouter } from './routes/whatsapp';
 import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -139,6 +140,7 @@ app.use('/api/campaigns', campaignsRouter);
 app.use('/api/whitelabel', whitelabelRouter);
 app.use('/api/arena', arenaRouter);
 app.use('/api/conversations', conversationsRouter);
+app.use('/api/whatsapp', whatsappRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
 // Deben registrarse al final, después de montar todas las rutas.

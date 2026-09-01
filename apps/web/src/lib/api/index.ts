@@ -27,3 +27,4 @@ export * as arenaApi from './arena';
 export * as teamApi from './team';
 export * as botsApi from './bots';
 export * as conversationsApi from './conversations';
+export * as campaignsApi from './campaigns';
