@@ -34,6 +34,7 @@ import { whitelabelRouter } from './routes/whitelabel';
 import { arenaRouter } from './routes/arena';
 import { conversationsRouter } from './routes/conversations';
 import { whatsappRouter } from './routes/whatsapp';
+import { publicChatRouter } from './routes/publicChat';
 import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -141,6 +142,7 @@ app.use('/api/whitelabel', whitelabelRouter);
 app.use('/api/arena', arenaRouter);
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/whatsapp', whatsappRouter);
+app.use('/api/public', cors({ origin: true, credentials: false }), publicChatRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
 // Deben registrarse al final, después de montar todas las rutas.

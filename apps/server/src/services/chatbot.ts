@@ -241,11 +241,18 @@ async function getOrCreateConversation(
 
   const botId = options.botId || await getDefaultBotId(businessId);
 
+  const channelMap: Record<ChatChannel, string> = {
+    WEB: 'WEBCHAT',
+    TELEGRAM: 'TELEGRAM',
+    WHATSAPP: 'WHATSAPP',
+    VOICE: 'WEBCHAT',
+  };
+
   return prisma.conversation.create({
     data: {
       businessId,
       botId,
-      channel: channel as any,
+      channel: channelMap[channel] as any,
       contactName: options.contactName,
       contactPhone: options.contactPhone,
       status: 'OPEN',
