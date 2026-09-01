@@ -1,5 +1,6 @@
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { Header } from '@/components/dashboard/Header';
+import { WebChat } from '@/components/chat/WebChat';
 
 export default function DashboardLayout({
   children,
@@ -15,6 +16,7 @@ export default function DashboardLayout({
           {children}
         </div>
       </main>
+      <WebChat />
     </div>
   );
 }

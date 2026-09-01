@@ -37,6 +37,10 @@ export interface ChatbotResponse {
 export interface ProcessMessageOptions {
   history?: ConversationTurn[];
   clientId?: string;
+  conversationId?: string;
+  botId?: string;
+  contactName?: string;
+  contactPhone?: string;
 }
 
 /**
@@ -158,57 +162,121 @@ export async function processMessage(
   clientMessage: string,
   channel: ChatChannel,
   options: ProcessMessageOptions = {}
-): Promise<ChatbotResponse> {
+): Promise<ChatbotResponse & { conversationId: string }> {
   const intent = detectIntent(clientMessage);
-  const history = options.history || [];
 
-  // HUMAN: no hace falta llamar a la IA, se corta el flujo automático.
+  const conversation = await getOrCreateConversation(businessId, channel, options);
+
+  await prisma.message.create({
+    data: { conversationId: conversation.id, role: 'USER', text: clientMessage },
+  });
+
+  const dbHistory = options.history || await loadHistory(conversation.id);
+
+  let responseText: string;
+  let actions: ChatAction[] = [];
+
   if (intent === 'HUMAN') {
-    return {
-      text: 'Entendido, en breve te va a contactar una persona del equipo. Gracias por tu paciencia.',
-      intent,
-      actions: [{ type: 'escalateToHuman', payload: { channel } }],
-    };
+    responseText = 'Entendido, en breve te va a contactar una persona del equipo. Gracias por tu paciencia.';
+    actions = [{ type: 'escalateToHuman', payload: { channel } }];
+  } else if (intent === 'BOOKING') {
+    const result = await handleBookingIntent(businessId);
+    responseText = result.text;
+    actions = result.actions;
+  } else if (intent === 'CATALOG') {
+    const result = await handleCatalogIntent(businessId);
+    responseText = result.text;
+    actions = result.actions;
+  } else {
+    const systemPrompt = await buildSystemPrompt(businessId);
+    const catalog = await getActiveCatalog(businessId);
+    const catalogText = formatCatalogText(catalog);
+    const enrichedPrompt = systemPrompt + '\n\n' + catalogText;
+
+    let clientName = options.contactName;
+    if (!clientName && options.clientId) {
+      const client = await prisma.user.findUnique({ where: { id: options.clientId }, select: { name: true } });
+      clientName = client?.name;
+    }
+
+    try {
+      const provider = getDefaultAIProvider();
+      responseText = await provider.generateResponse(clientMessage, {
+        businessId,
+        clientName,
+        history: dbHistory,
+        systemPrompt: enrichedPrompt,
+      });
+    } catch (error) {
+      console.error('Error generando respuesta de IA:', error);
+      responseText = 'Disculpá, en este momento no puedo responder automáticamente. ¿Querés que te derive con una persona del equipo?';
+      actions = [{ type: 'escalateToHuman' }];
+    }
   }
 
-  // BOOKING y CATALOG tienen manejo especial con datos reales del negocio.
-  if (intent === 'BOOKING') {
-    const { text, actions } = await handleBookingIntent(businessId);
-    return { text, intent, actions };
-  }
+  const start = Date.now();
+  await prisma.message.create({
+    data: { conversationId: conversation.id, role: 'BOT', text: responseText, responseTime: Date.now() - start },
+  });
 
-  if (intent === 'CATALOG') {
-    const { text, actions } = await handleCatalogIntent(businessId);
-    return { text, intent, actions };
-  }
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: { updatedAt: new Date() },
+  });
 
-  // FAQ: se apoya en el proveedor de IA configurado para responder libremente,
-  // usando el prompt de sistema del negocio como contexto.
-  const systemPrompt = await buildSystemPrompt(businessId);
-  let clientName: string | undefined;
-  if (options.clientId) {
-    const client = await prisma.user.findUnique({ where: { id: options.clientId }, select: { name: true } });
-    clientName = client?.name;
-  }
+  return { text: responseText, intent, actions, conversationId: conversation.id };
+}
 
-  try {
-    const provider = getDefaultAIProvider();
-    const text = await provider.generateResponse(clientMessage, {
-      businessId,
-      clientName,
-      history,
-      systemPrompt,
+async function getOrCreateConversation(
+  businessId: string,
+  channel: ChatChannel,
+  options: ProcessMessageOptions,
+) {
+  if (options.conversationId) {
+    const existing = await prisma.conversation.findFirst({
+      where: { id: options.conversationId, businessId },
     });
-    return { text, intent, actions: [] };
-  } catch (error) {
-    // Si no hay proveedor de IA configurado (o falla la llamada), no dejamos
-    // al cliente sin respuesta: devolvemos un mensaje de fallback y sugerimos
-    // escalar a un humano.
-    console.error('Error generando respuesta de IA:', error);
-    return {
-      text: 'Disculpá, en este momento no puedo responder automáticamente. ¿Querés que te derive con una persona del equipo?',
-      intent: 'FAQ',
-      actions: [{ type: 'escalateToHuman' }],
-    };
+    if (existing) return existing;
   }
+
+  const botId = options.botId || await getDefaultBotId(businessId);
+
+  return prisma.conversation.create({
+    data: {
+      businessId,
+      botId,
+      channel: channel as any,
+      contactName: options.contactName,
+      contactPhone: options.contactPhone,
+      status: 'OPEN',
+    },
+  });
+}
+
+async function getDefaultBotId(businessId: string): Promise<string> {
+  let bot = await prisma.bot.findFirst({
+    where: { businessId },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!bot) {
+    bot = await prisma.bot.create({
+      data: { name: 'Bot principal', channel: 'WEBCHAT', businessId },
+    });
+  }
+  return bot.id;
+}
+
+async function loadHistory(conversationId: string): Promise<ConversationTurn[]> {
+  const messages = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: 'asc' },
+    take: 50,
+    select: { role: true, text: true },
+  });
+  return messages
+    .filter((m) => m.role !== 'SYSTEM')
+    .map((m) => ({
+      role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+      content: m.text,
+    }));
 }

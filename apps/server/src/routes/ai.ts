@@ -22,6 +22,10 @@ const chatSchema = z.object({
     )
     .optional(),
   clientId: z.string().optional(),
+  conversationId: z.string().optional(),
+  botId: z.string().optional(),
+  contactName: z.string().optional(),
+  contactPhone: z.string().optional(),
 });
 
 /**
@@ -35,6 +39,10 @@ router.post('/chat', requireAuth, async (req, res) => {
     const response = await processMessage(req.auth!.businessId, data.message, data.channel, {
       history: data.history,
       clientId: data.clientId,
+      conversationId: data.conversationId,
+      botId: data.botId,
+      contactName: data.contactName,
+      contactPhone: data.contactPhone,
     });
     res.json(response);
   } catch (error) {

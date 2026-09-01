@@ -26,3 +26,4 @@ export * as whitelabelApi from './whitelabel';
 export * as arenaApi from './arena';
 export * as teamApi from './team';
 export * as botsApi from './bots';
+export * as conversationsApi from './conversations';
