@@ -6,6 +6,16 @@ const nextConfig = {
       { protocol: 'https', hostname: '**' },
     ],
   },
+  async headers() {
+    return [
+      {
+        source: '/chat/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        ],
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

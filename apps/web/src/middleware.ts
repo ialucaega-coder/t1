@@ -67,9 +67,10 @@ function hasSessionCookie(request: NextRequest): boolean {
 }
 
 /** Aplica cabeceras de seguridad estándar a la respuesta saliente. */
-function applySecurityHeaders(response: NextResponse): NextResponse {
+function applySecurityHeaders(response: NextResponse, pathname: string): NextResponse {
   response.headers.set('X-Content-Type-Options', 'nosniff');
-  response.headers.set('X-Frame-Options', 'DENY');
+  const isEmbeddable = pathname.startsWith('/chat/') || pathname.startsWith('/book/');
+  response.headers.set('X-Frame-Options', isEmbeddable ? 'SAMEORIGIN' : 'DENY');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set(
     'Permissions-Policy',
@@ -97,14 +98,14 @@ export function middleware(request: NextRequest) {
   if (isProtectedRoute && !authenticated) {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('redirect', pathname);
-    return applySecurityHeaders(NextResponse.redirect(loginUrl));
+    return applySecurityHeaders(NextResponse.redirect(loginUrl), pathname);
   }
 
   if (isAuthOnlyRoute && authenticated) {
-    return applySecurityHeaders(NextResponse.redirect(new URL('/dashboard', request.url)));
+    return applySecurityHeaders(NextResponse.redirect(new URL('/dashboard', request.url)), pathname);
   }
 
-  return applySecurityHeaders(NextResponse.next());
+  return applySecurityHeaders(NextResponse.next(), pathname);
 }
 
 export const config = {

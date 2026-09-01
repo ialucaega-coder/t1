@@ -13,6 +13,35 @@ const chatSchema = z.object({
   contactPhone: z.string().max(30).optional(),
 });
 
+router.get('/bot/demo', async (_req, res) => {
+  try {
+    const bot = await prisma.bot.findFirst({
+      where: { status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        business: { select: { name: true } },
+      },
+    });
+
+    if (!bot) {
+      res.status(404).json({ error: 'No hay bots activos para demostración' });
+      return;
+    }
+
+    res.json({
+      id: bot.id,
+      name: bot.name,
+      businessName: bot.business.name,
+      status: 'ACTIVE',
+    });
+  } catch (error) {
+    console.error('Public demo bot error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/bot/:botId', async (req, res) => {
   try {
     const bot = await prisma.bot.findUnique({

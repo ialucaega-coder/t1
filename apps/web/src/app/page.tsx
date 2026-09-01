@@ -117,6 +117,9 @@ export default function Home() {
             <a href="#templates" className="transition-colors hover:text-white">
               Giros de negocio
             </a>
+            <a href="#demo" className="transition-colors hover:text-white">
+              Demo
+            </a>
           </nav>
           <div className="flex items-center gap-3">
             <Link href="/login" className="hidden text-sm font-medium text-slate-300 transition-colors hover:text-white sm:block">
@@ -280,6 +283,30 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Live Demo */}
+        <section id="demo" className="border-y border-slate-800/60 bg-surface-50/50 py-16 sm:py-20">
+          <div className="mx-auto max-w-7xl px-6">
+            <div className="mx-auto max-w-2xl text-center">
+              <span className="mono-label">Demo en vivo</span>
+              <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+                Probá el asistente ahora
+              </h2>
+              <p className="mt-4 text-lg text-slate-400">
+                Chateá con nuestro bot demo y mirá cómo responde sobre servicios, reservas y más.
+              </p>
+            </div>
+            <div className="mt-10 flex justify-center">
+              <div className="w-full max-w-md rounded-2xl border border-slate-700/50 overflow-hidden shadow-2xl" style={{ height: '500px' }}>
+                <iframe
+                  src="/chat/demo"
+                  className="h-full w-full border-0"
+                  title="Chat demo"
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* Final CTA */}
         <section className="relative overflow-hidden border-y border-slate-800/60">
           <div
@@ -332,7 +359,7 @@ export default function Home() {
             </Link>
           </nav>
 
-          <p className="text-xs text-slate-500">&copy; 2025 Local B. Todos los derechos reservados.</p>
+          <p className="text-xs text-slate-500">&copy; 2026 Local B. Todos los derechos reservados.</p>
         </div>
       </footer>
     </div>
