@@ -2,29 +2,33 @@
 
 import { useState } from 'react';
 import { Building2, Users, Bot, DollarSign, Plus, Copy, Check, Eye, Settings, BarChart3, Link2 } from 'lucide-react';
-import { MOCK_AGENCY_CLIENTS, AGENCY_STATS } from '@/constants/agency';
+import { useAgency } from '@/hooks/use-agency';
+import { AGENCY_STATS } from '@/constants/agency';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function AgenciaPage() {
+  const { stats, clients, isLoading, error, refetch } = useAgency();
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const filtered = MOCK_AGENCY_CLIENTS.filter((c) =>
+  const filtered = clients.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()),
   );
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(AGENCY_STATS.referralLink);
+    navigator.clipboard.writeText(stats.referralLink || AGENCY_STATS.referralLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const stats = [
-    { label: 'Negocios', value: AGENCY_STATS.totalBusinesses, icon: Building2 },
-    { label: 'Bots activos', value: AGENCY_STATS.totalBots, icon: Bot },
-    { label: 'Ingresos recurrentes', value: AGENCY_STATS.totalRevenue, icon: DollarSign },
-    { label: 'Clientes activos', value: AGENCY_STATS.activeClients, icon: Users },
+  const statCards = [
+    { label: 'Negocios', value: stats.totalBusinesses, icon: Building2 },
+    { label: 'Bots activos', value: stats.totalBots, icon: Bot },
+    { label: 'Ingresos recurrentes', value: stats.totalRevenue, icon: DollarSign },
+    { label: 'Clientes activos', value: stats.activeClients, icon: Users },
   ];
 
   const features = [
@@ -34,16 +38,19 @@ export default function AgenciaPage() {
     { icon: BarChart3, title: 'Retén con reporte de valor mensual', description: 'Cada cliente recibe un reporte automático de lo que su bot hizo.' },
   ];
 
+  if (isLoading) return <LoadingSpinner label="Cargando agencia..." />;
+
   return (
     <div className="space-y-8">
+      {error && <ErrorAlert message={error} onRetry={refetch} />}
+
       <p className="text-sm text-slate-400 max-w-2xl">
         Convierte tus bots en un negocio: administra a cada cliente en un solo lugar,
         y cotiza, propon y cóbrale sin salir de aquí.
       </p>
 
-      {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat) => {
+        {statCards.map((stat) => {
           const Icon = stat.icon;
           return (
             <div key={stat.label} className="card-accent">
@@ -61,7 +68,6 @@ export default function AgenciaPage() {
         })}
       </div>
 
-      {/* Features */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {features.map((feature) => {
           const Icon = feature.icon;
@@ -75,17 +81,11 @@ export default function AgenciaPage() {
         })}
       </div>
 
-      {/* Client list */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="mono-label">TUS CLIENTES</h3>
           <div className="flex items-center gap-3">
-            <SearchInput
-              value={search}
-              onChange={setSearch}
-              placeholder="Buscar negocio..."
-              className="max-w-[220px]"
-            />
+            <SearchInput value={search} onChange={setSearch} placeholder="Buscar negocio..." className="max-w-[220px]" />
             <button className="btn-primary text-xs">
               <Plus className="h-3.5 w-3.5" /> Agregar negocio
             </button>
@@ -116,9 +116,7 @@ export default function AgenciaPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge variant={client.plan === 'Local B+' ? 'premium' : 'inactive'}>
-                      {client.plan}
-                    </StatusBadge>
+                    <StatusBadge variant={client.plan === 'Local B+' ? 'premium' : 'inactive'}>{client.plan}</StatusBadge>
                   </td>
                   <td className="px-4 py-3 text-sm text-white">{client.bots}</td>
                   <td className="px-4 py-3">
@@ -131,49 +129,29 @@ export default function AgenciaPage() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
-                    No se encontraron negocios
-                  </td>
-                </tr>
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">No se encontraron negocios</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Referral link */}
       <div className="card-accent">
         <div className="flex items-center gap-3 mb-4">
           <Link2 className="h-5 w-5 text-brand-400" />
           <div>
             <p className="text-sm text-white font-medium">Link de referido</p>
-            <p className="text-xs text-slate-400">
-              Comparte tu link y gana {AGENCY_STATS.commission} de comisión por cada cliente que se registre.
-            </p>
+            <p className="text-xs text-slate-400">Comparte tu link y gana {stats.commission || AGENCY_STATS.commission} de comisión por cada cliente que se registre.</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex-1 bg-surface rounded-lg px-4 py-2.5 border border-slate-700">
-            <code className="text-sm text-slate-300 font-mono">{AGENCY_STATS.referralLink}</code>
+            <code className="text-sm text-slate-300 font-mono">{stats.referralLink || AGENCY_STATS.referralLink}</code>
           </div>
           <button onClick={handleCopy} className="btn-secondary text-xs">
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             {copied ? 'Copiado' : 'Copiar'}
           </button>
-        </div>
-      </div>
-
-      {/* Summary */}
-      <div className="card-accent">
-        <div className="flex items-center gap-3">
-          <Building2 className="h-5 w-5 text-brand-400" />
-          <div>
-            <p className="text-sm text-white font-medium">Resumen de agencia</p>
-            <p className="text-xs text-slate-400">
-              {AGENCY_STATS.totalBusinesses} clientes · {AGENCY_STATS.totalBots} bots activos · {AGENCY_STATS.totalRevenue} en ingresos recurrentes
-            </p>
-          </div>
         </div>
       </div>
     </div>
