@@ -25,3 +25,4 @@ export * as marketplaceApi from './marketplace';
 export * as whitelabelApi from './whitelabel';
 export * as arenaApi from './arena';
 export * as teamApi from './team';
+export * as botsApi from './bots';

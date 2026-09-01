@@ -21,3 +21,4 @@ export * from './use-marketplace';
 export * from './use-whitelabel';
 export * from './use-arena';
 export * from './use-team';
+export * from './use-bots';
