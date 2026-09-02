@@ -18,6 +18,7 @@ import {
   Link2,
 } from 'lucide-react';
 import { useConnections } from '@/hooks/use-connections';
+import { useBots } from '@/hooks/use-bots';
 
 // ────────────────────────────────────────────────────────────────
 // Canales de comunicación adicionales (proximamente)
@@ -47,6 +48,127 @@ const integrations = [
   { name: 'n8n', category: 'Automatizacion', icon: Link2, status: 'available' },
   { name: 'Composio', category: 'Automatizacion', icon: Link2, status: 'available' },
 ];
+
+// ────────────────────────────────────────────────────────────────
+// Componente: Web Chat Widget embebible
+// ────────────────────────────────────────────────────────────────
+
+function WebChatWidgetCard() {
+  const { bots } = useBots();
+  const [selectedBotId, setSelectedBotId] = useState('');
+  const [copied, setCopied] = useState<string | null>(null);
+  const [widgetColor, setWidgetColor] = useState('#0EA5E9');
+
+  const activeBots = bots.filter((b) => b.status === 'ACTIVE');
+  const botId = selectedBotId || activeBots[0]?.id || '';
+
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://tu-dominio.com';
+
+  const widgetScript = `<script src="${origin}/widget.js" data-bot-id="${botId}" data-color="${widgetColor}" defer></script>`;
+  const iframeCode = `<iframe src="${origin}/chat/${botId}" width="400" height="600" frameborder="0" style="border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.2)"></iframe>`;
+
+  function copyCode(code: string, type: string) {
+    navigator.clipboard.writeText(code);
+    setCopied(type);
+    setTimeout(() => setCopied(null), 2000);
+  }
+
+  return (
+    <div className="card-accent p-6 border border-brand-400/20">
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-400/10">
+            <Globe className="h-6 w-6 text-brand-400" />
+          </div>
+          <div>
+            <h4 className="font-semibold text-white text-lg">Web Chat Widget</h4>
+            <p className="text-xs text-slate-400">Agregá un botón de chat flotante en tu sitio web</p>
+          </div>
+        </div>
+        <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-400">
+          <CheckCircle2 className="h-4 w-4" />
+          Listo
+        </span>
+      </div>
+
+      {activeBots.length === 0 ? (
+        <div className="bg-surface-100 rounded-lg p-4 text-center">
+          <p className="text-sm text-slate-400">Necesitás al menos un bot activo para generar el código.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1.5">Bot</label>
+              <select
+                value={botId}
+                onChange={(e) => setSelectedBotId(e.target.value)}
+                className="input w-full"
+              >
+                {activeBots.map((bot) => (
+                  <option key={bot.id} value={bot.id}>{bot.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1.5">Color del botón</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={widgetColor}
+                  onChange={(e) => setWidgetColor(e.target.value)}
+                  className="h-9 w-9 rounded border border-slate-700 bg-transparent cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={widgetColor}
+                  onChange={(e) => setWidgetColor(e.target.value)}
+                  className="input flex-1 font-mono text-sm"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs text-slate-500">Widget flotante (recomendado)</label>
+              <button
+                onClick={() => copyCode(widgetScript, 'widget')}
+                className="flex items-center gap-1 text-xs text-brand-400 hover:text-brand-300"
+              >
+                {copied === 'widget' ? <CheckCircle2 className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                {copied === 'widget' ? 'Copiado' : 'Copiar'}
+              </button>
+            </div>
+            <pre className="bg-[#0B0F14] rounded-lg p-3 text-xs text-slate-300 font-mono overflow-x-auto border border-slate-800">
+              {widgetScript}
+            </pre>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs text-slate-500">Iframe embebido</label>
+              <button
+                onClick={() => copyCode(iframeCode, 'iframe')}
+                className="flex items-center gap-1 text-xs text-brand-400 hover:text-brand-300"
+              >
+                {copied === 'iframe' ? <CheckCircle2 className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                {copied === 'iframe' ? 'Copiado' : 'Copiar'}
+              </button>
+            </div>
+            <pre className="bg-[#0B0F14] rounded-lg p-3 text-xs text-slate-300 font-mono overflow-x-auto border border-slate-800">
+              {iframeCode}
+            </pre>
+          </div>
+
+          <p className="text-[10px] text-slate-600">
+            Pegá el código antes del cierre de {'</body>'} en tu sitio web. El widget aparece como un botón flotante en la esquina inferior.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ────────────────────────────────────────────────────────────────
 // Componente: Tarjeta de conexion Telegram
@@ -253,6 +375,11 @@ export default function ConexionesPage() {
         {/* Telegram — canal principal, funcional */}
         <div className="mb-4">
           <TelegramCard />
+        </div>
+
+        {/* Web Chat Widget */}
+        <div className="mb-4">
+          <WebChatWidgetCard />
         </div>
 
         {/* Otros canales — proximamente */}
