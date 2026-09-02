@@ -1,20 +1,69 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-import { Save, Palette, Globe, Bell, Shield, Bot } from 'lucide-react';
+import { FormEvent, useEffect, useState, useCallback } from 'react';
+import { Save, Palette, Globe, Bot, Clock, Plus, Trash2 } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
 import { THEME_OPTIONS } from '@/constants/settings';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import * as schedulesApi from '@/lib/api/schedules';
+import type { Schedule } from '@/types';
+
+const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 export default function ConfiguracionPage() {
   const { settings, isLoading, error, refetch, updateSettings } = useSettings();
   const [form, setForm] = useState(settings);
   const [isSaving, setIsSaving] = useState(false);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [loadingSchedules, setLoadingSchedules] = useState(true);
 
   useEffect(() => {
     setForm(settings);
   }, [settings]);
+
+  const fetchSchedules = useCallback(async () => {
+    try {
+      const data = await schedulesApi.getSchedules();
+      setSchedules(data);
+    } catch { /* ignore */ }
+    setLoadingSchedules(false);
+  }, []);
+
+  useEffect(() => { fetchSchedules(); }, [fetchSchedules]);
+
+  async function handleToggleDay(schedule: Schedule) {
+    try {
+      const updated = await schedulesApi.updateSchedule(schedule.id, { isActive: !schedule.isActive });
+      setSchedules((prev) => prev.map((s) => (s.id === schedule.id ? updated : s)));
+    } catch { /* ignore */ }
+  }
+
+  async function handleUpdateTime(schedule: Schedule, field: 'startTime' | 'endTime', value: string) {
+    try {
+      const updated = await schedulesApi.updateSchedule(schedule.id, { [field]: value });
+      setSchedules((prev) => prev.map((s) => (s.id === schedule.id ? updated : s)));
+    } catch { /* ignore */ }
+  }
+
+  async function handleDeleteSchedule(id: string) {
+    try {
+      await schedulesApi.deleteSchedule(id);
+      setSchedules((prev) => prev.filter((s) => s.id !== id));
+    } catch { /* ignore */ }
+  }
+
+  async function handleAddSchedule(dayOfWeek: number) {
+    try {
+      const created = await schedulesApi.createSchedule({
+        dayOfWeek,
+        startTime: '09:00',
+        endTime: '18:00',
+        isActive: true,
+      });
+      setSchedules((prev) => [...prev, created]);
+    } catch { /* ignore */ }
+  }
 
   const updateField = (field: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -151,6 +200,61 @@ export default function ConfiguracionPage() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <Clock className="h-5 w-5 text-brand-400" />
+          <h3 className="font-semibold text-white">Horarios de atención</h3>
+        </div>
+        <p className="text-sm text-slate-400 mb-4">
+          Configura los días y horarios en que tu negocio atiende. Los clientes solo podrán reservar dentro de estos horarios.
+        </p>
+        {loadingSchedules ? (
+          <LoadingSpinner label="Cargando horarios..." />
+        ) : (
+          <div className="space-y-2">
+            {DAYS.map((day, idx) => {
+              const daySchedules = schedules.filter((s) => s.dayOfWeek === idx);
+              return (
+                <div key={idx} className="flex items-center gap-3 rounded-lg border border-slate-700/50 bg-slate-800/30 p-3">
+                  <span className="text-sm font-medium text-white w-24">{day}</span>
+                  {daySchedules.length === 0 ? (
+                    <>
+                      <span className="text-xs text-slate-500 flex-1">Cerrado</span>
+                      <button type="button" onClick={() => handleAddSchedule(idx)}
+                        className="text-brand-400 hover:text-brand-300 text-xs flex items-center gap-1">
+                        <Plus className="h-3 w-3" /> Agregar
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flex-1 space-y-1">
+                      {daySchedules.map((sched) => (
+                        <div key={sched.id} className="flex items-center gap-2">
+                          <button type="button" onClick={() => handleToggleDay(sched)}
+                            className={`w-8 h-4 rounded-full relative transition-colors ${sched.isActive ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+                            <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${sched.isActive ? 'right-0.5' : 'left-0.5'}`} />
+                          </button>
+                          <input type="time" value={sched.startTime}
+                            onChange={(e) => handleUpdateTime(sched, 'startTime', e.target.value)}
+                            className="input text-xs py-1 px-2 w-24" disabled={!sched.isActive} />
+                          <span className="text-slate-500 text-xs">a</span>
+                          <input type="time" value={sched.endTime}
+                            onChange={(e) => handleUpdateTime(sched, 'endTime', e.target.value)}
+                            className="input text-xs py-1 px-2 w-24" disabled={!sched.isActive} />
+                          <button type="button" onClick={() => handleDeleteSchedule(sched.id)}
+                            className="text-slate-500 hover:text-red-400 transition-colors">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <div className="flex justify-end">
