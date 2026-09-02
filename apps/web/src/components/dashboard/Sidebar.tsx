@@ -7,9 +7,11 @@ import { cn } from '@/lib/utils';
 import { Flame } from 'lucide-react';
 import { NAVIGATION } from '@/config';
 import { notificationsApi } from '@/lib/api/index';
+import { useAuth } from '@/lib/auth-context';
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user, business } = useAuth();
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
@@ -82,11 +84,11 @@ export function Sidebar() {
       <div className="border-t border-slate-700/50 px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-400/20 text-brand-400 text-xs font-bold">
-            LB
+            {(business?.name || user?.name || 'LB').slice(0, 2).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="truncate text-sm font-medium text-slate-300">Mi Negocio</p>
-            <p className="truncate text-xs text-slate-500">admin@localb.com</p>
+            <p className="truncate text-sm font-medium text-slate-300">{business?.name || 'Mi Negocio'}</p>
+            <p className="truncate text-xs text-slate-500">{user?.email || ''}</p>
           </div>
         </div>
       </div>

@@ -16,6 +16,10 @@ export async function register(data: { email: string; password: string; name: st
   return res;
 }
 
+export function getMe() {
+  return httpClient.get<{ user: User; business: Business }>('/auth/me');
+}
+
 export function logout() {
   httpClient.setToken(null);
 }

@@ -23,20 +23,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const token = httpClient.getToken();
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        if (payload.exp * 1000 > Date.now()) {
-          setUser({ id: payload.userId, email: '', name: '', role: payload.role });
-          setBusiness({ id: payload.businessId, name: '', slug: '' });
-        } else {
-          authApi.logout();
-        }
-      } catch {
-        authApi.logout();
-      }
+    if (!token) {
+      setIsLoading(false);
+      return;
     }
-    setIsLoading(false);
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      if (payload.exp * 1000 <= Date.now()) {
+        authApi.logout();
+        setIsLoading(false);
+        return;
+      }
+    } catch {
+      authApi.logout();
+      setIsLoading(false);
+      return;
+    }
+    authApi.getMe()
+      .then((res) => {
+        setUser(res.user);
+        setBusiness(res.business);
+      })
+      .catch(() => {
+        authApi.logout();
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   const login = async (email: string, password: string) => {

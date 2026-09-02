@@ -151,6 +151,35 @@ router.post(
   })
 );
 
+router.get(
+  '/me',
+  asyncHandler(async (req, res) => {
+    const header = req.headers.authorization;
+    if (!header?.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+    try {
+      const token = header.slice(7);
+      const payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as { userId: string; businessId: string; role: string };
+      const user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        include: { business: true },
+      });
+      if (!user) {
+        res.status(401).json({ error: 'User not found' });
+        return;
+      }
+      res.json({
+        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        business: { id: user.business.id, name: user.business.name, slug: user.business.slug },
+      });
+    } catch {
+      res.status(401).json({ error: 'Invalid token' });
+    }
+  })
+);
+
 router.post(
   '/logout',
   asyncHandler(async (req, res) => {
