@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { Bell, Search, Calendar, ShoppingBag, Megaphone, Check } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Bell, Search, Calendar, ShoppingBag, Megaphone, Check, X } from 'lucide-react';
 import { PAGE_TITLES } from '@/config';
+import { NAVIGATION } from '@/config/navigation';
 import { useNotifications } from '@/hooks/use-notifications';
 import type { AppNotification } from '@/types';
 
@@ -81,14 +82,117 @@ function DropdownItem({
   );
 }
 
+// ─── Search Modal ───────────────────────────────────────────────────
+
+function SearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const router = useRouter();
+  const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setQuery('');
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        onClose();
+      }
+      if (e.key === 'Escape') onClose();
+    }
+    if (isOpen) {
+      document.addEventListener('keydown', handleKey);
+      return () => document.removeEventListener('keydown', handleKey);
+    }
+  }, [isOpen, onClose]);
+
+  const allPages = NAVIGATION.flatMap((g) => g.items.map((item) => ({ ...item, group: g.label })));
+  const filtered = query.trim()
+    ? allPages.filter((p) =>
+        p.name.toLowerCase().includes(query.toLowerCase()) ||
+        p.group.toLowerCase().includes(query.toLowerCase())
+      )
+    : allPages.slice(0, 8);
+
+  function navigate(href: string) {
+    router.push(href);
+    onClose();
+  }
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div
+        className="relative w-full max-w-lg rounded-xl border border-slate-700/50 bg-surface shadow-2xl shadow-black/40"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 border-b border-slate-700/50 px-4 py-3">
+          <Search className="h-4 w-4 text-slate-500 shrink-0" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar páginas, funciones..."
+            className="flex-1 bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
+          />
+          <kbd className="hidden sm:inline-flex items-center gap-0.5 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-500">
+            ESC
+          </kbd>
+        </div>
+        <div className="max-h-80 overflow-y-auto p-2">
+          {filtered.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="text-sm text-slate-500">No se encontraron resultados</p>
+            </div>
+          ) : (
+            filtered.map((page) => {
+              const Icon = page.icon;
+              return (
+                <button
+                  key={page.href}
+                  onClick={() => navigate(page.href)}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-surface-100"
+                >
+                  <Icon className="h-4 w-4 text-slate-500 shrink-0" />
+                  <span className="flex-1 text-white">{page.name}</span>
+                  <span className="text-[10px] text-slate-600 font-mono">{page.group}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Header ──────────────────────────────────────────────────────────
 
 export function Header() {
   const pathname = usePathname();
   const page = PAGE_TITLES[pathname] || { breadcrumb: 'PANEL', title: 'Local B' };
   const [isOpen, setIsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { notifications, unreadCount, markRead, markAllRead } = useNotifications();
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    }
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, []);
 
   // Cerrar dropdown al hacer clic fuera
   useEffect(() => {
@@ -120,8 +224,12 @@ export function Header() {
             {page.counter}
           </div>
         )}
-        <button className="rounded-lg p-2 text-slate-400 hover:bg-surface-100 hover:text-white transition-colors">
-          <Search className="h-4 w-4" />
+        <button onClick={() => setSearchOpen(true)} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-slate-400 hover:bg-surface-100 hover:text-white transition-colors border border-slate-700/50">
+          <Search className="h-3.5 w-3.5" />
+          <span className="text-xs text-slate-500 hidden sm:inline">Buscar...</span>
+          <kbd className="hidden sm:inline-flex items-center gap-0.5 rounded border border-slate-700 px-1 py-0.5 text-[9px] text-slate-600">
+            ⌘K
+          </kbd>
         </button>
 
         {/* Notification bell con dropdown */}
@@ -181,6 +289,8 @@ export function Header() {
           )}
         </div>
       </div>
+
+      <SearchModal isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
     </header>
   );
 }
