@@ -80,5 +80,14 @@ export function useProducts(): UseProductsResult {
     }
   }, []);
 
-  return { products, isLoading, error, refetch, createProduct, updateProduct };
+  const deleteProduct = useCallback(async (id: string) => {
+    try {
+      await productsApi.deleteProduct(id);
+      setProducts((prev) => prev.filter((p) => p.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al eliminar el producto');
+    }
+  }, []);
+
+  return { products, isLoading, error, refetch, createProduct, updateProduct, deleteProduct };
 }

@@ -12,3 +12,7 @@ export function createService(data: Partial<Service>) {
 export function updateService(id: string, data: Partial<Service>) {
   return httpClient.put<Service>(`/services/${id}`, data);
 }
+
+export function deleteService(id: string) {
+  return httpClient.delete<{ success: boolean }>(`/services/${id}`);
+}

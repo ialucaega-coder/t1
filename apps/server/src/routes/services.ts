@@ -49,4 +49,18 @@ router.put(
   })
 );
 
+router.delete(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const service = await prisma.service.findFirst({
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
+    });
+    if (!service) return res.status(404).json({ error: 'Servicio no encontrado' });
+    await prisma.service.delete({ where: { id: service.id } });
+    res.json({ success: true });
+  })
+);
+
 export { router as servicesRouter };

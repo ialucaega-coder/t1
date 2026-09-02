@@ -80,5 +80,14 @@ export function useServices(): UseServicesResult {
     }
   }, []);
 
-  return { services, isLoading, error, refetch, createService, updateService };
+  const deleteService = useCallback(async (id: string) => {
+    try {
+      await servicesApi.deleteService(id);
+      setServices((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al eliminar el servicio');
+    }
+  }, []);
+
+  return { services, isLoading, error, refetch, createService, updateService, deleteService };
 }

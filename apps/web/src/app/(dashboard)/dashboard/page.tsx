@@ -335,7 +335,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-white truncate">{bot.name}</p>
+                      <Link href={`/bots/${bot.id}`} className="text-sm font-medium text-white truncate hover:text-brand-400 transition-colors">{bot.name}</Link>
                       <div className="flex items-center gap-1">
                         <div className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
                         <span className={`text-[10px] ${status.color}`}>{status.label}</span>

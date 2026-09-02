@@ -12,3 +12,7 @@ export function createProduct(data: Partial<Product>) {
 export function updateProduct(id: string, data: Partial<Product>) {
   return httpClient.put<Product>(`/products/${id}`, data);
 }
+
+export function deleteProduct(id: string) {
+  return httpClient.delete<{ success: boolean }>(`/products/${id}`);
+}

@@ -49,4 +49,18 @@ router.put(
   })
 );
 
+router.delete(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const product = await prisma.product.findFirst({
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
+    });
+    if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
+    await prisma.product.delete({ where: { id: product.id } });
+    res.json({ success: true });
+  })
+);
+
 export { router as productsRouter };
