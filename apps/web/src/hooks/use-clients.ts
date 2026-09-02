@@ -1,37 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { clientsApi } from '@/lib/api/index';
-import type { Client } from '@/types';
-import { MOCK_CLIENTS } from '@/constants/clients';
+import * as clientsApi from '@/lib/api/clients';
+import type { Client, ClientDetail } from '@/types';
 
-// Adapta los clientes mock (lastVisit/totalBookings planos) al shape real
-// de la API (createdAt, bookingsAsClient[], _count).
-function adaptMockClients(): Client[] {
-  return MOCK_CLIENTS.map((c) => ({
-    id: c.id,
-    name: c.name,
-    email: c.email,
-    phone: c.phone,
-    createdAt: c.lastVisit,
-    bookingsAsClient: [{ date: c.lastVisit }],
-    _count: { bookingsAsClient: c.totalBookings },
-  }));
-}
-
-export interface UseClientsResult {
-  clients: Client[];
-  isLoading: boolean;
-  error: string | null;
-  refetch: () => void;
-  searchClients: (search: string) => Promise<void>;
-}
-
-export function useClients(): UseClientsResult {
+export function useClients(params?: { search?: string; page?: number }) {
   const [clients, setClients] = useState<Client[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState<string | undefined>(undefined);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
@@ -41,12 +19,19 @@ export function useClients(): UseClientsResult {
       setIsLoading(true);
       setError(null);
       try {
-        const data = await clientsApi.getClients(search);
-        if (!cancelled) setClients(data);
+        const res = await clientsApi.getClients({
+          search: params?.search,
+          page: params?.page,
+        });
+        if (!cancelled) {
+          setClients(res.data);
+          setTotal(res.total);
+          setTotalPages(res.totalPages);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar clientes');
-          setClients(adaptMockClients());
+          setClients([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -54,16 +39,42 @@ export function useClients(): UseClientsResult {
     }
 
     load();
-    return () => {
-      cancelled = true;
-    };
-  }, [search, reloadToken]);
+    return () => { cancelled = true; };
+  }, [params?.search, params?.page, reloadToken]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  const searchClients = useCallback(async (query: string) => {
-    setSearch(query || undefined);
-  }, []);
+  return { clients, total, totalPages, isLoading, error, refetch };
+}
 
-  return { clients, isLoading, error, refetch, searchClients };
+export function useClientDetail(id: string | null) {
+  const [detail, setDetail] = useState<ClientDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    if (!id) { setDetail(null); return; }
+    let cancelled = false;
+
+    async function load() {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await clientsApi.getClient(id!);
+        if (!cancelled) setDetail(res);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Error al cargar cliente');
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [id, reloadToken]);
+
+  const refetchDetail = useCallback(() => setReloadToken((t) => t + 1), []);
+
+  return { detail, isLoading, error, refetchDetail };
 }

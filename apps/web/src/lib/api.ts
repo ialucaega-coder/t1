@@ -116,7 +116,7 @@ class ApiClient {
 
   // Clients
   getClients(search?: string) {
-    return clientsApi.getClients(search);
+    return clientsApi.getClients({ search });
   }
 
   // Orders
