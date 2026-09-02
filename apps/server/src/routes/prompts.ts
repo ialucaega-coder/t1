@@ -110,4 +110,19 @@ router.put(
   })
 );
 
+router.delete(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const existing = await prisma.template.findFirst({
+      where: { id: String(req.params.id), businessId: req.auth!.businessId, type: PROMPT_TYPE },
+    });
+    if (!existing) throw new AppError(404, 'Prompt no encontrado');
+
+    await prisma.template.delete({ where: { id: existing.id } });
+    res.json({ success: true });
+  })
+);
+
 export { router as promptsRouter };
