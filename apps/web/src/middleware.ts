@@ -39,6 +39,7 @@ const PROTECTED_PREFIXES = [
   '/agencia',
   '/analisis',
   '/arena',
+  '/campanas',
   '/clientes',
   '/comandos',
   '/conexiones',
