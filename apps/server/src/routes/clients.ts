@@ -66,6 +66,53 @@ router.get(
 );
 
 router.get(
+  '/export/csv',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const clients = await prisma.user.findMany({
+      where: {
+        businessId: req.auth!.businessId,
+        role: 'CLIENT',
+        deletedAt: null,
+      },
+      select: {
+        name: true,
+        email: true,
+        phone: true,
+        createdAt: true,
+        bookingsAsClient: {
+          orderBy: { date: 'desc' },
+          take: 1,
+          select: { date: true },
+        },
+        _count: { select: { bookingsAsClient: true, orders: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const header = 'Nombre,Email,Teléfono,Reservas,Órdenes,Última visita,Registrado\n';
+    const rows = clients.map((c) => {
+      const lastVisit = c.bookingsAsClient[0]?.date
+        ? new Date(c.bookingsAsClient[0].date).toISOString().split('T')[0]
+        : '';
+      return [
+        `"${c.name.replace(/"/g, '""')}"`,
+        c.email,
+        c.phone || '',
+        c._count.bookingsAsClient,
+        c._count.orders,
+        lastVisit,
+        new Date(c.createdAt).toISOString().split('T')[0],
+      ].join(',');
+    }).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="clientes.csv"');
+    res.send('﻿' + header + rows);
+  })
+);
+
+router.get(
   '/:id',
   requireAuth,
   asyncHandler(async (req, res) => {

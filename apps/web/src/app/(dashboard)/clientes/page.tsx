@@ -4,7 +4,7 @@ import { useState } from 'react';
 import {
   Search, UserPlus, Users, ChevronLeft, ChevronRight,
   Calendar, ShoppingBag, Mail, Phone, Clock, Trash2,
-  Edit3, X, User, Flame, Thermometer, Snowflake,
+  Edit3, X, User, Flame, Thermometer, Snowflake, Download,
 } from 'lucide-react';
 import { useClients, useClientDetail } from '@/hooks/use-clients';
 import * as clientsApi from '@/lib/api/clients';
@@ -85,9 +85,18 @@ export default function ClientesPage() {
             {total} cliente{total !== 1 ? 's' : ''} registrado{total !== 1 ? 's' : ''}
           </p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
-          <UserPlus className="h-3.5 w-3.5" /> Agregar cliente
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => clientsApi.exportCsv().catch(console.error)}
+            className="btn-secondary text-xs"
+            title="Exportar CSV"
+          >
+            <Download className="h-3.5 w-3.5" /> Exportar
+          </button>
+          <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
+            <UserPlus className="h-3.5 w-3.5" /> Agregar cliente
+          </button>
+        </div>
       </div>
 
       {/* Search */}
