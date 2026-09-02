@@ -52,6 +52,7 @@ export function useConversationDetail(id: string | null) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     if (!id) { setDetail(null); return; }
@@ -72,7 +73,9 @@ export function useConversationDetail(id: string | null) {
 
     load();
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, reloadToken]);
 
-  return { detail, isLoading, error };
+  const refetchDetail = useCallback(() => setReloadToken((t) => t + 1), []);
+
+  return { detail, isLoading, error, refetchDetail };
 }

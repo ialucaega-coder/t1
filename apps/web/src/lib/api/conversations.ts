@@ -37,3 +37,7 @@ export function getById(id: string) {
 export function close(id: string) {
   return httpClient.patch<{ success: boolean }>(`/conversations/${id}/close`, {});
 }
+
+export function reply(id: string, text: string) {
+  return httpClient.post<{ id: string; role: string; text: string; createdAt: string }>(`/conversations/${id}/reply`, { text });
+}

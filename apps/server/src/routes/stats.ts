@@ -122,4 +122,88 @@ router.get(
   })
 );
 
+router.get(
+  '/dashboard',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [
+      openConversations,
+      totalConversations,
+      handoffConversations,
+      todayMessages,
+      activeBots,
+      totalBots,
+      subscription,
+      recentActivity,
+    ] = await Promise.all([
+      prisma.conversation.count({ where: { businessId, status: 'OPEN' } }),
+      prisma.conversation.count({ where: { businessId } }),
+      prisma.conversation.count({ where: { businessId, status: 'HANDOFF' } }),
+      prisma.message.count({
+        where: {
+          conversation: { businessId },
+          createdAt: { gte: startOfDay },
+        },
+      }),
+      prisma.bot.count({ where: { businessId, status: 'ACTIVE' } }),
+      prisma.bot.count({ where: { businessId } }),
+      prisma.subscription.findUnique({
+        where: { businessId },
+        include: { plan: true },
+      }),
+      prisma.notification.findMany({
+        where: { businessId },
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+        select: {
+          id: true,
+          type: true,
+          title: true,
+          body: true,
+          isRead: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    const monthMessages = await prisma.message.count({
+      where: {
+        conversation: { businessId },
+        createdAt: { gte: startOfMonth },
+      },
+    });
+
+    res.json({
+      conversations: {
+        open: openConversations,
+        total: totalConversations,
+        handoff: handoffConversations,
+        todayMessages,
+        monthMessages,
+      },
+      bots: {
+        active: activeBots,
+        total: totalBots,
+      },
+      subscription: subscription
+        ? {
+            planName: subscription.plan.name,
+            planTier: subscription.plan.tier,
+            status: subscription.status,
+            currentPeriodEnd: subscription.currentPeriodEnd,
+            maxBots: subscription.plan.maxBots,
+            maxMessages: subscription.plan.maxMessages,
+            maxContacts: subscription.plan.maxContacts,
+          }
+        : null,
+      recentActivity,
+    });
+  })
+);
+
 export { router as statsRouter };

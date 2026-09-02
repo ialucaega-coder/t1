@@ -53,6 +53,44 @@ router.get(
   })
 );
 
+router.post(
+  '/:id/reply',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { text } = req.body;
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const message = await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: 'BOT',
+        text: text.trim(),
+      },
+    });
+
+    if (conversation.status === 'HANDOFF') {
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { status: 'OPEN' },
+      });
+    }
+
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
+
+    res.json(message);
+  })
+);
+
 router.patch(
   '/:id/close',
   requireAuth,
