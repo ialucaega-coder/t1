@@ -1,13 +1,24 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Flame } from 'lucide-react';
 import { NAVIGATION } from '@/config';
+import { notificationsApi } from '@/lib/api/index';
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    notificationsApi.getUnreadCount().then((r) => setUnreadCount(r.unreadCount)).catch(() => {});
+    const interval = setInterval(() => {
+      notificationsApi.getUnreadCount().then((r) => setUnreadCount(r.unreadCount)).catch(() => {});
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-60 flex-col border-r border-slate-700/50 bg-surface">
@@ -54,6 +65,11 @@ export function Sidebar() {
                     )}
                     {item.badge === 'prizes' && (
                       <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-mono font-medium uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">PREMIOS</span>
+                    )}
+                    {item.href === '/novedades' && unreadCount > 0 && (
+                      <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-brand-400 px-1.5 text-[9px] font-bold text-white">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
                     )}
                   </Link>
                 );
