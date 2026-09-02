@@ -4,7 +4,7 @@ import {
   MessageCircle, Bot, Sparkles, BarChart3, Users,
   PaintBucket, TrendingUp, Store, Trophy, Building2, UserCheck,
   Settings, CreditCard, Calendar, ShoppingBag, Shield,
-  Map, Megaphone,
+  Map, Megaphone, DollarSign,
 } from 'lucide-react';
 
 export type NavItem = {
@@ -55,6 +55,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Servicios', href: '/servicios', icon: Sparkles },
       { name: 'Productos', href: '/productos', icon: ShoppingBag },
       { name: 'Órdenes', href: '/ordenes', icon: ShoppingBag },
+      { name: 'Movimientos', href: '/movimientos', icon: DollarSign },
       { name: 'POS / Caja', href: '/pos', icon: CreditCard, badge: 'new' },
       { name: 'Clientes', href: '/clientes', icon: UserCheck },
     ],
