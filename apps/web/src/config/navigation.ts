@@ -54,6 +54,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Reservas', href: '/reservas', icon: Calendar },
       { name: 'Servicios', href: '/servicios', icon: Sparkles },
       { name: 'Productos', href: '/productos', icon: ShoppingBag },
+      { name: 'Órdenes', href: '/ordenes', icon: ShoppingBag },
       { name: 'POS / Caja', href: '/pos', icon: CreditCard, badge: 'new' },
       { name: 'Clientes', href: '/clientes', icon: UserCheck },
     ],
