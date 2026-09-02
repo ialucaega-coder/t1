@@ -1,8 +1,9 @@
 'use client';
 
 import { FormEvent, useEffect, useState, useCallback } from 'react';
-import { Save, Palette, Globe, Bot, Clock, Plus, Trash2 } from 'lucide-react';
+import { Save, Palette, Globe, Bot, Clock, Plus, Trash2, UserCog, Lock, CheckCircle } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
+import { useAuth } from '@/lib/auth-context';
 import { THEME_OPTIONS } from '@/constants/settings';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -13,14 +14,51 @@ const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', '
 
 export default function ConfiguracionPage() {
   const { settings, isLoading, error, refetch, updateSettings } = useSettings();
+  const { user, updateProfile } = useAuth();
   const [form, setForm] = useState(settings);
   const [isSaving, setIsSaving] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loadingSchedules, setLoadingSchedules] = useState(true);
+  const [profileName, setProfileName] = useState(user?.name || '');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     setForm(settings);
   }, [settings]);
+
+  useEffect(() => {
+    if (user?.name) setProfileName(user.name);
+  }, [user?.name]);
+
+  async function handleProfileSave() {
+    setProfileSaving(true);
+    setProfileMsg(null);
+    try {
+      const data: { name?: string; currentPassword?: string; newPassword?: string } = {};
+      if (profileName.trim() !== user?.name) data.name = profileName.trim();
+      if (newPassword) {
+        data.currentPassword = currentPassword;
+        data.newPassword = newPassword;
+      }
+      if (Object.keys(data).length === 0) {
+        setProfileMsg({ type: 'error', text: 'No hay cambios para guardar' });
+        setProfileSaving(false);
+        return;
+      }
+      await updateProfile(data);
+      setCurrentPassword('');
+      setNewPassword('');
+      setProfileMsg({ type: 'success', text: 'Perfil actualizado correctamente' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al actualizar perfil';
+      setProfileMsg({ type: 'error', text: msg });
+    } finally {
+      setProfileSaving(false);
+    }
+  }
 
   const fetchSchedules = useCallback(async () => {
     try {
@@ -86,6 +124,55 @@ export default function ConfiguracionPage() {
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl space-y-8">
       {error && <ErrorAlert message={error} onRetry={refetch} />}
+
+      <section className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <UserCog className="h-5 w-5 text-brand-400" />
+          <h3 className="font-semibold text-white">Mi perfil</h3>
+        </div>
+        {profileMsg && (
+          <div className={`mb-4 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
+            profileMsg.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+              : 'bg-red-500/10 border-red-500/20 text-red-400'
+          }`}>
+            {profileMsg.type === 'success' && <CheckCircle className="h-3.5 w-3.5" />}
+            {profileMsg.text}
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Nombre</label>
+            <input className="input" value={profileName} onChange={(e) => setProfileName(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Email</label>
+            <input className="input opacity-50 cursor-not-allowed" value={user?.email || ''} disabled />
+          </div>
+        </div>
+        <div className="mt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Lock className="h-4 w-4 text-slate-500" />
+            <p className="text-xs text-slate-400">Cambiar contraseña (opcional)</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Contraseña actual</label>
+              <input type="password" className="input" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="••••••••" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Nueva contraseña</label>
+              <input type="password" className="input" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Mínimo 6 caracteres" />
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end mt-4">
+          <button type="button" onClick={handleProfileSave} disabled={profileSaving}
+            className="btn-primary text-xs">
+            <Save className="h-3.5 w-3.5" /> {profileSaving ? 'Guardando...' : 'Actualizar perfil'}
+          </button>
+        </div>
+      </section>
 
       <section className="card">
         <div className="flex items-center gap-3 mb-4">

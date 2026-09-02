@@ -1,18 +1,30 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Flame } from 'lucide-react';
+import { Flame, Settings, LogOut, ChevronUp } from 'lucide-react';
 import { NAVIGATION } from '@/config';
 import { notificationsApi } from '@/lib/api/index';
 import { useAuth } from '@/lib/auth-context';
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user, business } = useAuth();
+  const { user, business, logout } = useAuth();
   const [unreadCount, setUnreadCount] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    if (menuOpen) {
+      document.addEventListener('mousedown', handleClick);
+      return () => document.removeEventListener('mousedown', handleClick);
+    }
+  }, [menuOpen]);
 
   useEffect(() => {
     notificationsApi.getUnreadCount().then((r) => setUnreadCount(r.unreadCount)).catch(() => {});
@@ -81,16 +93,29 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="border-t border-slate-700/50 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-400/20 text-brand-400 text-xs font-bold">
+      <div className="relative border-t border-slate-700/50 px-4 py-3" ref={menuRef}>
+        {menuOpen && (
+          <div className="absolute bottom-full left-3 right-3 mb-1 rounded-lg border border-slate-700/50 bg-surface shadow-xl shadow-black/30 py-1">
+            <Link href="/configuracion" onClick={() => setMenuOpen(false)}
+              className="flex items-center gap-2.5 px-3 py-2 text-sm text-slate-300 hover:bg-surface-100 hover:text-white transition-colors">
+              <Settings className="h-4 w-4" /> Configuración
+            </Link>
+            <button onClick={logout}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors">
+              <LogOut className="h-4 w-4" /> Cerrar sesión
+            </button>
+          </div>
+        )}
+        <button onClick={() => setMenuOpen((v) => !v)} className="flex w-full items-center gap-3 rounded-lg p-1 hover:bg-surface-100 transition-colors">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-400/20 text-brand-400 text-xs font-bold shrink-0">
             {(business?.name || user?.name || 'LB').slice(0, 2).toUpperCase()}
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 text-left">
             <p className="truncate text-sm font-medium text-slate-300">{business?.name || 'Mi Negocio'}</p>
             <p className="truncate text-xs text-slate-500">{user?.email || ''}</p>
           </div>
-        </div>
+          <ChevronUp className={cn('h-4 w-4 text-slate-500 shrink-0 transition-transform', menuOpen && 'rotate-180')} />
+        </button>
       </div>
     </aside>
   );

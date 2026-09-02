@@ -11,6 +11,7 @@ interface AuthState {
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (data: { email: string; password: string; name: string; businessName: string }) => Promise<void>;
+  updateProfile: (data: { name?: string; currentPassword?: string; newPassword?: string }) => Promise<void>;
   logout: () => void;
 }
 
@@ -62,6 +63,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setBusiness(res.business);
   };
 
+  const updateProfile = async (data: { name?: string; currentPassword?: string; newPassword?: string }) => {
+    const res = await authApi.updateProfile(data);
+    setUser(res.user);
+    setBusiness(res.business);
+  };
+
   const logout = () => {
     authApi.logout();
     setUser(null);
@@ -70,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, business, isLoading, isAuthenticated: !!user, login, register, logout }}>
+    <AuthContext.Provider value={{ user, business, isLoading, isAuthenticated: !!user, login, register, updateProfile, logout }}>
       {children}
     </AuthContext.Provider>
   );

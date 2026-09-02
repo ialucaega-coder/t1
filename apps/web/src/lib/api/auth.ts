@@ -20,6 +20,10 @@ export function getMe() {
   return httpClient.get<{ user: User; business: Business }>('/auth/me');
 }
 
+export function updateProfile(data: { name?: string; currentPassword?: string; newPassword?: string }) {
+  return httpClient.patch<{ user: User; business: Business }>('/auth/me', data);
+}
+
 export function logout() {
   httpClient.setToken(null);
 }

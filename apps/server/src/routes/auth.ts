@@ -180,6 +180,71 @@ router.get(
   })
 );
 
+router.patch(
+  '/me',
+  asyncHandler(async (req, res) => {
+    const header = req.headers.authorization;
+    if (!header?.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+    let payload: { userId: string; businessId: string; role: string };
+    try {
+      const token = header.slice(7);
+      payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as typeof payload;
+    } catch {
+      res.status(401).json({ error: 'Invalid token' });
+      return;
+    }
+
+    const { name, currentPassword, newPassword } = req.body;
+    const update: Record<string, string> = {};
+
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length < 2) {
+        res.status(400).json({ error: 'Name must be at least 2 characters' });
+        return;
+      }
+      update.name = name.trim();
+    }
+
+    if (newPassword) {
+      if (!currentPassword) {
+        res.status(400).json({ error: 'Current password is required' });
+        return;
+      }
+      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+      if (!user) { res.status(401).json({ error: 'User not found' }); return; }
+      const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!valid) {
+        res.status(400).json({ error: 'Current password is incorrect' });
+        return;
+      }
+      if (newPassword.length < 6) {
+        res.status(400).json({ error: 'New password must be at least 6 characters' });
+        return;
+      }
+      update.passwordHash = await bcrypt.hash(newPassword, 12);
+    }
+
+    if (Object.keys(update).length === 0) {
+      res.status(400).json({ error: 'Nothing to update' });
+      return;
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: payload.userId },
+      data: update,
+      include: { business: true },
+    });
+
+    res.json({
+      user: { id: updated.id, email: updated.email, name: updated.name, role: updated.role },
+      business: { id: updated.business.id, name: updated.business.name, slug: updated.business.slug },
+    });
+  })
+);
+
 router.post(
   '/logout',
   asyncHandler(async (req, res) => {
