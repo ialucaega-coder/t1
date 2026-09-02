@@ -283,6 +283,55 @@ async function main() {
       });
     }
 
+    // -----------------------------------------------------------------
+    // Planes de suscripción
+    // -----------------------------------------------------------------
+    await tx.plan.createMany({
+      data: [
+        {
+          name: 'Gratis',
+          tier: 'FREE',
+          priceMonthly: 0,
+          priceYearly: 0,
+          maxBots: 1,
+          maxMessages: 500,
+          maxContacts: 100,
+          features: ['Webchat básico', 'Catálogo de productos'],
+        },
+        {
+          name: 'Starter',
+          tier: 'STARTER',
+          priceMonthly: 29,
+          priceYearly: 278,
+          maxBots: 3,
+          maxMessages: 5000,
+          maxContacts: 1000,
+          features: ['Todo de Gratis', 'WhatsApp', 'Telegram', 'Reportes básicos'],
+        },
+        {
+          name: 'Pro',
+          tier: 'PRO',
+          priceMonthly: 79,
+          priceYearly: 758,
+          maxBots: 10,
+          maxMessages: 25000,
+          maxContacts: 10000,
+          features: ['Todo de Starter', 'IA avanzada', 'Campañas', 'White-label', 'API access'],
+        },
+        {
+          name: 'Enterprise',
+          tier: 'ENTERPRISE',
+          priceMonthly: 199,
+          priceYearly: 1910,
+          maxBots: 999,
+          maxMessages: 999999,
+          maxContacts: 999999,
+          features: ['Todo de Pro', 'Bots ilimitados', 'Soporte prioritario', 'SLA 99.9%', 'Onboarding dedicado'],
+        },
+      ],
+      skipDuplicates: true,
+    });
+
     console.log('Seed completado!');
     console.log(`Negocio: ${business.name} (${business.slug})`);
     console.log(`Admin: admin@localb.com / admin123`);

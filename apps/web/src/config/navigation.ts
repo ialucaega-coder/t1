@@ -67,6 +67,7 @@ export const NAVIGATION: NavGroup[] = [
     label: 'CUENTA',
     items: [
       { name: 'Configuración', href: '/configuracion', icon: Settings },
+      { name: 'Facturación', href: '/facturacion', icon: CreditCard },
     ],
   },
 ];

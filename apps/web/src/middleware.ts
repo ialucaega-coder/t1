@@ -45,6 +45,7 @@ const PROTECTED_PREFIXES = [
   '/configuracion',
   '/equipo',
   '/estadisticas',
+  '/facturacion',
   '/habilidades',
   '/ia',
   '/marketplace',

@@ -134,6 +134,8 @@ model Business {
   campaigns     Campaign[]
   arenaBuilders ArenaBuilder[]
   arenaIdeas    ArenaIdea[]
+  subscription  Subscription?
+  invoices      Invoice[]
 
   @@map("businesses")
 }
@@ -718,4 +720,89 @@ model ArenaIdea {
 
   @@index([businessId])
   @@map("arena_ideas")
+}
+
+enum PlanTier {
+  FREE
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIALING
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Plan {
+  id            String   @id @default(cuid())
+  name          String
+  tier          PlanTier @unique
+  priceMonthly  Float
+  priceYearly   Float
+  currency      String   @default("USD")
+  maxBots       Int      @default(1)
+  maxMessages   Int      @default(500)
+  maxContacts   Int      @default(100)
+  features      String[] @default([])
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id              String             @id @default(cuid())
+  status          SubscriptionStatus @default(TRIALING)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean          @default(false)
+  trialEndsAt     DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  planId     String
+  plan       Plan     @relation(fields: [planId], references: [id])
+  businessId String   @unique
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  invoices Invoice[]
+
+  @@index([businessId])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  number      String        @unique
+  status      InvoiceStatus @default(DRAFT)
+  amount      Float
+  currency    String        @default("USD")
+  description String?
+  dueDate     DateTime
+  paidAt      DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  businessId     String
+  business       Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([subscriptionId])
+  @@map("invoices")
 }
