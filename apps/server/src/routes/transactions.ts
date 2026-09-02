@@ -56,4 +56,34 @@ router.post(
   })
 );
 
+router.get(
+  '/export/csv',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const txns = await prisma.transaction.findMany({
+      where: { businessId: req.auth!.businessId },
+      include: { order: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5000,
+    });
+
+    const header = 'Fecha,Tipo,Monto,Método de pago,Referencia,Notas,Orden\n';
+    const rows = txns.map((t) =>
+      [
+        t.createdAt.toISOString().split('T')[0],
+        t.type,
+        t.amount.toString(),
+        t.paymentMethod,
+        `"${(t.reference || '').replace(/"/g, '""')}"`,
+        `"${(t.notes || '').replace(/"/g, '""')}"`,
+        t.order?.id || '',
+      ].join(',')
+    ).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="movimientos.csv"');
+    res.send('﻿' + header + rows);
+  })
+);
+
 export { router as transactionsRouter };

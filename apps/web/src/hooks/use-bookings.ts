@@ -57,8 +57,9 @@ export function useBookings(date?: string): UseBookingsResult {
       setError(null);
       try {
         const params = date ? { date } : undefined;
-        const data = await bookingsApi.getBookings(params);
-        if (!cancelled) setBookings(data);
+        const res = await bookingsApi.getBookings(params);
+        const list = Array.isArray(res) ? res : (res as { data: Booking[] }).data;
+        if (!cancelled) setBookings(list);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar reservas');

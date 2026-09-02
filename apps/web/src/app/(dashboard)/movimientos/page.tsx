@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign, ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight,
-  Plus, X, Wallet, CreditCard, Building, QrCode, Clock,
+  Plus, X, Wallet, CreditCard, Building, QrCode, Clock, Download,
 } from 'lucide-react';
 import * as transactionsApi from '@/lib/api/transactions';
 import type { Transaction } from '@/types';
@@ -92,9 +92,17 @@ export default function MovimientosPage() {
           <h1 className="text-xl font-bold text-white">Movimientos</h1>
           <p className="text-xs text-slate-500 mt-0.5">{total} transaccion{total !== 1 ? 'es' : ''}</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
-          <Plus className="h-3.5 w-3.5" /> Registrar movimiento
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => transactionsApi.exportCsv().catch(console.error)}
+            className="btn-secondary text-xs"
+          >
+            <Download className="h-3.5 w-3.5" /> Exportar
+          </button>
+          <button onClick={() => setShowCreate(true)} className="btn-primary text-xs">
+            <Plus className="h-3.5 w-3.5" /> Registrar movimiento
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}

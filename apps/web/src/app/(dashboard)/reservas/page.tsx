@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Plus, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Filter, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { useBookings } from '@/hooks/use-bookings';
+import * as bookingsApi from '@/lib/api/bookings';
 import type { Booking as ApiBooking, CreateBookingData } from '@/types';
 import { type Booking as LegacyBooking } from '@/constants/bookings';
 import { BookingList } from '@/components/bookings/BookingList';
@@ -116,6 +117,12 @@ export default function ReservasPage() {
             <option value="COMPLETED">Completadas</option>
             <option value="CANCELLED">Canceladas</option>
           </select>
+          <button
+            onClick={() => bookingsApi.exportCsv().catch(console.error)}
+            className="btn-secondary text-xs"
+          >
+            <Download className="h-3.5 w-3.5" /> Exportar
+          </button>
           <button onClick={() => setShowCreateModal(true)} className="btn-primary text-xs">
             <Plus className="h-3.5 w-3.5" /> Nueva reserva
           </button>

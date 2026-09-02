@@ -82,6 +82,38 @@ router.post(
   })
 );
 
+router.get(
+  '/export/csv',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const bookings = await prisma.booking.findMany({
+      where: { businessId: req.auth!.businessId },
+      include: { service: true, professional: true, client: true },
+      orderBy: { date: 'desc' },
+      take: 5000,
+    });
+
+    const header = 'Fecha,Hora,Servicio,Profesional,Cliente,Email,Teléfono,Estado,Precio\n';
+    const rows = bookings.map((b) =>
+      [
+        b.date.toISOString().split('T')[0],
+        b.startTime,
+        `"${(b.service?.name || '').replace(/"/g, '""')}"`,
+        `"${(b.professional?.name || '').replace(/"/g, '""')}"`,
+        `"${(b.client?.name || '').replace(/"/g, '""')}"`,
+        b.client?.email || '',
+        b.client?.phone || '',
+        b.status,
+        b.service?.price?.toString() || '0',
+      ].join(',')
+    ).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="reservas.csv"');
+    res.send('﻿' + header + rows);
+  })
+);
+
 router.patch(
   '/:id/status',
   requireAuth,
