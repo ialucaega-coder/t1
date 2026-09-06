@@ -304,9 +304,8 @@ async function analyzeConversationSentiment(
           type: 'GENERAL',
           channel: 'PUSH',
           title: 'Alerta: cliente insatisfecho',
-          body: `Se detectó un mensaje negativo en la conversación. Revisá la conversación para intervenir.`,
+          body: `Se detectó un mensaje negativo en la conversación (ID: ${conversationId}). Revisá la conversación para intervenir.`,
           businessId,
-          metadata: { conversationId },
         },
       });
     }

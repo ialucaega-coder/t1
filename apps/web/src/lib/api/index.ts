@@ -28,3 +28,4 @@ export * as teamApi from './team';
 export * as botsApi from './bots';
 export * as conversationsApi from './conversations';
 export * as campaignsApi from './campaigns';
+export * as templatesApi from './templates';

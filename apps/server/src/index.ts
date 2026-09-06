@@ -36,6 +36,7 @@ import { conversationsRouter } from './routes/conversations';
 import { whatsappRouter } from './routes/whatsapp';
 import { publicChatRouter } from './routes/publicChat';
 import { billingRouter } from './routes/billing';
+import { templatesRouter } from './routes/templates';
 import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -144,6 +145,7 @@ app.use('/api/arena', arenaRouter);
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/whatsapp', whatsappRouter);
 app.use('/api/billing', billingRouter);
+app.use('/api/templates', templatesRouter);
 app.use('/api/public', cors({ origin: true, credentials: false }), publicChatRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
