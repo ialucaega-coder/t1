@@ -25,6 +25,7 @@ export interface UseProductsResult {
   refetch: () => void;
   createProduct: (data: Partial<Product>) => Promise<Product | null>;
   updateProduct: (id: string, data: Partial<Product>) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
 }
 
 export function useProducts(): UseProductsResult {

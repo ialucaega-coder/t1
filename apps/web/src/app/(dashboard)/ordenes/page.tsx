@@ -38,7 +38,7 @@ export default function OrdenesPage() {
       const res = await ordersApi.getOrders(params);
       setOrders(res.data);
       setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotalPages(res.totalPages ?? 1);
     } catch {
       setError('Error al cargar órdenes');
     } finally {

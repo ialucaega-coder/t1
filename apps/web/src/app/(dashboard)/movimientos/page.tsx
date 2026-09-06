@@ -48,7 +48,7 @@ export default function MovimientosPage() {
       const res = await transactionsApi.getTransactions(params);
       setTransactions(res.data);
       setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotalPages(res.totalPages ?? 1);
     } catch {
       setError('Error al cargar movimientos');
     } finally {
@@ -66,7 +66,7 @@ export default function MovimientosPage() {
       await transactionsApi.createTransaction({
         amount,
         type: newType,
-        paymentMethod: newMethod,
+        paymentMethod: newMethod as 'CASH' | 'CARD' | 'TRANSFER' | 'QR',
         reference: newReference || undefined,
         notes: newNotes || undefined,
       });

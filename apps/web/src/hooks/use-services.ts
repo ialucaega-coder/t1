@@ -25,6 +25,7 @@ export interface UseServicesResult {
   refetch: () => void;
   createService: (data: Partial<Service>) => Promise<Service | null>;
   updateService: (id: string, data: Partial<Service>) => Promise<void>;
+  deleteService: (id: string) => Promise<void>;
 }
 
 export function useServices(): UseServicesResult {
