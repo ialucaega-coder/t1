@@ -88,7 +88,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const bookings = await prisma.booking.findMany({
       where: { businessId: req.auth!.businessId },
-      include: { service: true, professional: true, client: true },
+      include: { service: true, professional: { include: { user: true } }, client: true },
       orderBy: { date: 'desc' },
       take: 5000,
     });
@@ -99,7 +99,7 @@ router.get(
         b.date.toISOString().split('T')[0],
         b.startTime,
         `"${(b.service?.name || '').replace(/"/g, '""')}"`,
-        `"${(b.professional?.name || '').replace(/"/g, '""')}"`,
+        `"${(b.professional?.user?.name || '').replace(/"/g, '""')}"`,
         `"${(b.client?.name || '').replace(/"/g, '""')}"`,
         b.client?.email || '',
         b.client?.phone || '',
