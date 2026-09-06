@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Send,
   MessageCircle,
@@ -16,9 +16,17 @@ import {
   CreditCard,
   Mail,
   Link2,
+  Webhook,
+  Plus,
+  X,
+  Trash2,
+  Play,
+  Edit2,
 } from 'lucide-react';
 import { useConnections } from '@/hooks/use-connections';
 import { useBots } from '@/hooks/use-bots';
+import * as webhooksApi from '@/lib/api/webhooks';
+import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 
 // ────────────────────────────────────────────────────────────────
 // Canales de comunicación adicionales (proximamente)
@@ -358,6 +366,247 @@ function TelegramCard() {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Componente: Webhooks
+// ────────────────────────────────────────────────────────────────
+
+const EVENT_LABELS: Record<string, string> = {
+  'booking.created': 'Reserva creada',
+  'booking.updated': 'Reserva actualizada',
+  'booking.cancelled': 'Reserva cancelada',
+  'order.created': 'Orden creada',
+  'order.updated': 'Orden actualizada',
+  'client.created': 'Cliente creado',
+  'transaction.created': 'Transacción creada',
+  'conversation.new_message': 'Nuevo mensaje',
+  'campaign.sent': 'Campaña enviada',
+};
+
+function WebhooksSection() {
+  const [webhooks, setWebhooks] = useState<WebhookType[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<WebhookType | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ id: string; ok: boolean } | null>(null);
+
+  const [formName, setFormName] = useState('');
+  const [formUrl, setFormUrl] = useState('');
+  const [formSecret, setFormSecret] = useState('');
+  const [formEvents, setFormEvents] = useState<string[]>([]);
+
+  const fetchWebhooks = useCallback(async () => {
+    try {
+      const data = await webhooksApi.getWebhooks();
+      setWebhooks(data);
+    } catch { /* ignore */ }
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => { fetchWebhooks(); }, [fetchWebhooks]);
+
+  function openCreate() {
+    setEditing(null);
+    setFormName('');
+    setFormUrl('');
+    setFormSecret('');
+    setFormEvents([]);
+    setShowForm(true);
+  }
+
+  function openEdit(w: WebhookType) {
+    setEditing(w);
+    setFormName(w.name);
+    setFormUrl(w.url);
+    setFormSecret(w.secret || '');
+    setFormEvents(w.events || []);
+    setShowForm(true);
+  }
+
+  function toggleEvent(event: string) {
+    setFormEvents((prev) =>
+      prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
+    );
+  }
+
+  async function handleSave() {
+    if (!formName.trim() || !formUrl.trim() || formEvents.length === 0) return;
+    setSaving(true);
+    try {
+      if (editing) {
+        const updated = await webhooksApi.updateWebhook(editing.id, {
+          name: formName,
+          url: formUrl,
+          events: formEvents,
+          secret: formSecret || undefined,
+        });
+        setWebhooks((prev) => prev.map((w) => (w.id === editing.id ? updated : w)));
+      } else {
+        const created = await webhooksApi.createWebhook({
+          name: formName,
+          url: formUrl,
+          events: formEvents,
+          secret: formSecret || undefined,
+        });
+        setWebhooks((prev) => [...prev, created]);
+      }
+      setShowForm(false);
+    } catch { /* ignore */ }
+    setSaving(false);
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('¿Eliminar este webhook?')) return;
+    try {
+      await webhooksApi.deleteWebhook(id);
+      setWebhooks((prev) => prev.filter((w) => w.id !== id));
+    } catch { /* ignore */ }
+  }
+
+  async function handleToggle(w: WebhookType) {
+    try {
+      const updated = await webhooksApi.updateWebhook(w.id, { isActive: !w.isActive });
+      setWebhooks((prev) => prev.map((x) => (x.id === w.id ? updated : x)));
+    } catch { /* ignore */ }
+  }
+
+  async function handleTest(id: string) {
+    setTesting(id);
+    setTestResult(null);
+    try {
+      const result = await webhooksApi.testWebhook(id);
+      setTestResult({ id, ok: result.success });
+    } catch {
+      setTestResult({ id, ok: false });
+    }
+    setTesting(null);
+    setTimeout(() => setTestResult(null), 4000);
+  }
+
+  if (isLoading) return null;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="mono-label">WEBHOOKS</h3>
+        <button onClick={openCreate} className="btn-secondary text-xs">
+          <Plus className="h-3.5 w-3.5" /> Nuevo webhook
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="rounded-xl border border-brand-400/30 bg-slate-800/50 p-4 space-y-3 mb-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold text-white">
+              {editing ? 'Editar webhook' : 'Nuevo webhook'}
+            </h4>
+            <button onClick={() => setShowForm(false)} className="text-slate-500 hover:text-white">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 block">Nombre *</label>
+              <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)}
+                placeholder="Ej: Zapier — Reservas" className="input w-full" />
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 block">URL del endpoint *</label>
+              <input type="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)}
+                placeholder="https://hooks.zapier.com/..." className="input w-full font-mono text-xs" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 block">Secret (opcional)</label>
+            <input type="text" value={formSecret} onChange={(e) => setFormSecret(e.target.value)}
+              placeholder="Se enviará en el header X-Webhook-Secret" className="input w-full font-mono text-xs" />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 block">Eventos *</label>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(EVENT_LABELS).map(([event, label]) => (
+                <button key={event} type="button" onClick={() => toggleEvent(event)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] border transition-colors ${
+                    formEvents.includes(event)
+                      ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
+                      : 'text-slate-500 border-slate-700 hover:text-white hover:border-slate-600'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowForm(false)} className="btn-secondary text-xs">Cancelar</button>
+            <button onClick={handleSave}
+              disabled={saving || !formName.trim() || !formUrl.trim() || formEvents.length === 0}
+              className="btn-primary text-xs disabled:opacity-50">
+              {saving ? 'Guardando...' : editing ? 'Guardar cambios' : 'Crear webhook'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {webhooks.length === 0 && !showForm ? (
+        <div className="card text-center py-8">
+          <Webhook className="h-8 w-8 text-slate-700 mx-auto mb-2" />
+          <p className="text-sm text-slate-500 mb-1">Sin webhooks configurados</p>
+          <p className="text-xs text-slate-600 mb-3">
+            Conecta Zapier, Make, n8n o cualquier servicio que acepte webhooks
+          </p>
+          <button onClick={openCreate} className="btn-primary text-xs mx-auto">
+            <Plus className="h-3.5 w-3.5" /> Crear primer webhook
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {webhooks.map((w) => (
+            <div key={w.id} className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+              <div className="flex items-center gap-3">
+                <button onClick={() => handleToggle(w)}
+                  className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${w.isActive ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+                  <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${w.isActive ? 'right-0.5' : 'left-0.5'}`} />
+                </button>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{w.name}</p>
+                  <p className="text-[10px] text-slate-500 font-mono truncate">{w.url}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {testResult?.id === w.id && (
+                    <span className={`text-[10px] ${testResult.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {testResult.ok ? 'OK' : 'Error'}
+                    </span>
+                  )}
+                  <button onClick={() => handleTest(w.id)} disabled={testing === w.id}
+                    className="btn-secondary text-[10px] py-1 px-2">
+                    {testing === w.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                    Test
+                  </button>
+                  <button onClick={() => openEdit(w)} className="btn-secondary text-[10px] py-1 px-2">
+                    <Edit2 className="h-3 w-3" />
+                  </button>
+                  <button onClick={() => handleDelete(w.id)}
+                    className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {(w.events || []).map((event) => (
+                  <span key={event} className="px-1.5 py-0.5 rounded text-[9px] bg-slate-700/50 text-slate-400">
+                    {EVENT_LABELS[event] || event}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
 // Pagina principal de Conexiones
 // ────────────────────────────────────────────────────────────────
 
@@ -399,6 +648,8 @@ export default function ConexionesPage() {
           })}
         </div>
       </div>
+
+      <WebhooksSection />
 
       <div>
         <h3 className="mono-label mb-4">INTEGRACIONES</h3>
