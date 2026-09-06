@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../middleware/auth';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { getIO } from '../lib/socket';
 
 const router = Router();
 
@@ -14,6 +15,40 @@ router.get(
       orderBy: { createdAt: 'desc' },
     });
     res.json(campaigns);
+  })
+);
+
+router.get(
+  '/recipients',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const channel = req.query.channel as string | undefined;
+
+    const bookings = await prisma.booking.findMany({
+      where: { businessId },
+      select: { clientId: true },
+      distinct: ['clientId'],
+    });
+    const clientIds = bookings.map((b) => b.clientId);
+
+    if (clientIds.length === 0) {
+      return res.json({ total: 0, recipients: [] });
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: clientIds } },
+      select: { id: true, name: true, email: true, phone: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const recipients = users.filter((u) => {
+      if (!channel || channel === 'email') return !!u.email;
+      if (channel === 'whatsapp' || channel === 'sms') return !!u.phone;
+      return true;
+    });
+
+    res.json({ total: recipients.length, recipients });
   })
 );
 
@@ -43,12 +78,47 @@ router.patch(
   asyncHandler(async (req, res) => {
     const { name, description, status, channel, scheduledAt } = req.body;
     const upd = await prisma.campaign.updateMany({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { name, description, status, channel, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined },
     });
     if (upd.count === 0) return res.status(404).json({ error: 'Campaign not found' });
-    const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id as string } });
+    const campaign = await prisma.campaign.findUnique({ where: { id: String(req.params.id) } });
     res.json(campaign);
+  })
+);
+
+router.post(
+  '/:id/send',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const id = String(req.params.id);
+    const campaign = await prisma.campaign.findFirst({
+      where: { id, businessId: req.auth!.businessId },
+    });
+    if (!campaign) throw new AppError(404, 'Campaign not found');
+    if (campaign.status === 'sent') throw new AppError(400, 'Campaign already sent');
+
+    const bookings = await prisma.booking.findMany({
+      where: { businessId: req.auth!.businessId },
+      select: { clientId: true },
+      distinct: ['clientId'],
+    });
+    const recipientCount = bookings.length;
+
+    const updated = await prisma.campaign.update({
+      where: { id },
+      data: {
+        status: 'sent',
+        sentCount: recipientCount,
+        openRate: 0,
+        clickRate: 0,
+      },
+    });
+
+    getIO().to(`business:${req.auth!.businessId}`).emit('campaign:sent', { campaign: updated });
+
+    res.json(updated);
   })
 );
 
@@ -58,7 +128,7 @@ router.delete(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const del = await prisma.campaign.deleteMany({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+      where: { id: String(req.params.id), businessId: req.auth!.businessId },
     });
     if (del.count === 0) return res.status(404).json({ error: 'Campaign not found' });
     res.status(204).send();

@@ -11,6 +11,9 @@ import {
   X,
   Loader2,
   MessageCircle,
+  Users,
+  BarChart3,
+  MousePointerClick,
 } from 'lucide-react';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -40,7 +43,7 @@ interface CampaignForm {
 const emptyForm: CampaignForm = { name: '', description: '', channel: 'whatsapp', scheduledAt: '' };
 
 export default function CampanasPage() {
-  const { campaigns, isLoading, error, refetch, createCampaign, updateCampaign, deleteCampaign } =
+  const { campaigns, isLoading, error, refetch, createCampaign, updateCampaign, deleteCampaign, sendCampaign } =
     useCampaigns();
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -105,7 +108,7 @@ export default function CampanasPage() {
   async function handleSend(id: string) {
     setSending(id);
     try {
-      await updateCampaign(id, { status: 'sent' });
+      await sendCampaign(id);
     } finally {
       setSending(null);
     }
@@ -193,6 +196,22 @@ export default function CampanasPage() {
                       {new Date(c.createdAt).toLocaleDateString('es-AR')}
                     </span>
                   </div>
+                  {c.status === 'sent' && (
+                    <div className="flex items-center gap-4 mt-2 text-xs">
+                      <span className="flex items-center gap-1 text-emerald-400">
+                        <Users className="h-3.5 w-3.5" />
+                        {c.sentCount} enviados
+                      </span>
+                      <span className="flex items-center gap-1 text-blue-400">
+                        <BarChart3 className="h-3.5 w-3.5" />
+                        {(c.openRate * 100).toFixed(0)}% apertura
+                      </span>
+                      <span className="flex items-center gap-1 text-purple-400">
+                        <MousePointerClick className="h-3.5 w-3.5" />
+                        {(c.clickRate * 100).toFixed(0)}% clicks
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {c.status === 'draft' && (

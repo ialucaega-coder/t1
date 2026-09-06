@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   MessageSquare, Clock, X, ChevronRight, User, Filter, Search,
-  Send, Loader2, AlertTriangle, Bot, Phone, Mail,
+  Send, Loader2, AlertTriangle, Bot, Phone, Mail, Wifi, WifiOff,
 } from 'lucide-react';
 import { useConversations, useConversationDetail } from '@/hooks/use-conversations';
+import { useSocket, useSocketEvent } from '@/hooks/use-socket';
+import { useAuth } from '@/lib/auth-context';
 import * as conversationsApi from '@/lib/api/conversations';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -47,6 +49,19 @@ export default function ConversacionesPage() {
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { business } = useAuth();
+  const { connected } = useSocket(business?.id ?? null);
+
+  useSocketEvent<{ conversationId: string }>('conversation:new-message', (data) => {
+    if (data.conversationId === selectedId) {
+      refetchDetail();
+    }
+    refetch();
+  }, [selectedId]);
+
+  useSocketEvent<{ conversationId: string }>('conversation:closed', () => {
+    refetch();
+  });
 
   const filtered = searchQuery
     ? conversations.filter((c) => {
@@ -101,7 +116,18 @@ export default function ConversacionesPage() {
       {/* Header with stats */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white">Conversaciones</h1>
+          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            Conversaciones
+            {connected ? (
+              <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-normal">
+                <Wifi className="h-3 w-3" /> en vivo
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-[10px] text-slate-600 font-normal">
+                <WifiOff className="h-3 w-3" /> offline
+              </span>
+            )}
+          </h1>
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
             <span>{total} total</span>
             {openCount > 0 && (

@@ -197,9 +197,17 @@ export async function processMessage(
 
   const conversation = await getOrCreateConversation(businessId, channel, options);
 
-  await prisma.message.create({
+  const userMessage = await prisma.message.create({
     data: { conversationId: conversation.id, role: 'USER', text: clientMessage },
   });
+
+  try {
+    const { getIO } = require('../lib/socket');
+    getIO().to(`business:${businessId}`).emit('conversation:new-message', {
+      conversationId: conversation.id,
+      message: userMessage,
+    });
+  } catch {}
 
   const dbHistory = options.history || await loadHistory(conversation.id);
 
@@ -261,7 +269,7 @@ export async function processMessage(
   }
 
   const start = Date.now();
-  await prisma.message.create({
+  const botMessage = await prisma.message.create({
     data: { conversationId: conversation.id, role: 'BOT', text: responseText, responseTime: Date.now() - start },
   });
 
@@ -269,6 +277,15 @@ export async function processMessage(
     where: { id: conversation.id },
     data: { updatedAt: new Date() },
   });
+
+  try {
+    const { getIO } = require('../lib/socket');
+    getIO().to(`business:${businessId}`).emit('conversation:new-message', {
+      conversationId: conversation.id,
+      message: botMessage,
+    });
+  } catch {}
+
 
   const superpowers = await getActiveSuperpowers(businessId);
 

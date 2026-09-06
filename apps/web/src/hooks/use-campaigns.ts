@@ -50,5 +50,10 @@ export function useCampaigns() {
     refetch();
   }, [refetch]);
 
-  return { campaigns, isLoading, error, refetch, createCampaign, updateCampaign, deleteCampaign };
+  const sendCampaign = useCallback(async (id: string) => {
+    await campaignsApi.send(id);
+    refetch();
+  }, [refetch]);
+
+  return { campaigns, isLoading, error, refetch, createCampaign, updateCampaign, deleteCampaign, sendCampaign };
 }

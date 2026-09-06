@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { initSocket } from './lib/socket';
 import { authRouter } from './routes/auth';
 import { bookingsRouter } from './routes/bookings';
 import { servicesRouter } from './routes/services';
@@ -80,6 +81,7 @@ const corsOrigin: cors.CorsOptions['origin'] = (origin, callback) => {
 const io = new Server(httpServer, {
   cors: { origin: allowedOrigins },
 });
+initSocket(io);
 
 app.use(helmet({
   contentSecurityPolicy: {

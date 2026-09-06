@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { getIO } from '../lib/socket';
 import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
 import { paginationSchema, toSkipTake } from '../validators/common';
 
@@ -78,6 +79,7 @@ router.post(
       },
     });
 
+    getIO().to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
     res.status(201).json(booking);
   })
 );
@@ -124,6 +126,7 @@ router.patch(
       where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { status },
     });
+    getIO().to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
     res.json(booking);
   })
 );

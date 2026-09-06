@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { getIO } from '../lib/socket';
 
 const router = Router();
 
@@ -87,6 +88,11 @@ router.post(
       data: { updatedAt: new Date() },
     });
 
+    getIO().to(`business:${conversation.businessId}`).emit('conversation:new-message', {
+      conversationId: conversation.id,
+      message,
+    });
+
     res.json(message);
   })
 );
@@ -100,6 +106,11 @@ router.patch(
       data: { status: 'CLOSED' },
     });
     if (result.count === 0) return res.status(404).json({ error: 'Conversation not found or already closed' });
+
+    getIO().to(`business:${req.auth!.businessId}`).emit('conversation:closed', {
+      conversationId: req.params.id,
+    });
+
     res.json({ success: true });
   })
 );
