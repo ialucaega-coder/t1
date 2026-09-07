@@ -1,13 +1,15 @@
 'use client';
 
 import { FormEvent, useEffect, useState, useCallback } from 'react';
-import { Save, Palette, Globe, Bot, Clock, Plus, Trash2, UserCog, Lock, CheckCircle } from 'lucide-react';
+import { Save, Palette, Globe, Bot, Clock, Plus, Trash2, UserCog, Lock, CheckCircle, X, Eye, EyeOff, Key } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
 import { useAuth } from '@/lib/auth-context';
 import { THEME_OPTIONS } from '@/constants/settings';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import * as schedulesApi from '@/lib/api/schedules';
+import * as settingsApi from '@/lib/api/settings';
+import type { AiProviderInfo } from '@/lib/api/settings';
 import type { Schedule } from '@/types';
 
 const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -24,6 +26,11 @@ export default function ConfiguracionPage() {
   const [newPassword, setNewPassword] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
+  const [aiModal, setAiModal] = useState<AiProviderInfo | null>(null);
+  const [aiKey, setAiKey] = useState('');
+  const [aiKeyVisible, setAiKeyVisible] = useState(false);
+  const [aiSaving, setAiSaving] = useState(false);
 
   useEffect(() => {
     setForm(settings);
@@ -69,6 +76,46 @@ export default function ConfiguracionPage() {
   }, []);
 
   useEffect(() => { fetchSchedules(); }, [fetchSchedules]);
+
+  const fetchAiProviders = useCallback(async () => {
+    try {
+      const data = await settingsApi.getAiProviders();
+      setAiProviders(data);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { fetchAiProviders(); }, [fetchAiProviders]);
+
+  function openAiModal(provider: AiProviderInfo) {
+    setAiModal(provider);
+    setAiKey('');
+    setAiKeyVisible(false);
+  }
+
+  async function handleSaveAiProvider() {
+    if (!aiModal) return;
+    setAiSaving(true);
+    try {
+      const updated = await settingsApi.updateAiProvider(aiModal.key, { apiKey: aiKey });
+      setAiProviders((prev) => prev.map((p) => (p.key === updated.key ? updated : p)));
+      setAiModal(null);
+    } catch { /* ignore */ }
+    finally { setAiSaving(false); }
+  }
+
+  async function handleToggleAiProvider(provider: AiProviderInfo) {
+    try {
+      const updated = await settingsApi.updateAiProvider(provider.key, { isActive: !provider.isActive });
+      setAiProviders((prev) => prev.map((p) => (p.key === updated.key ? updated : p)));
+    } catch { /* ignore */ }
+  }
+
+  async function handleRemoveAiProvider(provider: AiProviderInfo) {
+    try {
+      await settingsApi.deleteAiProvider(provider.key);
+      setAiProviders((prev) => prev.map((p) => (p.key === provider.key ? { ...p, configured: false, isActive: false, id: null } : p)));
+    } catch { /* ignore */ }
+  }
 
   async function handleToggleDay(schedule: Schedule) {
     try {
@@ -274,19 +321,55 @@ export default function ConfiguracionPage() {
           Enchufa tu propia cuenta de Claude, ChatGPT, Gemini o Grok como cerebro del bot.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {(form.aiProviders ?? ['Claude (Anthropic)', 'ChatGPT (OpenAI)', 'Gemini (Google)', 'Grok (xAI)']).map((provider) => (
-            <div key={provider} className="card-accent flex items-center gap-3">
+          {(aiProviders.length > 0
+            ? aiProviders
+            : [
+                { key: 'anthropic', label: 'Claude (Anthropic)', configured: false, isActive: false, id: null },
+                { key: 'openai', label: 'ChatGPT (OpenAI)', configured: false, isActive: false, id: null },
+                { key: 'google', label: 'Gemini (Google)', configured: false, isActive: false, id: null },
+                { key: 'xai', label: 'Grok (xAI)', configured: false, isActive: false, id: null },
+              ]
+          ).map((provider) => (
+            <div key={provider.key} className="card-accent flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface">
                 <Bot className="h-5 w-5 text-brand-400" />
               </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-white">{provider}</p>
-                <p className="text-[10px] text-slate-500 font-mono">API KEY NO CONFIGURADA</p>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white">{provider.label}</p>
+                {provider.configured ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${provider.isActive ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                    <p className="text-[10px] font-mono text-emerald-400">
+                      {provider.isActive ? 'ACTIVO' : 'CONFIGURADO'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-500 font-mono">NO CONFIGURADA</p>
+                )}
               </div>
-              <button className="btn-secondary text-xs py-1 px-2">Configurar</button>
+              {provider.configured ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleAiProvider(provider)}
+                    className={`w-8 h-4 rounded-full relative transition-colors ${provider.isActive ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                  >
+                    <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${provider.isActive ? 'right-0.5' : 'left-0.5'}`} />
+                  </button>
+                  <button type="button" onClick={() => openAiModal(provider)} className="btn-secondary text-xs py-1 px-2">
+                    <Key className="h-3 w-3" />
+                  </button>
+                  <button type="button" onClick={() => handleRemoveAiProvider(provider)} className="text-slate-500 hover:text-red-400 p-1">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => openAiModal(provider)} className="btn-secondary text-xs py-1 px-2">Configurar</button>
+              )}
             </div>
           ))}
         </div>
+
       </section>
 
       <section className="card">
@@ -349,6 +432,60 @@ export default function ConfiguracionPage() {
           <Save className="h-4 w-4" /> {isSaving ? 'Guardando...' : 'Guardar cambios'}
         </button>
       </div>
+
+      {aiModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setAiModal(null)}>
+          <div className="w-full max-w-md bg-surface-100 border border-slate-700/50 rounded-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/50">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Key className="h-4 w-4 text-brand-400" />
+                {aiModal.label}
+              </h3>
+              <button type="button" onClick={() => setAiModal(null)} className="p-1 rounded hover:bg-surface">
+                <X className="h-4 w-4 text-slate-400" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-slate-400 mb-1.5 block uppercase font-mono tracking-wide">API Key</label>
+                <div className="relative">
+                  <input
+                    type={aiKeyVisible ? 'text' : 'password'}
+                    value={aiKey}
+                    onChange={(e) => setAiKey(e.target.value)}
+                    placeholder={aiModal.configured ? '••••••••••••••••' : 'sk-...'}
+                    className="input w-full pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAiKeyVisible(!aiKeyVisible)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                  >
+                    {aiKeyVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  La key se guarda cifrada y nunca se muestra completa.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setAiModal(null)} className="btn-secondary text-xs flex-1 justify-center">
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAiProvider}
+                  disabled={aiSaving || !aiKey.trim()}
+                  className="btn-primary text-xs flex-1 justify-center disabled:opacity-40"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  {aiSaving ? 'Guardando...' : 'Guardar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 }

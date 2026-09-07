@@ -122,7 +122,31 @@ export function SalesHistory() {
           <p className="text-xl font-bold text-green-400 font-mono">${totalSales.toLocaleString('es-AR')}</p>
         </div>
         <div className="card flex-1 flex items-end justify-end">
-          <button className="btn-secondary text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              if (filtered.length === 0) return;
+              const header = 'Fecha,Hora,Método,Cliente,Referencia,Monto\n';
+              const rows = filtered.map((t) => {
+                const d = new Date(t.createdAt);
+                const date = d.toLocaleDateString('es-AR');
+                const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+                const method = METHOD_LABELS[t.paymentMethod] || t.paymentMethod;
+                const client = (t.notes?.replace('Cliente: ', '') || '').replace(/,/g, ' ');
+                const ref = (t.reference || '').replace(/,/g, ' ');
+                return `${date},${time},${method},${client},${ref},${Number(t.amount)}`;
+              }).join('\n');
+              const blob = new Blob(['﻿' + header + rows], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `ventas-${new Date().toISOString().slice(0, 10)}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            className="btn-secondary text-xs"
+            disabled={filtered.length === 0}
+          >
             <Download className="h-3.5 w-3.5" /> Exportar CSV
           </button>
         </div>
