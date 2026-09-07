@@ -10,12 +10,18 @@ import {
   KPI_SUMMARY,
 } from '@/constants/analytics';
 
+export interface MetricItem {
+  label: string;
+  value: string;
+}
+
 export interface UseAnalyticsResult {
   kpi: typeof KPI_SUMMARY;
   conversations: typeof DAILY_CONVERSATIONS;
   satisfaction: typeof SATISFACTION_DISTRIBUTION;
   improvements: typeof SUGGESTED_IMPROVEMENTS;
   costs: typeof AI_COSTS;
+  metrics: MetricItem[];
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
@@ -27,6 +33,7 @@ export function useAnalytics(): UseAnalyticsResult {
   const [satisfaction, setSatisfaction] = useState(SATISFACTION_DISTRIBUTION);
   const [improvements, setImprovements] = useState(SUGGESTED_IMPROVEMENTS);
   const [costs, setCosts] = useState(AI_COSTS);
+  const [metrics, setMetrics] = useState<MetricItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -38,12 +45,13 @@ export function useAnalytics(): UseAnalyticsResult {
       setIsLoading(true);
       setError(null);
       try {
-        const [kpiRes, convRes, satRes, impRes, costRes] = await Promise.all([
+        const [kpiRes, convRes, satRes, impRes, costRes, metricsRes] = await Promise.all([
           analyticsApi.getKpi(),
           analyticsApi.getConversations(),
           analyticsApi.getSatisfaction(),
           analyticsApi.getImprovements(),
           analyticsApi.getCosts(),
+          analyticsApi.getMetrics(),
         ]);
         if (!cancelled) {
           setKpi(kpiRes);
@@ -51,6 +59,7 @@ export function useAnalytics(): UseAnalyticsResult {
           setSatisfaction(satRes);
           setImprovements(impRes);
           setCosts(costRes);
+          setMetrics(metricsRes);
         }
       } catch (err) {
         if (!cancelled) {
@@ -60,6 +69,7 @@ export function useAnalytics(): UseAnalyticsResult {
           setSatisfaction(SATISFACTION_DISTRIBUTION);
           setImprovements(SUGGESTED_IMPROVEMENTS);
           setCosts(AI_COSTS);
+          setMetrics([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -72,5 +82,5 @@ export function useAnalytics(): UseAnalyticsResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  return { kpi, conversations, satisfaction, improvements, costs, isLoading, error, refetch };
+  return { kpi, conversations, satisfaction, improvements, costs, metrics, isLoading, error, refetch };
 }

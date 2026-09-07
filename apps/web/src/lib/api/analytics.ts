@@ -19,3 +19,7 @@ export function getImprovements() {
 export function getCosts() {
   return httpClient.get<any[]>('/analytics/costs');
 }
+
+export function getMetrics() {
+  return httpClient.get<{ label: string; value: string }[]>('/analytics/metrics');
+}

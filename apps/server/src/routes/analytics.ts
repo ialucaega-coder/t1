@@ -242,4 +242,40 @@ router.get(
   })
 );
 
+router.get(
+  '/metrics',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const [avgResp, totalMessages, totalConvos, closedConvos, handoffConvos, botBookings] = await Promise.all([
+      prisma.message.aggregate({
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        _avg: { responseTime: true },
+      }),
+      prisma.message.count({
+        where: { createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+      }),
+      prisma.conversation.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.booking.count({ where: { businessId, source: { in: ['TELEGRAM', 'WHATSAPP'] }, createdAt: { gte: thirtyDaysAgo } } }),
+    ]);
+
+    const avgRespMs = avgResp._avg.responseTime || 0;
+    const msgsPerConvo = totalConvos > 0 ? (totalMessages / totalConvos).toFixed(1) : '0';
+    const resolutionRate = totalConvos > 0 ? ((closedConvos / totalConvos) * 100).toFixed(0) : '0';
+    const handoffRate = totalConvos > 0 ? ((handoffConvos / totalConvos) * 100).toFixed(0) : '0';
+
+    res.json([
+      { label: 'Tiempo promedio de respuesta', value: avgRespMs > 0 ? `${(avgRespMs / 1000).toFixed(1)}s` : '—' },
+      { label: 'Mensajes por conversación', value: msgsPerConvo },
+      { label: 'Tasa de resolución', value: `${resolutionRate}%` },
+      { label: 'Escalaciones a humano', value: `${handoffRate}%` },
+      { label: 'Reservas por bot', value: String(botBookings) },
+    ]);
+  })
+);
+
 export const analyticsRouter = router;

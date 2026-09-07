@@ -35,7 +35,7 @@ export function PaymentModal({ total, items, clientName, discount, onClose, onCo
   async function handlePay() {
     setProcessing(true);
     try {
-      const res = await httpClient.post<{ id: string }>('/api/transactions', {
+      const res = await httpClient.post<{ id: string }>('/transactions', {
         amount: total,
         type: 'SALE',
         paymentMethod: method,

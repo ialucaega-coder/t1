@@ -85,7 +85,7 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
 }
 
 export default function AnalisisPage() {
-  const { kpi, conversations, satisfaction, improvements, costs, isLoading, error, refetch } = useAnalytics();
+  const { kpi, conversations, satisfaction, improvements, costs, metrics, isLoading, error, refetch } = useAnalytics();
   const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
   const [showNewCampaign, setShowNewCampaign] = useState(false);
@@ -177,13 +177,7 @@ export default function AnalisisPage() {
           <div className="card-accent">
             <h3 className="font-semibold text-white mb-4">Métricas clave</h3>
             <div className="space-y-3">
-              {[
-                { label: 'Tiempo promedio de respuesta', value: '1.2s' },
-                { label: 'Mensajes por conversación', value: '6.4' },
-                { label: 'Tasa de resolución', value: '87%' },
-                { label: 'Escalaciones a humano', value: '13%' },
-                { label: 'Reservas por bot', value: '42' },
-              ].map((m) => (
+              {metrics.map((m) => (
                 <div key={m.label} className="flex justify-between items-center">
                   <span className="text-xs text-slate-400">{m.label}</span>
                   <span className="text-sm font-medium text-white">{m.value}</span>

@@ -51,7 +51,7 @@ export function CashDrawer() {
   async function loadMovements() {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: any[] }>(`/api/transactions?from=${today}&pageSize=100`);
+      const res = await httpClient.get<{ data: any[] }>(`/transactions?from=${today}&pageSize=100`);
       const txs: CashMovement[] = (res.data || []).map((t: any) => ({
         id: t.id,
         type: (t.type === 'SALE' ? 'SALE' : (t.notes?.includes('Retiro') ? 'WITHDRAWAL' : t.notes?.includes('Ingreso') ? 'DEPOSIT' : 'SALE')) as CashMovement['type'],

@@ -36,7 +36,7 @@ export function PosStats() {
     setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: any[] }>(`/api/transactions?from=${today}&pageSize=500`);
+      const res = await httpClient.get<{ data: any[] }>(`/transactions?from=${today}&pageSize=500`);
       const txs: any[] = res.data || [];
 
       const byMethod: Record<string, { count: number; total: number }> = {};

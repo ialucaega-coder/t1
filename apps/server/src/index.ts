@@ -39,6 +39,7 @@ import { publicChatRouter } from './routes/publicChat';
 import { billingRouter } from './routes/billing';
 import { templatesRouter } from './routes/templates';
 import { webhooksRouter } from './routes/webhooks';
+import { posRouter } from './routes/pos';
 import { restoreActiveBots } from './services/telegram/bot';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -150,6 +151,7 @@ app.use('/api/whatsapp', whatsappRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/templates', templatesRouter);
 app.use('/api/webhooks', webhooksRouter);
+app.use('/api/pos', posRouter);
 app.use('/api/public', cors({ origin: true, credentials: false }), publicChatRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.

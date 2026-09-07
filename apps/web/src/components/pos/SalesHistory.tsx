@@ -46,7 +46,7 @@ export function SalesHistory() {
       if (filterMethod) params.set('type', filterMethod);
       if (dateFrom) params.set('from', dateFrom);
       if (dateTo) params.set('to', dateTo);
-      const res = await httpClient.get<{ data: Transaction[]; totalPages: number }>(`/api/transactions?${params}`);
+      const res = await httpClient.get<{ data: Transaction[]; totalPages: number }>(`/transactions?${params}`);
       setTransactions(res.data || []);
       setTotalPages(res.totalPages || 1);
     } catch {
