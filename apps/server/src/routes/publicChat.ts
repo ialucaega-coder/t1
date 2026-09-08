@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
+import { getIO } from '../lib/socket';
 
 const router = Router();
 
@@ -348,6 +349,10 @@ router.post('/book/:slug', async (req, res) => {
         },
       });
     }
+
+    try {
+      getIO().to(`business:${business.id}`).emit('booking:created', { booking });
+    } catch { /* socket not initialized in tests */ }
 
     res.status(201).json(booking);
   } catch (error) {

@@ -3,6 +3,8 @@
 import { useState, useCallback } from 'react';
 import { Plus, Filter, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { useBookings } from '@/hooks/use-bookings';
+import { useSocket, useSocketEvent } from '@/hooks/use-socket';
+import { useAuth } from '@/lib/auth-context';
 import * as bookingsApi from '@/lib/api/bookings';
 import type { Booking as ApiBooking, CreateBookingData } from '@/types';
 import { type Booking as LegacyBooking } from '@/constants/bookings';
@@ -47,6 +49,10 @@ export default function ReservasPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   const { bookings, isLoading, error, refetch, createBooking, updateStatus } = useBookings(selectedDate);
+  const { business } = useAuth();
+  useSocket(business?.id ?? null);
+  useSocketEvent('booking:created', () => refetch());
+  useSocketEvent('booking:updated', () => refetch());
 
   const legacyBookings = bookings.map(toLegacyBooking);
   const filteredBookings = statusFilter === 'all'

@@ -9,6 +9,8 @@ import {
 import Link from 'next/link';
 import { useStats } from '@/hooks/use-stats';
 import { useBots } from '@/hooks/use-bots';
+import { useSocket, useSocketEvent } from '@/hooks/use-socket';
+import { useAuth } from '@/lib/auth-context';
 import { statsApi } from '@/lib/api/index';
 import type { DashboardStats } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -70,6 +72,15 @@ function timeAgo(dateStr: string): string {
 export default function DashboardPage() {
   const { overview, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useStats();
   const { bots, isLoading: botsLoading, error: botsError, refetch: refetchBots, createBot, updateBot, deleteBot } = useBots();
+  const { business } = useAuth();
+  useSocket(business?.id ?? null);
+  useSocketEvent('booking:created', () => {
+    refetchStats();
+    statsApi.getDashboard().then(setDashboard).catch(() => {});
+  });
+  useSocketEvent('conversation:new-message', () => {
+    statsApi.getDashboard().then(setDashboard).catch(() => {});
+  });
   const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newBotName, setNewBotName] = useState('');
