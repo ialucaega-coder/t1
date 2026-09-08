@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { promptsApi } from '@/lib/api/index';
 import type { Prompt } from '@/constants/prompts';
-import { MOCK_PROMPTS } from '@/constants/prompts';
 
 export interface UsePromptsResult {
   prompts: Prompt[];
@@ -30,8 +29,6 @@ export function usePrompts(): UsePromptsResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar prompts');
-          // Fallback a datos mock cuando la API no está disponible.
-          setPrompts(MOCK_PROMPTS);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

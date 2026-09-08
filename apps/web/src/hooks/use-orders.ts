@@ -4,19 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { ordersApi } from '@/lib/api/index';
 import type { CreateOrderData, Order } from '@/types';
 
-// No existe un archivo de constantes para pedidos todavía; se define un
-// fallback mínimo aquí mismo para cuando la API no está disponible.
-const MOCK_ORDERS: Order[] = [
-  {
-    id: 'mock-1',
-    status: 'COMPLETED',
-    totalPrice: 8500,
-    createdAt: new Date().toISOString(),
-    client: { id: 'mock-client-1', name: 'María García' },
-    items: [{ id: 'mock-item-1', quantity: 1, price: 8500, product: { name: 'Shampoo Profesional 500ml' } }],
-  },
-];
-
 export interface UseOrdersResult {
   orders: Order[];
   isLoading: boolean;
@@ -44,7 +31,6 @@ export function useOrders(params?: Record<string, string>): UseOrdersResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar pedidos');
-          setOrders(MOCK_ORDERS);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
