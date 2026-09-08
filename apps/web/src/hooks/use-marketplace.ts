@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { marketplaceApi } from '@/lib/api/index';
-import { MOCK_MARKETPLACE_ITEMS } from '@/constants/marketplace';
 import type { MarketplaceItem } from '@/constants/marketplace';
 
 export interface UseMarketplaceResult {
@@ -32,7 +31,6 @@ export function useMarketplace(): UseMarketplaceResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar marketplace');
-          setItems(MOCK_MARKETPLACE_ITEMS);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

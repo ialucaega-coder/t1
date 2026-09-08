@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { teamApi } from '@/lib/api/index';
-import { MOCK_TEAM_MEMBERS } from '@/constants/team';
 import type { TeamMember } from '@/constants/team';
 
 export interface UseTeamResult {
@@ -33,7 +32,6 @@ export function useTeam(): UseTeamResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar miembros del equipo');
-          setMembers(MOCK_TEAM_MEMBERS);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

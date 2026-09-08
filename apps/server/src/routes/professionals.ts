@@ -92,4 +92,110 @@ router.get(
   })
 );
 
+router.post(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { name, email, phone, bio, specialties, serviceIds } = req.body;
+    if (!name || !email) {
+      throw new AppError(400, 'name and email are required');
+    }
+
+    const businessId = req.auth!.businessId;
+
+    let user = await prisma.user.findFirst({ where: { email, businessId } });
+    if (!user) {
+      user = await prisma.user.create({
+        data: { name, email, phone: phone || null, role: 'PROFESSIONAL', businessId, passwordHash: '' },
+      });
+    }
+
+    const maxOrder = await prisma.professional.aggregate({
+      where: { businessId },
+      _max: { sortOrder: true },
+    });
+
+    const professional = await prisma.professional.create({
+      data: {
+        userId: user.id,
+        businessId,
+        bio: bio || null,
+        specialties: specialties || [],
+        sortOrder: (maxOrder._max.sortOrder ?? 0) + 1,
+        ...(serviceIds?.length ? { services: { connect: serviceIds.map((id: string) => ({ id })) } } : {}),
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, avatar: true } },
+        schedules: true,
+        _count: { select: { bookings: true } },
+      },
+    });
+
+    res.status(201).json(professional);
+  })
+);
+
+router.put(
+  '/:id',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { bio, specialties, isAvailable, serviceIds } = req.body;
+    const businessId = req.auth!.businessId;
+
+    const id = String(req.params.id);
+    const existing = await prisma.professional.findUnique({
+      where: { id, businessId },
+    });
+    if (!existing) throw new AppError(404, 'Professional not found');
+
+    const updateData: any = {};
+    if (bio !== undefined) updateData.bio = bio;
+    if (specialties !== undefined) updateData.specialties = specialties;
+    if (isAvailable !== undefined) updateData.isAvailable = isAvailable;
+
+    if (serviceIds) {
+      updateData.services = { set: serviceIds.map((sid: string) => ({ id: sid })) };
+    }
+
+    const professional = await prisma.professional.update({
+      where: { id },
+      data: updateData,
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, avatar: true } },
+        schedules: true,
+        _count: { select: { bookings: true } },
+      },
+    });
+
+    res.json(professional);
+  })
+);
+
+router.delete(
+  '/:id',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = String(req.params.id);
+    const businessId = req.auth!.businessId;
+
+    const existing = await prisma.professional.findUnique({
+      where: { id, businessId },
+      include: { _count: { select: { bookings: true } } },
+    });
+    if (!existing) throw new AppError(404, 'Professional not found');
+
+    if (existing._count.bookings > 0) {
+      await prisma.professional.update({
+        where: { id },
+        data: { isAvailable: false },
+      });
+      res.json({ message: 'Professional deactivated (has existing bookings)' });
+      return;
+    }
+
+    await prisma.professional.delete({ where: { id } });
+    res.status(204).send();
+  })
+);
+
 export { router as professionalsRouter };

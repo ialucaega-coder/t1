@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { agencyApi } from '@/lib/api/index';
-import { MOCK_AGENCY_CLIENTS, AGENCY_STATS } from '@/constants/agency';
+import { AGENCY_STATS } from '@/constants/agency';
 import type { AgencyClient } from '@/constants/agency';
 
 export interface UseAgencyResult {
@@ -41,8 +41,6 @@ export function useAgency(): UseAgencyResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar datos de agencia');
-          setStats(AGENCY_STATS);
-          setClients(MOCK_AGENCY_CLIENTS);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
