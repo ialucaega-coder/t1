@@ -33,8 +33,12 @@ export const AI_COSTS = [
 
 export const KPI_SUMMARY = {
   totalConversations: 296,
+  conversationsChange: 0,
   avgSatisfaction: 4.3,
+  satisfactionChange: 0,
   monthlyAiCost: 25.75,
+  aiCostChange: 0,
   conversionRate: 34.2,
+  conversionChange: 0,
   monthlyBudget: 50,
 };

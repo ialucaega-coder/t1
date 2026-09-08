@@ -16,6 +16,7 @@ import {
   MousePointerClick,
 } from 'lucide-react';
 import { useCampaigns } from '@/hooks/use-campaigns';
+import * as campaignsApi from '@/lib/api/campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
@@ -51,11 +52,26 @@ export default function CampanasPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [sending, setSending] = useState<string | null>(null);
+  const [recipientCount, setRecipientCount] = useState<number | null>(null);
+  const [loadingRecipients, setLoadingRecipients] = useState(false);
+
+  async function fetchRecipientCount(channel: string) {
+    setLoadingRecipients(true);
+    try {
+      const data = await campaignsApi.getRecipients(channel);
+      setRecipientCount(data.total);
+    } catch {
+      setRecipientCount(null);
+    } finally {
+      setLoadingRecipients(false);
+    }
+  }
 
   function openCreate() {
     setForm(emptyForm);
     setEditingId(null);
     setShowModal(true);
+    fetchRecipientCount(emptyForm.channel);
   }
 
   function openEdit(c: typeof campaigns[0]) {
@@ -67,6 +83,12 @@ export default function CampanasPage() {
     });
     setEditingId(c.id);
     setShowModal(true);
+    fetchRecipientCount(c.channel);
+  }
+
+  function handleChannelChange(channel: string) {
+    setForm({ ...form, channel });
+    fetchRecipientCount(channel);
   }
 
   async function handleSave() {
@@ -298,7 +320,7 @@ export default function CampanasPage() {
                   <label className="block text-sm font-medium text-slate-300 mb-1">Canal</label>
                   <select
                     value={form.channel}
-                    onChange={(e) => setForm({ ...form, channel: e.target.value })}
+                    onChange={(e) => handleChannelChange(e.target.value)}
                     className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
                   >
                     <option value="whatsapp">WhatsApp</option>
@@ -317,6 +339,35 @@ export default function CampanasPage() {
                     onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })}
                     className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
                   />
+                </div>
+              </div>
+
+              {/* Audience preview */}
+              <div className="rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-slate-400" />
+                  <span className="text-sm text-slate-300">Audiencia estimada</span>
+                </div>
+                <div className="mt-1.5">
+                  {loadingRecipients ? (
+                    <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Calculando destinatarios...
+                    </span>
+                  ) : recipientCount !== null ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-bold text-white">{recipientCount}</span>
+                      <span className="text-xs text-slate-400">
+                        {recipientCount === 1 ? 'cliente recibirá' : 'clientes recibirán'} este mensaje por {CHANNEL_LABELS[form.channel] || form.channel}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-500">No se pudo obtener la audiencia</span>
+                  )}
+                  {recipientCount === 0 && (
+                    <p className="text-[10px] text-amber-400 mt-1">
+                      No hay clientes con datos de contacto para este canal. Verificá que tus clientes tengan {form.channel === 'email' ? 'email' : 'teléfono'} registrado.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

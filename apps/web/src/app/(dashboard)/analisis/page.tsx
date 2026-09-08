@@ -108,12 +108,16 @@ export default function AnalisisPage() {
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><MessageCircle className="h-4 w-4 text-brand-400" /><span className="text-[10px] text-slate-500">CONVERSACIONES</span></div>
           <p className="text-2xl font-bold text-white">{kpi.totalConversations}</p>
-          <p className="text-[10px] text-emerald-400">+12% vs mes ant.</p>
+          <p className={`text-[10px] ${kpi.conversationsChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {kpi.conversationsChange >= 0 ? '+' : ''}{kpi.conversationsChange}% vs mes ant.
+          </p>
         </div>
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><Star className="h-4 w-4 text-yellow-400" /><span className="text-[10px] text-slate-500">SATISFACCIÓN</span></div>
           <p className="text-2xl font-bold text-white">{kpi.avgSatisfaction}<span className="text-sm text-slate-500">/5</span></p>
-          <p className="text-[10px] text-emerald-400">+0.2 vs mes ant.</p>
+          <p className={`text-[10px] ${kpi.satisfactionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {kpi.satisfactionChange >= 0 ? '+' : ''}{kpi.satisfactionChange} vs mes ant.
+          </p>
         </div>
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><DollarSign className="h-4 w-4 text-emerald-400" /><span className="text-[10px] text-slate-500">COSTO IA</span></div>
@@ -123,7 +127,9 @@ export default function AnalisisPage() {
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><Zap className="h-4 w-4 text-purple-400" /><span className="text-[10px] text-slate-500">CONVERSIÓN</span></div>
           <p className="text-2xl font-bold text-white">{kpi.conversionRate}%</p>
-          <p className="text-[10px] text-emerald-400">+5.1% vs mes ant.</p>
+          <p className={`text-[10px] ${kpi.conversionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {kpi.conversionChange >= 0 ? '+' : ''}{kpi.conversionChange}% vs mes ant.
+          </p>
         </div>
       </div>
 

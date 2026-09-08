@@ -15,38 +15,63 @@ router.get(
     const businessId = req.auth!.businessId;
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
-    const [totalConversations, totalBookings, completedBookings, revenue, closedConvos, totalConvos, botMessages, avgResponseTime] = await Promise.all([
+    const [
+      totalConversations, totalBookings, completedBookings, closedConvos, botMessages, avgResponseTime,
+      prevConversations, prevBookings, prevCompleted, prevClosed, prevBotMessages, prevAvgResp,
+    ] = await Promise.all([
       prisma.conversation.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
       prisma.booking.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
       prisma.booking.count({ where: { businessId, status: 'COMPLETED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.transaction.aggregate({ where: { businessId, createdAt: { gte: thirtyDaysAgo } }, _sum: { amount: true } }),
       prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.message.count({
-        where: { role: 'BOT', createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
-      }),
+      prisma.message.count({ where: { role: 'BOT', createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } } }),
       prisma.message.aggregate({
         where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
         _avg: { responseTime: true },
       }),
+      prisma.conversation.count({ where: { businessId, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
+      prisma.booking.count({ where: { businessId, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
+      prisma.booking.count({ where: { businessId, status: 'COMPLETED', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
+      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
+      prisma.message.count({ where: { role: 'BOT', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, conversation: { businessId } } }),
+      prisma.message.aggregate({
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, conversation: { businessId } },
+        _avg: { responseTime: true },
+      }),
     ]);
 
-    const resolutionRate = totalConvos > 0 ? closedConvos / totalConvos : 0;
-    const avgRespMs = avgResponseTime._avg.responseTime || 0;
-    const responseScore = avgRespMs === 0 ? 5 : avgRespMs < 1000 ? 5 : avgRespMs < 3000 ? 4 : avgRespMs < 5000 ? 3 : avgRespMs < 10000 ? 2 : 1;
-    const avgSatisfaction = parseFloat(((resolutionRate * 3 + responseScore * 2) / 5).toFixed(1)) || 0;
+    function calcChange(curr: number, prev: number): number {
+      return prev > 0 ? parseFloat(((curr - prev) / prev * 100).toFixed(1)) : 0;
+    }
+
+    function calcSatisfaction(closed: number, total: number, avgMs: number | null): number {
+      const resRate = total > 0 ? closed / total : 0;
+      const ms = avgMs || 0;
+      const score = ms === 0 ? 5 : ms < 1000 ? 5 : ms < 3000 ? 4 : ms < 5000 ? 3 : ms < 10000 ? 2 : 1;
+      return parseFloat(((resRate * 3 + score * 2) / 5).toFixed(1)) || 0;
+    }
+
+    const avgSatisfaction = calcSatisfaction(closedConvos, totalConversations, avgResponseTime._avg.responseTime);
+    const prevSatisfaction = calcSatisfaction(prevClosed, prevConversations, prevAvgResp._avg.responseTime);
 
     const estimatedTokens = botMessages * AVG_TOKENS_PER_MESSAGE;
     const monthlyAiCost = parseFloat(((estimatedTokens / 1000) * COST_PER_1K_TOKENS).toFixed(2));
+    const prevTokens = prevBotMessages * AVG_TOKENS_PER_MESSAGE;
+    const prevAiCost = parseFloat(((prevTokens / 1000) * COST_PER_1K_TOKENS).toFixed(2));
 
-    const conversionRate = totalBookings > 0 ? ((completedBookings / totalBookings) * 100).toFixed(1) : '0';
+    const conversionRate = totalBookings > 0 ? parseFloat(((completedBookings / totalBookings) * 100).toFixed(1)) : 0;
+    const prevConversionRate = prevBookings > 0 ? parseFloat(((prevCompleted / prevBookings) * 100).toFixed(1)) : 0;
 
     res.json({
       totalConversations,
+      conversationsChange: calcChange(totalConversations, prevConversations),
       avgSatisfaction,
+      satisfactionChange: parseFloat((avgSatisfaction - prevSatisfaction).toFixed(1)),
       monthlyAiCost,
-      conversionRate: parseFloat(conversionRate),
+      aiCostChange: calcChange(monthlyAiCost, prevAiCost),
+      conversionRate,
+      conversionChange: parseFloat((conversionRate - prevConversionRate).toFixed(1)),
       monthlyBudget: 50,
     });
   })
