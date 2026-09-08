@@ -206,4 +206,123 @@ router.get(
   })
 );
 
+router.get(
+  '/health',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
+    const [
+      monthBookings,
+      confirmedBookings,
+      noShows,
+      cancelledBookings,
+      totalClients,
+      returningClients,
+      lastMonthBookings,
+      lastMonthConfirmed,
+      lastMonthNoShows,
+      lastMonthCancelled,
+      lastMonthClients,
+      lastMonthReturning,
+    ] = await Promise.all([
+      prisma.booking.count({ where: { businessId, date: { gte: startOfMonth } } }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfMonth }, status: 'CONFIRMED' } }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfMonth }, status: 'NO_SHOW' } }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfMonth }, status: 'CANCELLED' } }),
+      prisma.user.count({ where: { businessId, role: 'CLIENT', createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.user.count({
+        where: {
+          businessId,
+          role: 'CLIENT',
+          createdAt: { lt: thirtyDaysAgo },
+          bookingsAsClient: { some: { date: { gte: thirtyDaysAgo } } },
+        },
+      }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfLastMonth, lt: startOfMonth } } }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfLastMonth, lt: startOfMonth }, status: 'CONFIRMED' } }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfLastMonth, lt: startOfMonth }, status: 'NO_SHOW' } }),
+      prisma.booking.count({ where: { businessId, date: { gte: startOfLastMonth, lt: startOfMonth }, status: 'CANCELLED' } }),
+      prisma.user.count({ where: { businessId, role: 'CLIENT', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
+      prisma.user.count({
+        where: {
+          businessId,
+          role: 'CLIENT',
+          createdAt: { lt: sixtyDaysAgo },
+          bookingsAsClient: { some: { date: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } },
+        },
+      }),
+    ]);
+
+    const completedBookings = monthBookings - cancelledBookings;
+    const lastCompletedBookings = lastMonthBookings - lastMonthCancelled;
+
+    const confirmationRate = completedBookings > 0
+      ? (confirmedBookings / completedBookings * 100) : 0;
+    const lastConfirmationRate = lastCompletedBookings > 0
+      ? (lastMonthConfirmed / lastCompletedBookings * 100) : 0;
+
+    const noShowRate = monthBookings > 0 ? (noShows / monthBookings * 100) : 0;
+    const lastNoShowRate = lastMonthBookings > 0 ? (lastMonthNoShows / lastMonthBookings * 100) : 0;
+
+    const cancellationRate = monthBookings > 0 ? (cancelledBookings / monthBookings * 100) : 0;
+    const lastCancellationRate = lastMonthBookings > 0 ? (lastMonthCancelled / lastMonthBookings * 100) : 0;
+
+    const allRecentClients = totalClients + returningClients;
+    const retentionRate = allRecentClients > 0 ? (returningClients / allRecentClients * 100) : 0;
+    const allLastClients = lastMonthClients + lastMonthReturning;
+    const lastRetentionRate = allLastClients > 0 ? (lastMonthReturning / allLastClients * 100) : 0;
+
+    res.json({
+      indicators: [
+        {
+          key: 'confirmation_rate',
+          label: 'Tasa de confirmación',
+          value: `${confirmationRate.toFixed(1)}%`,
+          numericValue: confirmationRate,
+          good: confirmationRate >= 80,
+          change: confirmationRate - lastConfirmationRate,
+        },
+        {
+          key: 'no_show_rate',
+          label: 'Tasa de no-show',
+          value: `${noShowRate.toFixed(1)}%`,
+          numericValue: noShowRate,
+          good: noShowRate <= 5,
+          change: noShowRate - lastNoShowRate,
+        },
+        {
+          key: 'cancellation_rate',
+          label: 'Tasa de cancelación',
+          value: `${cancellationRate.toFixed(1)}%`,
+          numericValue: cancellationRate,
+          good: cancellationRate <= 10,
+          change: cancellationRate - lastCancellationRate,
+        },
+        {
+          key: 'retention_rate',
+          label: 'Retención mensual',
+          value: `${retentionRate.toFixed(1)}%`,
+          numericValue: retentionRate,
+          good: retentionRate >= 60,
+          change: retentionRate - lastRetentionRate,
+        },
+        {
+          key: 'new_clients',
+          label: 'Clientes nuevos (30d)',
+          value: String(totalClients),
+          numericValue: totalClients,
+          good: totalClients > 0,
+          change: totalClients - lastMonthClients,
+        },
+      ],
+    });
+  })
+);
+
 export { router as statsRouter };

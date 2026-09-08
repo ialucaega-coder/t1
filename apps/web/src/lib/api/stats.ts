@@ -16,3 +16,16 @@ export function getTopServices() {
 export function getDashboard() {
   return httpClient.get<DashboardStats>('/stats/dashboard');
 }
+
+export interface HealthIndicator {
+  key: string;
+  label: string;
+  value: string;
+  numericValue: number;
+  good: boolean;
+  change: number;
+}
+
+export function getHealthIndicators() {
+  return httpClient.get<{ indicators: HealthIndicator[] }>('/stats/health');
+}
