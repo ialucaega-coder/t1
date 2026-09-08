@@ -114,4 +114,224 @@ router.post('/chat', async (req, res) => {
   }
 });
 
+// ─── Public Booking Endpoints ───────────────────────────────────────
+
+router.get('/book/:slug', async (req, res) => {
+  try {
+    const business = await prisma.business.findUnique({
+      where: { slug: req.params.slug },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        phone: true,
+        address: true,
+      },
+    });
+
+    if (!business) {
+      res.status(404).json({ error: 'Negocio no encontrado' });
+      return;
+    }
+
+    const services = await prisma.service.findMany({
+      where: { businessId: business.id, isActive: true },
+      select: { id: true, name: true, description: true, price: true, duration: true, category: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const schedules = await prisma.schedule.findMany({
+      where: { businessId: business.id, isActive: true },
+      select: { dayOfWeek: true, startTime: true, endTime: true },
+      orderBy: { dayOfWeek: 'asc' },
+    });
+
+    res.json({ business, services, schedules });
+  } catch (error) {
+    console.error('Public booking info error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/book/:slug/slots', async (req, res) => {
+  try {
+    const { date, serviceId } = req.query;
+    if (!date || !serviceId) {
+      res.status(400).json({ error: 'date and serviceId are required' });
+      return;
+    }
+
+    const business = await prisma.business.findUnique({
+      where: { slug: req.params.slug },
+      select: { id: true },
+    });
+
+    if (!business) {
+      res.status(404).json({ error: 'Negocio no encontrado' });
+      return;
+    }
+
+    const service = await prisma.service.findFirst({
+      where: { id: serviceId as string, businessId: business.id },
+      select: { duration: true },
+    });
+
+    if (!service) {
+      res.status(404).json({ error: 'Servicio no encontrado' });
+      return;
+    }
+
+    const dateObj = new Date(date as string);
+    const dayOfWeek = dateObj.getDay();
+
+    const schedules = await prisma.schedule.findMany({
+      where: { businessId: business.id, dayOfWeek, isActive: true },
+      select: { startTime: true, endTime: true },
+    });
+
+    if (schedules.length === 0) {
+      res.json({ slots: [] });
+      return;
+    }
+
+    const existingBookings = await prisma.booking.findMany({
+      where: {
+        businessId: business.id,
+        date: dateObj,
+        status: { notIn: ['CANCELLED'] },
+      },
+      select: { startTime: true, endTime: true },
+    });
+
+    const bookedRanges = existingBookings.map((b) => ({
+      start: b.startTime,
+      end: b.endTime,
+    }));
+
+    const slots: string[] = [];
+    for (const sched of schedules) {
+      const [startH, startM] = sched.startTime.split(':').map(Number);
+      const [endH, endM] = sched.endTime.split(':').map(Number);
+      const startMin = startH * 60 + startM;
+      const endMin = endH * 60 + endM;
+
+      for (let t = startMin; t + service.duration <= endMin; t += 30) {
+        const slotStart = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+        const slotEndMin = t + service.duration;
+        const slotEnd = `${String(Math.floor(slotEndMin / 60)).padStart(2, '0')}:${String(slotEndMin % 60).padStart(2, '0')}`;
+
+        const isBooked = bookedRanges.some((b) => {
+          return slotStart < b.end && slotEnd > b.start;
+        });
+
+        if (!isBooked) {
+          slots.push(slotStart);
+        }
+      }
+    }
+
+    res.json({ slots });
+  } catch (error) {
+    console.error('Public slots error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/book/:slug', async (req, res) => {
+  try {
+    const { serviceId, date, time, name, phone, email } = req.body;
+
+    if (!serviceId || !date || !time || !name || !phone) {
+      res.status(400).json({ error: 'Faltan campos obligatorios' });
+      return;
+    }
+
+    const business = await prisma.business.findUnique({
+      where: { slug: req.params.slug },
+      select: { id: true },
+    });
+
+    if (!business) {
+      res.status(404).json({ error: 'Negocio no encontrado' });
+      return;
+    }
+
+    const service = await prisma.service.findFirst({
+      where: { id: serviceId, businessId: business.id, isActive: true },
+    });
+
+    if (!service) {
+      res.status(404).json({ error: 'Servicio no encontrado' });
+      return;
+    }
+
+    let client = await prisma.user.findFirst({
+      where: { phone, businessId: business.id, role: 'CLIENT' },
+    });
+
+    if (!client) {
+      client = await prisma.user.create({
+        data: {
+          name,
+          phone,
+          email: email || null,
+          role: 'CLIENT',
+          businessId: business.id,
+          passwordHash: '',
+        },
+      });
+    }
+
+    const [h, m] = time.split(':').map(Number);
+    const endMin = h * 60 + m + service.duration;
+    const endTime = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+
+    const firstProfessional = await prisma.professional.findFirst({
+      where: { businessId: business.id },
+      select: { id: true },
+    });
+
+    const booking = await prisma.booking.create({
+      data: {
+        businessId: business.id,
+        clientId: client.id,
+        serviceId: service.id,
+        professionalId: firstProfessional?.id || '',
+        date: new Date(date),
+        startTime: time,
+        endTime,
+        status: 'PENDING',
+        source: 'WEB',
+        totalPrice: service.price,
+      },
+      include: {
+        service: { select: { name: true, duration: true, price: true } },
+      },
+    });
+
+    const admin = await prisma.user.findFirst({
+      where: { businessId: business.id, role: 'ADMIN' },
+      select: { id: true },
+    });
+
+    if (admin) {
+      await prisma.notification.create({
+        data: {
+          businessId: business.id,
+          userId: admin.id,
+          type: 'BOOKING_CREATED',
+          channel: 'PUSH',
+          title: 'Nueva reserva web',
+          body: `${name} reservó ${service.name} para el ${date} a las ${time}`,
+        },
+      });
+    }
+
+    res.status(201).json(booking);
+  } catch (error) {
+    console.error('Public booking create error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export { router as publicChatRouter };

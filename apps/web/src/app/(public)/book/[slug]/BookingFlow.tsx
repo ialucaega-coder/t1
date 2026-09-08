@@ -1,9 +1,32 @@
 'use client';
 
-import { useState } from 'react';
-import { Check, Clock, DollarSign, ArrowLeft, ArrowRight, CalendarDays } from 'lucide-react';
-import { MOCK_SERVICES } from '@/constants/services';
-import { TIME_SLOTS } from '@/constants/bookings';
+import { useState, useEffect, useCallback } from 'react';
+import { Check, Clock, DollarSign, ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+
+interface Service {
+  id: string;
+  name: string;
+  description: string | null;
+  price: number;
+  duration: number;
+  category: string;
+}
+
+interface Schedule {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+}
+
+interface BusinessInfo {
+  id: string;
+  name: string;
+  slug: string;
+  phone: string | null;
+  address: string | null;
+}
 
 interface BookingFlowProps {
   slug: string;
@@ -18,6 +41,8 @@ const STEPS: { id: Step; label: string }[] = [
   { id: 'confirm', label: 'Confirmación' },
 ];
 
+const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
 export function BookingFlow({ slug }: BookingFlowProps) {
   const [step, setStep] = useState<Step>('service');
   const [serviceId, setServiceId] = useState('');
@@ -27,12 +52,60 @@ export function BookingFlow({ slug }: BookingFlowProps) {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
-  const activeServices = MOCK_SERVICES.filter((s) => s.isActive);
-  const selectedService = activeServices.find((s) => s.id === serviceId);
+  const [business, setBusiness] = useState<BusinessInfo | null>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [loadingBiz, setLoadingBiz] = useState(true);
+  const [bizError, setBizError] = useState('');
+
+  const [slots, setSlots] = useState<string[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch(`${API_URL}/public/book/${slug}`);
+        if (!res.ok) throw new Error('Negocio no encontrado');
+        const data = await res.json();
+        setBusiness(data.business);
+        setServices(data.services);
+        setSchedules(data.schedules);
+      } catch {
+        setBizError('No se pudo cargar la información del negocio');
+      } finally {
+        setLoadingBiz(false);
+      }
+    }
+    load();
+  }, [slug]);
+
+  const fetchSlots = useCallback(async (d: string, sId: string) => {
+    setLoadingSlots(true);
+    setSlots([]);
+    setTime('');
+    try {
+      const res = await fetch(`${API_URL}/public/book/${slug}/slots?date=${d}&serviceId=${sId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSlots(data.slots);
+      }
+    } catch { /* ignore */ }
+    finally { setLoadingSlots(false); }
+  }, [slug]);
+
+  const selectedService = services.find((s) => s.id === serviceId);
   const today = new Date().toISOString().slice(0, 10);
-
   const stepIdx = STEPS.findIndex((s) => s.id === step);
+
+  const activeDays = schedules.map((s) => s.dayOfWeek);
+
+  function isDateAvailable(dateStr: string): boolean {
+    const d = new Date(dateStr + 'T12:00:00');
+    return activeDays.includes(d.getDay());
+  }
 
   const canNext = (): boolean => {
     switch (step) {
@@ -43,9 +116,26 @@ export function BookingFlow({ slug }: BookingFlowProps) {
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === 'confirm') {
-      setSubmitted(true);
+      setSubmitting(true);
+      setSubmitError('');
+      try {
+        const res = await fetch(`${API_URL}/public/book/${slug}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serviceId, date, time, name, phone, email }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || 'Error al crear reserva');
+        }
+        setSubmitted(true);
+      } catch (err) {
+        setSubmitError(err instanceof Error ? err.message : 'Error al crear reserva');
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
     const next = STEPS[stepIdx + 1];
@@ -57,6 +147,35 @@ export function BookingFlow({ slug }: BookingFlowProps) {
     if (prev) setStep(prev.id);
   };
 
+  function handleDateChange(d: string) {
+    setDate(d);
+    if (d && serviceId) {
+      if (isDateAvailable(d)) {
+        fetchSlots(d, serviceId);
+      } else {
+        setSlots([]);
+        setTime('');
+      }
+    }
+  }
+
+  if (loadingBiz) {
+    return (
+      <div className="flex items-center justify-center py-16 text-slate-400">
+        <Loader2 className="h-6 w-6 animate-spin mr-2" />
+        <span>Cargando...</span>
+      </div>
+    );
+  }
+
+  if (bizError || !business) {
+    return (
+      <div className="text-center py-16">
+        <p className="text-sm text-red-400">{bizError || 'Negocio no encontrado'}</p>
+      </div>
+    );
+  }
+
   if (submitted) {
     return (
       <div className="text-center py-16">
@@ -64,11 +183,14 @@ export function BookingFlow({ slug }: BookingFlowProps) {
           <Check className="h-8 w-8 text-emerald-400" />
         </div>
         <h2 className="text-xl font-bold text-white mb-2">Reserva confirmada</h2>
-        <p className="text-sm text-slate-400 mb-6">Te enviamos los detalles por WhatsApp/email.</p>
+        <p className="text-sm text-slate-400 mb-6">Te contactaremos para confirmar tu cita.</p>
         <div className="card-accent max-w-sm mx-auto text-left space-y-2">
           <p className="text-sm text-white font-medium">{selectedService?.name}</p>
           <p className="text-xs text-slate-400">{date} a las {time}</p>
           <p className="text-xs text-slate-400">{name} · {phone}</p>
+          {selectedService && (
+            <p className="text-sm font-bold text-brand-400">${selectedService.price.toLocaleString()}</p>
+          )}
         </div>
       </div>
     );
@@ -94,53 +216,84 @@ export function BookingFlow({ slug }: BookingFlowProps) {
       {step === 'service' && (
         <div className="space-y-3">
           <h2 className="text-lg font-semibold text-white">Elige un servicio</h2>
-          {activeServices.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setServiceId(s.id)}
-              className={`w-full text-left card-accent flex items-center justify-between transition-all ${
-                serviceId === s.id ? 'ring-2 ring-brand-500' : ''
-              }`}
-            >
-              <div>
-                <p className="text-sm font-medium text-white">{s.name}</p>
-                <p className="text-xs text-slate-400">{s.category}</p>
-              </div>
-              <div className="text-right">
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                  <Clock className="h-3 w-3" /> {s.duration} min
+          {services.length === 0 ? (
+            <p className="text-sm text-slate-400">No hay servicios disponibles en este momento.</p>
+          ) : (
+            services.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setServiceId(s.id)}
+                className={`w-full text-left card-accent flex items-center justify-between transition-all ${
+                  serviceId === s.id ? 'ring-2 ring-brand-500' : ''
+                }`}
+              >
+                <div>
+                  <p className="text-sm font-medium text-white">{s.name}</p>
+                  <p className="text-xs text-slate-400">{s.category}</p>
                 </div>
-                <div className="flex items-center gap-1 text-sm font-medium text-brand-400">
-                  <DollarSign className="h-3 w-3" /> {s.price.toLocaleString()}
+                <div className="text-right">
+                  <div className="flex items-center gap-1 text-xs text-slate-400">
+                    <Clock className="h-3 w-3" /> {s.duration} min
+                  </div>
+                  <div className="flex items-center gap-1 text-sm font-medium text-brand-400">
+                    <DollarSign className="h-3 w-3" /> {s.price.toLocaleString()}
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))}
+              </button>
+            ))
+          )}
         </div>
       )}
 
       {step === 'datetime' && (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-white">Elige fecha y hora</h2>
+
+          {schedules.length > 0 && (
+            <div className="text-xs text-slate-500">
+              Atendemos: {schedules.map((s) => `${DAY_NAMES[s.dayOfWeek]} ${s.startTime}–${s.endTime}`).join(' · ')}
+            </div>
+          )}
+
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Fecha</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" min={today} />
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => handleDateChange(e.target.value)}
+              className="input"
+              min={today}
+            />
+            {date && !isDateAvailable(date) && (
+              <p className="text-xs text-amber-400 mt-1">El negocio no atiende este día. Elegí otro día.</p>
+            )}
           </div>
+
           <div>
             <label className="text-xs text-slate-500 mb-2 block">Hora disponible</label>
-            <div className="grid grid-cols-4 gap-2">
-              {TIME_SLOTS.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTime(t)}
-                  className={`py-2 rounded-lg text-xs font-medium transition-colors ${
-                    time === t ? 'bg-brand-500 text-white' : 'bg-surface-200 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
+            {loadingSlots ? (
+              <div className="flex items-center gap-2 text-slate-400 text-sm py-4">
+                <Loader2 className="h-4 w-4 animate-spin" /> Consultando disponibilidad...
+              </div>
+            ) : !date ? (
+              <p className="text-xs text-slate-500">Seleccioná una fecha primero</p>
+            ) : slots.length === 0 ? (
+              <p className="text-xs text-slate-400">No hay horarios disponibles para esta fecha.</p>
+            ) : (
+              <div className="grid grid-cols-4 gap-2">
+                {slots.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTime(t)}
+                    className={`py-2 rounded-lg text-xs font-medium transition-colors ${
+                      time === t ? 'bg-brand-500 text-white' : 'bg-surface-200 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -166,6 +319,11 @@ export function BookingFlow({ slug }: BookingFlowProps) {
       {step === 'confirm' && (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-white">Confirma tu reserva</h2>
+          {submitError && (
+            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-xs text-red-400">
+              {submitError}
+            </div>
+          )}
           <div className="card-accent space-y-3">
             <div className="flex justify-between">
               <span className="text-xs text-slate-400">Servicio</span>
@@ -198,13 +356,18 @@ export function BookingFlow({ slug }: BookingFlowProps) {
 
       <div className="flex justify-between pt-4">
         {stepIdx > 0 ? (
-          <button onClick={handleBack} className="btn-secondary text-xs">
+          <button onClick={handleBack} className="btn-secondary text-xs" disabled={submitting}>
             <ArrowLeft className="h-3.5 w-3.5" /> Anterior
           </button>
         ) : <div />}
-        <button onClick={handleNext} disabled={!canNext()} className="btn-primary text-xs">
-          {step === 'confirm' ? 'Confirmar reserva' : 'Siguiente'}
-          {step !== 'confirm' && <ArrowRight className="h-3.5 w-3.5" />}
+        <button onClick={handleNext} disabled={!canNext() || submitting} className="btn-primary text-xs">
+          {submitting ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reservando...</>
+          ) : step === 'confirm' ? (
+            'Confirmar reserva'
+          ) : (
+            <>Siguiente <ArrowRight className="h-3.5 w-3.5" /></>
+          )}
         </button>
       </div>
     </div>
