@@ -3,20 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { servicesApi } from '@/lib/api/index';
 import type { Service } from '@/types';
-import { MOCK_SERVICES } from '@/constants/services';
-
-// Adapta los servicios mock (categoría como string) al shape real de la API
-// (categoría como objeto { id, name }).
-function adaptMockServices(): Service[] {
-  return MOCK_SERVICES.map((s) => ({
-    id: s.id,
-    name: s.name,
-    duration: s.duration,
-    price: s.price,
-    isActive: s.isActive,
-    category: { id: s.category, name: s.category },
-  }));
-}
 
 export interface UseServicesResult {
   services: Service[];
@@ -46,7 +32,6 @@ export function useServices(): UseServicesResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar servicios');
-          setServices(adaptMockServices());
         }
       } finally {
         if (!cancelled) setIsLoading(false);

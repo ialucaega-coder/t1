@@ -142,11 +142,23 @@ router.get('/book/:slug', async (req, res) => {
 
     const schedules = await prisma.schedule.findMany({
       where: { businessId: business.id, isActive: true },
-      select: { dayOfWeek: true, startTime: true, endTime: true },
+      select: { dayOfWeek: true, startTime: true, endTime: true, professionalId: true },
       orderBy: { dayOfWeek: 'asc' },
     });
 
-    res.json({ business, services, schedules });
+    const professionals = await prisma.professional.findMany({
+      where: { businessId: business.id, isAvailable: true },
+      select: { id: true, specialties: true, user: { select: { name: true } } },
+      orderBy: { user: { name: 'asc' } },
+    });
+
+    const profList = professionals.map((p) => ({
+      id: p.id,
+      name: p.user.name,
+      specialties: p.specialties,
+    }));
+
+    res.json({ business, services, schedules, professionals: profList });
   } catch (error) {
     console.error('Public booking info error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -155,7 +167,7 @@ router.get('/book/:slug', async (req, res) => {
 
 router.get('/book/:slug/slots', async (req, res) => {
   try {
-    const { date, serviceId } = req.query;
+    const { date, serviceId, professionalId } = req.query;
     if (!date || !serviceId) {
       res.status(400).json({ error: 'date and serviceId are required' });
       return;
@@ -184,8 +196,11 @@ router.get('/book/:slug/slots', async (req, res) => {
     const dateObj = new Date(date as string);
     const dayOfWeek = dateObj.getDay();
 
+    const schedWhere: any = { businessId: business.id, dayOfWeek, isActive: true };
+    if (professionalId) schedWhere.professionalId = professionalId as string;
+
     const schedules = await prisma.schedule.findMany({
-      where: { businessId: business.id, dayOfWeek, isActive: true },
+      where: schedWhere,
       select: { startTime: true, endTime: true },
     });
 
@@ -194,12 +209,15 @@ router.get('/book/:slug/slots', async (req, res) => {
       return;
     }
 
+    const bookingWhere: any = {
+      businessId: business.id,
+      date: dateObj,
+      status: { notIn: ['CANCELLED'] },
+    };
+    if (professionalId) bookingWhere.professionalId = professionalId as string;
+
     const existingBookings = await prisma.booking.findMany({
-      where: {
-        businessId: business.id,
-        date: dateObj,
-        status: { notIn: ['CANCELLED'] },
-      },
+      where: bookingWhere,
       select: { startTime: true, endTime: true },
     });
 
@@ -239,7 +257,7 @@ router.get('/book/:slug/slots', async (req, res) => {
 
 router.post('/book/:slug', async (req, res) => {
   try {
-    const { serviceId, date, time, name, phone, email } = req.body;
+    const { serviceId, professionalId: reqProfId, date, time, name, phone, email } = req.body;
 
     if (!serviceId || !date || !time || !name || !phone) {
       res.status(400).json({ error: 'Faltan campos obligatorios' });
@@ -286,17 +304,21 @@ router.post('/book/:slug', async (req, res) => {
     const endMin = h * 60 + m + service.duration;
     const endTime = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
 
-    const firstProfessional = await prisma.professional.findFirst({
-      where: { businessId: business.id },
-      select: { id: true },
-    });
+    let profId = reqProfId as string | undefined;
+    if (!profId) {
+      const first = await prisma.professional.findFirst({
+        where: { businessId: business.id, isAvailable: true },
+        select: { id: true },
+      });
+      profId = first?.id || '';
+    }
 
     const booking = await prisma.booking.create({
       data: {
         businessId: business.id,
         clientId: client.id,
         serviceId: service.id,
-        professionalId: firstProfessional?.id || '',
+        professionalId: profId,
         date: new Date(date),
         startTime: time,
         endTime,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Check, Clock, DollarSign, ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
+import { Check, Clock, DollarSign, ArrowLeft, ArrowRight, Loader2, User } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -20,6 +20,12 @@ interface Schedule {
   endTime: string;
 }
 
+interface Professional {
+  id: string;
+  name: string;
+  specialties: string[];
+}
+
 interface BusinessInfo {
   id: string;
   name: string;
@@ -32,9 +38,17 @@ interface BookingFlowProps {
   slug: string;
 }
 
-type Step = 'service' | 'datetime' | 'info' | 'confirm';
+type Step = 'service' | 'professional' | 'datetime' | 'info' | 'confirm';
 
-const STEPS: { id: Step; label: string }[] = [
+const STEPS_WITH_PROF: { id: Step; label: string }[] = [
+  { id: 'service', label: 'Servicio' },
+  { id: 'professional', label: 'Profesional' },
+  { id: 'datetime', label: 'Fecha y hora' },
+  { id: 'info', label: 'Tus datos' },
+  { id: 'confirm', label: 'Confirmación' },
+];
+
+const STEPS_NO_PROF: { id: Step; label: string }[] = [
   { id: 'service', label: 'Servicio' },
   { id: 'datetime', label: 'Fecha y hora' },
   { id: 'info', label: 'Tus datos' },
@@ -46,6 +60,7 @@ const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 export function BookingFlow({ slug }: BookingFlowProps) {
   const [step, setStep] = useState<Step>('service');
   const [serviceId, setServiceId] = useState('');
+  const [professionalId, setProfessionalId] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [name, setName] = useState('');
@@ -58,6 +73,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
   const [business, setBusiness] = useState<BusinessInfo | null>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [loadingBiz, setLoadingBiz] = useState(true);
   const [bizError, setBizError] = useState('');
 
@@ -73,6 +89,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
         setBusiness(data.business);
         setServices(data.services);
         setSchedules(data.schedules);
+        setProfessionals(data.professionals || []);
       } catch {
         setBizError('No se pudo cargar la información del negocio');
       } finally {
@@ -82,12 +99,14 @@ export function BookingFlow({ slug }: BookingFlowProps) {
     load();
   }, [slug]);
 
-  const fetchSlots = useCallback(async (d: string, sId: string) => {
+  const fetchSlots = useCallback(async (d: string, sId: string, profId?: string) => {
     setLoadingSlots(true);
     setSlots([]);
     setTime('');
     try {
-      const res = await fetch(`${API_URL}/public/book/${slug}/slots?date=${d}&serviceId=${sId}`);
+      let url = `${API_URL}/public/book/${slug}/slots?date=${d}&serviceId=${sId}`;
+      if (profId) url += `&professionalId=${profId}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setSlots(data.slots);
@@ -97,7 +116,9 @@ export function BookingFlow({ slug }: BookingFlowProps) {
   }, [slug]);
 
   const selectedService = services.find((s) => s.id === serviceId);
+  const selectedProfessional = professionals.find((p) => p.id === professionalId);
   const today = new Date().toISOString().slice(0, 10);
+  const STEPS = professionals.length > 1 ? STEPS_WITH_PROF : STEPS_NO_PROF;
   const stepIdx = STEPS.findIndex((s) => s.id === step);
 
   const activeDays = schedules.map((s) => s.dayOfWeek);
@@ -110,6 +131,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
   const canNext = (): boolean => {
     switch (step) {
       case 'service': return !!serviceId;
+      case 'professional': return !!professionalId;
       case 'datetime': return !!date && !!time;
       case 'info': return !!name.trim() && !!phone.trim();
       default: return true;
@@ -124,7 +146,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
         const res = await fetch(`${API_URL}/public/book/${slug}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceId, date, time, name, phone, email }),
+          body: JSON.stringify({ serviceId, professionalId: professionalId || undefined, date, time, name, phone, email }),
         });
         if (!res.ok) {
           const data = await res.json();
@@ -151,7 +173,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
     setDate(d);
     if (d && serviceId) {
       if (isDateAvailable(d)) {
-        fetchSlots(d, serviceId);
+        fetchSlots(d, serviceId, professionalId || undefined);
       } else {
         setSlots([]);
         setTime('');
@@ -245,6 +267,31 @@ export function BookingFlow({ slug }: BookingFlowProps) {
         </div>
       )}
 
+      {step === 'professional' && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold text-white">Elige un profesional</h2>
+          {professionals.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setProfessionalId(p.id)}
+              className={`w-full text-left card-accent flex items-center gap-3 transition-all ${
+                professionalId === p.id ? 'ring-2 ring-brand-500' : ''
+              }`}
+            >
+              <div className="h-10 w-10 rounded-full bg-brand-500/20 flex items-center justify-center shrink-0">
+                <User className="h-5 w-5 text-brand-400" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-white">{p.name}</p>
+                {p.specialties.length > 0 && (
+                  <p className="text-xs text-slate-400">{p.specialties.join(' · ')}</p>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
       {step === 'datetime' && (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-white">Elige fecha y hora</h2>
@@ -329,6 +376,12 @@ export function BookingFlow({ slug }: BookingFlowProps) {
               <span className="text-xs text-slate-400">Servicio</span>
               <span className="text-sm text-white font-medium">{selectedService?.name}</span>
             </div>
+            {selectedProfessional && (
+              <div className="flex justify-between">
+                <span className="text-xs text-slate-400">Profesional</span>
+                <span className="text-sm text-white">{selectedProfessional.name}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-xs text-slate-400">Duración</span>
               <span className="text-sm text-white">{selectedService?.duration} min</span>
