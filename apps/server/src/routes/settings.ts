@@ -1,9 +1,15 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { updateSettingsSchema, UpdateSettingsInput } from '../validators/settings';
+
+const updateAIProviderSchema = z.object({
+  apiKey: z.string().max(500).optional(),
+  isActive: z.boolean().optional(),
+});
 
 const router = Router();
 
@@ -114,6 +120,7 @@ router.put(
   '/ai-providers/:providerKey',
   requireAuth,
   requireRole('ADMIN'),
+  validate(updateAIProviderSchema),
   asyncHandler(async (req, res) => {
     const { providerKey } = req.params;
     const provider = AI_PROVIDERS.find((p) => p.key === providerKey);

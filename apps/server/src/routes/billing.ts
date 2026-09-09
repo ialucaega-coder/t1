@@ -1,7 +1,14 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+
+const subscribeSchema = z.object({
+  planId: z.string().min(1),
+  interval: z.enum(['monthly', 'yearly']).default('monthly'),
+});
 
 const router = Router();
 
@@ -29,8 +36,8 @@ router.get('/subscription', asyncHandler(async (req, res) => {
   res.json(subscription);
 }));
 
-router.post('/subscribe', asyncHandler(async (req, res) => {
-  const { planId, interval } = req.body as { planId: string; interval: 'monthly' | 'yearly' };
+router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, res) => {
+  const { planId, interval } = req.body;
   const businessId = req.auth!.businessId;
 
   const plan = await prisma.plan.findUnique({ where: { id: planId } });

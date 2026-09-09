@@ -1,8 +1,14 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
+
+const replySchema = z.object({
+  text: z.string().min(1).max(5000).transform((v) => v.trim()),
+});
 
 const router = Router();
 
@@ -57,11 +63,9 @@ router.get(
 router.post(
   '/:id/reply',
   requireAuth,
+  validate(replySchema),
   asyncHandler(async (req, res) => {
     const { text } = req.body;
-    if (!text || typeof text !== 'string' || text.trim().length === 0) {
-      return res.status(400).json({ error: 'Text is required' });
-    }
 
     const conversation = await prisma.conversation.findFirst({
       where: { id: req.params.id as string, businessId: req.auth!.businessId },
@@ -72,7 +76,7 @@ router.post(
       data: {
         conversationId: conversation.id,
         role: 'BOT',
-        text: text.trim(),
+        text,
       },
     });
 

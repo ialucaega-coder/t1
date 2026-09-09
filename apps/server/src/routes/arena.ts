@@ -1,7 +1,37 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+
+const createBuilderSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  systemPrompt: z.string().max(5000).optional(),
+  model: z.string().max(100).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+});
+
+const updateBuilderSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  systemPrompt: z.string().max(5000).optional(),
+  model: z.string().max(100).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED']).optional(),
+});
+
+const createIdeaSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  category: z.string().max(50).optional(),
+});
+
+const arenaChatSchema = z.object({
+  message: z.string().min(1).max(2000),
+  builderId: z.string().optional(),
+});
 
 const router = Router();
 
@@ -21,6 +51,7 @@ router.post(
   '/builders',
   requireAuth,
   requireRole('ADMIN'),
+  validate(createBuilderSchema),
   asyncHandler(async (req, res) => {
     const { name, description, systemPrompt, model, temperature } = req.body;
     const builder = await prisma.arenaBuilder.create({
@@ -41,6 +72,7 @@ router.patch(
   '/builders/:id',
   requireAuth,
   requireRole('ADMIN'),
+  validate(updateBuilderSchema),
   asyncHandler(async (req, res) => {
     const { name, description, systemPrompt, model, temperature, status } = req.body;
     const upd = await prisma.arenaBuilder.updateMany({
@@ -81,6 +113,7 @@ router.get(
 router.post(
   '/ideas',
   requireAuth,
+  validate(createIdeaSchema),
   asyncHandler(async (req, res) => {
     const { title, description, category } = req.body;
     const idea = await prisma.arenaIdea.create({
@@ -112,6 +145,7 @@ router.post(
 router.post(
   '/chat',
   requireAuth,
+  validate(arenaChatSchema),
   asyncHandler(async (req, res) => {
     const { message, builderId } = req.body;
     res.json({
