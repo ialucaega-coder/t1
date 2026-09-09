@@ -1,7 +1,24 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { paginationSchema, toSkipTake } from '../validators/common';
+
+const createAgencyClientSchema = z.object({
+  name: z.string().min(1).max(200),
+  plan: z.string().max(50).optional(),
+  status: z.enum(['active', 'trial', 'inactive', 'churned']).optional(),
+});
+
+const updateAgencyClientSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  plan: z.string().max(50).optional(),
+  status: z.enum(['active', 'trial', 'inactive', 'churned']).optional(),
+  bots: z.number().int().min(0).optional(),
+  revenue: z.number().min(0).optional(),
+});
 
 const router = Router();
 
@@ -32,14 +49,19 @@ router.get(
   '/clients',
   requireAuth,
   asyncHandler(async (req, res) => {
+    const pagination = paginationSchema.parse(req.query);
     const search = req.query.search as string | undefined;
     const where: any = { businessId: req.auth!.businessId };
     if (search) where.name = { contains: search, mode: 'insensitive' };
-    const clients = await prisma.agencyClient.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-    });
-    res.json(clients);
+    const [clients, total] = await Promise.all([
+      prisma.agencyClient.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        ...toSkipTake(pagination),
+      }),
+      prisma.agencyClient.count({ where }),
+    ]);
+    res.json({ data: clients, total, page: pagination.page, pageSize: pagination.pageSize });
   })
 );
 
@@ -47,6 +69,7 @@ router.post(
   '/clients',
   requireAuth,
   requireRole('ADMIN'),
+  validate(createAgencyClientSchema),
   asyncHandler(async (req, res) => {
     const { name, plan, status } = req.body;
     const client = await prisma.agencyClient.create({
@@ -65,6 +88,7 @@ router.patch(
   '/clients/:id',
   requireAuth,
   requireRole('ADMIN'),
+  validate(updateAgencyClientSchema),
   asyncHandler(async (req, res) => {
     const { name, plan, status, bots, revenue } = req.body;
     const upd = await prisma.agencyClient.updateMany({

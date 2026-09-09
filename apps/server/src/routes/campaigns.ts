@@ -5,6 +5,7 @@ import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
+import { paginationSchema, toSkipTake } from '../validators/common';
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(200),
@@ -27,11 +28,17 @@ router.get(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const campaigns = await prisma.campaign.findMany({
-      where: { businessId: req.auth!.businessId },
-      orderBy: { createdAt: 'desc' },
-    });
-    res.json(campaigns);
+    const pagination = paginationSchema.parse(req.query);
+    const where = { businessId: req.auth!.businessId };
+    const [campaigns, total] = await Promise.all([
+      prisma.campaign.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        ...toSkipTake(pagination),
+      }),
+      prisma.campaign.count({ where }),
+    ]);
+    res.json({ data: campaigns, total, page: pagination.page, pageSize: pagination.pageSize });
   })
 );
 

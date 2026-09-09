@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { paginationSchema, toSkipTake } from '../validators/common';
 
 const createBotSchema = z.object({
   name: z.string().min(1).max(100),
@@ -28,12 +29,18 @@ router.get(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const bots = await prisma.bot.findMany({
-      where: { businessId: req.auth!.businessId },
-      include: { _count: { select: { conversations: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
-    res.json(bots);
+    const pagination = paginationSchema.parse(req.query);
+    const where = { businessId: req.auth!.businessId };
+    const [bots, total] = await Promise.all([
+      prisma.bot.findMany({
+        where,
+        include: { _count: { select: { conversations: true } } },
+        orderBy: { createdAt: 'desc' },
+        ...toSkipTake(pagination),
+      }),
+      prisma.bot.count({ where }),
+    ]);
+    res.json({ data: bots, total, page: pagination.page, pageSize: pagination.pageSize });
   })
 );
 

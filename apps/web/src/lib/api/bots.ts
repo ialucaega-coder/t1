@@ -16,8 +16,9 @@ export interface Bot {
   _count?: { conversations: number };
 }
 
-export function list() {
-  return httpClient.get<Bot[]>('/bots');
+export async function list() {
+  const res = await httpClient.get<{ data: Bot[]; total: number }>('/bots');
+  return Array.isArray(res) ? res : res.data;
 }
 
 export function getById(id: string) {

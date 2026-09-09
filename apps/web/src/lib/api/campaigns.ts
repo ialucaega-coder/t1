@@ -21,8 +21,9 @@ export interface Recipient {
   phone: string | null;
 }
 
-export function list() {
-  return httpClient.get<Campaign[]>('/campaigns');
+export async function list() {
+  const res = await httpClient.get<{ data: Campaign[]; total: number }>('/campaigns');
+  return Array.isArray(res) ? res : res.data;
 }
 
 export function getRecipients(channel?: string) {

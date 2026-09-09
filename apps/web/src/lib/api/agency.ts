@@ -4,8 +4,9 @@ export function getStats() {
   return httpClient.get<any>('/agency/stats');
 }
 
-export function getClients() {
-  return httpClient.get<any[]>('/agency/clients');
+export async function getClients() {
+  const res = await httpClient.get<{ data: any[]; total: number }>('/agency/clients');
+  return Array.isArray(res) ? res : res.data;
 }
 
 export function createClient(data: any) {
