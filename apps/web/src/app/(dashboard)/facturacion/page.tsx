@@ -77,12 +77,14 @@ export default function FacturacionPage() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [interval, setInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [cancelling, setCancelling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
   }, []);
 
   async function loadData() {
+    setError(null);
     try {
       const [p, s, i] = await Promise.all([
         httpClient.get<Plan[]>('/billing/plans'),
@@ -93,7 +95,7 @@ export default function FacturacionPage() {
       setSubscription(s);
       setInvoices(i);
     } catch (err) {
-      console.error('Error loading billing data:', err);
+      setError('No se pudieron cargar los datos de facturación. Intentá de nuevo.');
     } finally {
       setLoading(false);
     }
@@ -144,6 +146,16 @@ export default function FacturacionPage() {
           Gestioná tu plan y revisá el historial de pagos.
         </p>
       </div>
+
+      {error && (
+        <div className="flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
+          <AlertTriangle className="h-5 w-5 text-red-400 shrink-0" />
+          <p className="text-sm text-red-300">{error}</p>
+          <button onClick={loadData} className="ml-auto text-xs text-red-400 hover:text-red-300 underline">
+            Reintentar
+          </button>
+        </div>
+      )}
 
       {/* Suscripción actual */}
       {subscription && (

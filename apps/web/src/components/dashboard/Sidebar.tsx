@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Flame, Settings, LogOut, ChevronUp } from 'lucide-react';
+import { Flame, Settings, LogOut, ChevronUp, Menu, X } from 'lucide-react';
 import { NAVIGATION } from '@/config';
 import { notificationsApi } from '@/lib/api/index';
 import { useAuth } from '@/lib/auth-context';
@@ -14,6 +14,7 @@ export function Sidebar() {
   const { user, business, logout } = useAuth();
   const [unreadCount, setUnreadCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -27,6 +28,10 @@ export function Sidebar() {
   }, [menuOpen]);
 
   useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
     notificationsApi.getUnreadCount().then((r) => setUnreadCount(r.unreadCount)).catch(() => {});
     const interval = setInterval(() => {
       notificationsApi.getUnreadCount().then((r) => setUnreadCount(r.unreadCount)).catch(() => {});
@@ -35,7 +40,29 @@ export function Sidebar() {
   }, []);
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-60 flex-col border-r border-slate-700/50 bg-surface">
+    <>
+      {/* Mobile hamburger button */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="fixed top-3 left-3 z-50 flex h-10 w-10 items-center justify-center rounded-lg bg-surface border border-slate-700/50 text-slate-400 hover:text-white lg:hidden"
+        aria-label="Abrir menú"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+    <aside className={cn(
+      "fixed left-0 top-0 z-50 flex h-screen w-60 flex-col border-r border-slate-700/50 bg-surface transition-transform duration-200",
+      "lg:translate-x-0 lg:z-40",
+      mobileOpen ? "translate-x-0" : "-translate-x-full"
+    )}>
       <div className="flex items-center gap-3 border-b border-slate-700/50 px-5 py-4">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-400">
           <Flame className="h-5 w-5 text-white" />
@@ -118,5 +145,6 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
+    </>
   );
 }
