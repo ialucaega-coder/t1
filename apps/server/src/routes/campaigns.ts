@@ -1,8 +1,25 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
+
+const createCampaignSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(1000).optional(),
+  channel: z.enum(['whatsapp', 'email', 'sms', 'telegram']).default('whatsapp'),
+  scheduledAt: z.string().datetime().optional(),
+});
+
+const updateCampaignSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional(),
+  status: z.enum(['draft', 'scheduled', 'sent', 'cancelled']).optional(),
+  channel: z.enum(['whatsapp', 'email', 'sms', 'telegram']).optional(),
+  scheduledAt: z.string().datetime().optional(),
+});
 
 const router = Router();
 
@@ -56,6 +73,7 @@ router.post(
   '/',
   requireAuth,
   requireRole('ADMIN'),
+  validate(createCampaignSchema),
   asyncHandler(async (req, res) => {
     const { name, description, channel, scheduledAt } = req.body;
     const campaign = await prisma.campaign.create({
@@ -75,6 +93,7 @@ router.patch(
   '/:id',
   requireAuth,
   requireRole('ADMIN'),
+  validate(updateCampaignSchema),
   asyncHandler(async (req, res) => {
     const { name, description, status, channel, scheduledAt } = req.body;
     const upd = await prisma.campaign.updateMany({

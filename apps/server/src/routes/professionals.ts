@@ -1,7 +1,25 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+
+const createProfessionalSchema = z.object({
+  name: z.string().min(1).max(100),
+  email: z.string().email(),
+  phone: z.string().max(30).optional(),
+  bio: z.string().max(500).optional(),
+  specialties: z.array(z.string()).max(20).optional(),
+  serviceIds: z.array(z.string()).optional(),
+});
+
+const updateProfessionalSchema = z.object({
+  bio: z.string().max(500).optional(),
+  specialties: z.array(z.string()).max(20).optional(),
+  isAvailable: z.boolean().optional(),
+  serviceIds: z.array(z.string()).optional(),
+});
 
 const router = Router();
 
@@ -95,11 +113,9 @@ router.get(
 router.post(
   '/',
   requireAuth,
+  validate(createProfessionalSchema),
   asyncHandler(async (req, res) => {
     const { name, email, phone, bio, specialties, serviceIds } = req.body;
-    if (!name || !email) {
-      throw new AppError(400, 'name and email are required');
-    }
 
     const businessId = req.auth!.businessId;
 
@@ -138,6 +154,7 @@ router.post(
 router.put(
   '/:id',
   requireAuth,
+  validate(updateProfessionalSchema),
   asyncHandler(async (req, res) => {
     const { bio, specialties, isAvailable, serviceIds } = req.body;
     const businessId = req.auth!.businessId;

@@ -60,6 +60,10 @@ const PROTECTED_PREFIXES = [
   '/servicios',
   '/superpoderes',
   '/whitelabel',
+  '/bots',
+  '/conversaciones',
+  '/movimientos',
+  '/ordenes',
 ];
 const AUTH_ONLY_PATHS = ['/login', '/register'];
 

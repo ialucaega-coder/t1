@@ -99,11 +99,13 @@ router.post(
   '/ideas/:id/vote',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const idea = await prisma.arenaIdea.update({
-      where: { id: req.params.id as string },
+    const idea = await prisma.arenaIdea.updateMany({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
       data: { votes: { increment: 1 } },
     });
-    res.json(idea);
+    if (idea.count === 0) return res.status(404).json({ error: 'Idea not found' });
+    const updated = await prisma.arenaIdea.findUnique({ where: { id: req.params.id as string } });
+    res.json(updated);
   })
 );
 

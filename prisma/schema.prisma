@@ -215,6 +215,8 @@ model Schedule {
   // Evita horarios duplicados para el mismo profesional y día
   @@unique([professionalId, dayOfWeek, startTime])
   @@index([professionalId])
+  @@index([businessId])
+  @@index([businessId, dayOfWeek, isActive])
   @@map("schedules")
 }
 
@@ -584,6 +586,7 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
+  @@index([createdAt])
   @@map("messages")
 }
 
@@ -748,8 +751,8 @@ model Plan {
   id            String   @id @default(cuid())
   name          String
   tier          PlanTier @unique
-  priceMonthly  Float
-  priceYearly   Float
+  priceMonthly  Decimal @db.Decimal(10, 2)
+  priceYearly   Decimal @db.Decimal(10, 2)
   currency      String   @default("USD")
   maxBots       Int      @default(1)
   maxMessages   Int      @default(500)
@@ -789,7 +792,7 @@ model Invoice {
   id          String        @id @default(cuid())
   number      String        @unique
   status      InvoiceStatus @default(DRAFT)
-  amount      Float
+  amount      Decimal @db.Decimal(10, 2)
   currency    String        @default("USD")
   description String?
   dueDate     DateTime

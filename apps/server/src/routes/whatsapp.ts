@@ -18,7 +18,11 @@ router.post(
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const fullUrl = `${protocol}://${req.get('host')}${req.originalUrl}`;
 
-    if (process.env.NODE_ENV === 'production' && signature) {
+    if (process.env.NODE_ENV === 'production') {
+      if (!signature) {
+        res.status(403).send('Missing signature');
+        return;
+      }
       const valid = validateWebhookSignature(fullUrl, req.body, signature);
       if (!valid) {
         res.status(403).send('Invalid signature');
@@ -36,8 +40,12 @@ router.post(
     }
 
     const bot = await prisma.bot.findFirst({
-      where: { channel: 'WHATSAPP', status: 'ACTIVE' },
-      include: { business: { select: { id: true } } },
+      where: {
+        channel: 'WHATSAPP',
+        status: 'ACTIVE',
+        business: { phone: { not: null } },
+      },
+      include: { business: { select: { id: true, phone: true } } },
     });
 
     if (!bot) {

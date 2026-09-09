@@ -1,7 +1,20 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+
+const inviteSchema = z.object({
+  name: z.string().max(100).optional(),
+  email: z.string().email(),
+  role: z.enum(['ADMIN', 'PROFESSIONAL', 'VIEWER']).default('VIEWER'),
+});
+
+const updateMemberSchema = z.object({
+  role: z.enum(['ADMIN', 'PROFESSIONAL', 'VIEWER']).optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+});
 
 const router = Router();
 
@@ -21,6 +34,7 @@ router.post(
   '/invite',
   requireAuth,
   requireRole('ADMIN'),
+  validate(inviteSchema),
   asyncHandler(async (req, res) => {
     const { name, email, role } = req.body;
     const existing = await prisma.teamMember.findUnique({
@@ -43,6 +57,7 @@ router.patch(
   '/members/:id',
   requireAuth,
   requireRole('ADMIN'),
+  validate(updateMemberSchema),
   asyncHandler(async (req, res) => {
     const { role, status } = req.body;
     const upd = await prisma.teamMember.updateMany({

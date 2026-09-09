@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { getIO } from '../lib/socket';
@@ -14,251 +15,221 @@ const chatSchema = z.object({
   contactPhone: z.string().max(30).optional(),
 });
 
-router.get('/bot/demo', async (_req, res) => {
-  try {
-    const bot = await prisma.bot.findFirst({
-      where: { status: 'ACTIVE' },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        id: true,
-        name: true,
-        business: { select: { name: true } },
-      },
-    });
+router.get('/bot/demo', asyncHandler(async (_req, res) => {
+  const bot = await prisma.bot.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      business: { select: { name: true } },
+    },
+  });
 
-    if (!bot) {
-      res.status(404).json({ error: 'No hay bots activos para demostración' });
-      return;
-    }
+  if (!bot) {
+    res.status(404).json({ error: 'No hay bots activos para demostración' });
+    return;
+  }
 
+  res.json({
+    id: bot.id,
+    name: bot.name,
+    businessName: bot.business.name,
+    status: 'ACTIVE',
+  });
+}));
+
+router.get('/bot/:botId', asyncHandler(async (req, res) => {
+  const bot = await prisma.bot.findUnique({
+    where: { id: String(req.params.botId) },
+    select: {
+      id: true,
+      name: true,
+      channel: true,
+      status: true,
+      business: { select: { id: true, name: true } },
+    },
+  });
+
+  if (!bot || bot.status === 'DRAFT') {
+    res.status(404).json({ error: 'Bot no encontrado' });
+    return;
+  }
+
+  res.json({
+    id: bot.id,
+    name: bot.name,
+    businessName: bot.business.name,
+    status: bot.status,
+  });
+}));
+
+router.post('/chat', asyncHandler(async (req, res) => {
+  const data = chatSchema.parse(req.body);
+
+  const bot = await prisma.bot.findUnique({
+    where: { id: data.botId },
+    select: { id: true, status: true, businessId: true },
+  });
+
+  if (!bot) {
+    res.status(404).json({ error: 'Bot no encontrado' });
+    return;
+  }
+
+  if (bot.status !== 'ACTIVE') {
     res.json({
-      id: bot.id,
-      name: bot.name,
-      businessName: bot.business.name,
-      status: 'ACTIVE',
+      text: 'El bot no está activo en este momento. Por favor, intentá más tarde.',
+      intent: 'FAQ',
+      actions: [],
+      conversationId: data.conversationId || '',
     });
-  } catch (error) {
-    console.error('Public demo bot error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return;
   }
-});
 
-router.get('/bot/:botId', async (req, res) => {
-  try {
-    const bot = await prisma.bot.findUnique({
-      where: { id: req.params.botId },
-      select: {
-        id: true,
-        name: true,
-        channel: true,
-        status: true,
-        business: { select: { id: true, name: true } },
-      },
-    });
+  const response = await processMessage(bot.businessId, data.message, 'WEB', {
+    conversationId: data.conversationId,
+    botId: data.botId,
+    contactName: data.contactName,
+    contactPhone: data.contactPhone,
+  });
 
-    if (!bot || bot.status === 'DRAFT') {
-      res.status(404).json({ error: 'Bot no encontrado' });
-      return;
-    }
-
-    res.json({
-      id: bot.id,
-      name: bot.name,
-      businessName: bot.business.name,
-      status: bot.status,
-    });
-  } catch (error) {
-    console.error('Public bot info error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.post('/chat', async (req, res) => {
-  try {
-    const data = chatSchema.parse(req.body);
-
-    const bot = await prisma.bot.findUnique({
-      where: { id: data.botId },
-      select: { id: true, status: true, businessId: true },
-    });
-
-    if (!bot) {
-      res.status(404).json({ error: 'Bot no encontrado' });
-      return;
-    }
-
-    if (bot.status !== 'ACTIVE') {
-      res.json({
-        text: 'El bot no está activo en este momento. Por favor, intentá más tarde.',
-        intent: 'FAQ',
-        actions: [],
-        conversationId: data.conversationId || '',
-      });
-      return;
-    }
-
-    const response = await processMessage(bot.businessId, data.message, 'WEB', {
-      conversationId: data.conversationId,
-      botId: data.botId,
-      contactName: data.contactName,
-      contactPhone: data.contactPhone,
-    });
-
-    res.json(response);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.errors });
-      return;
-    }
-    console.error('Public chat error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  res.json(response);
+}));
 
 // ─── Public Booking Endpoints ───────────────────────────────────────
 
-router.get('/book/:slug', async (req, res) => {
-  try {
-    const business = await prisma.business.findUnique({
-      where: { slug: req.params.slug },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        phone: true,
-        address: true,
-      },
-    });
+router.get('/book/:slug', asyncHandler(async (req, res) => {
+  const business = await prisma.business.findUnique({
+    where: { slug: String(req.params.slug) },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      phone: true,
+      address: true,
+    },
+  });
 
-    if (!business) {
-      res.status(404).json({ error: 'Negocio no encontrado' });
-      return;
-    }
-
-    const services = await prisma.service.findMany({
-      where: { businessId: business.id, isActive: true },
-      select: { id: true, name: true, description: true, price: true, duration: true, category: true },
-      orderBy: { name: 'asc' },
-    });
-
-    const schedules = await prisma.schedule.findMany({
-      where: { businessId: business.id, isActive: true },
-      select: { dayOfWeek: true, startTime: true, endTime: true, professionalId: true },
-      orderBy: { dayOfWeek: 'asc' },
-    });
-
-    const professionals = await prisma.professional.findMany({
-      where: { businessId: business.id, isAvailable: true },
-      select: { id: true, specialties: true, user: { select: { name: true } } },
-      orderBy: { user: { name: 'asc' } },
-    });
-
-    const profList = professionals.map((p) => ({
-      id: p.id,
-      name: p.user.name,
-      specialties: p.specialties,
-    }));
-
-    res.json({ business, services, schedules, professionals: profList });
-  } catch (error) {
-    console.error('Public booking info error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  if (!business) {
+    res.status(404).json({ error: 'Negocio no encontrado' });
+    return;
   }
-});
 
-router.get('/book/:slug/slots', async (req, res) => {
-  try {
-    const { date, serviceId, professionalId } = req.query;
-    if (!date || !serviceId) {
-      res.status(400).json({ error: 'date and serviceId are required' });
-      return;
-    }
+  const services = await prisma.service.findMany({
+    where: { businessId: business.id, isActive: true },
+    select: { id: true, name: true, description: true, price: true, duration: true, category: true },
+    orderBy: { name: 'asc' },
+  });
 
-    const business = await prisma.business.findUnique({
-      where: { slug: req.params.slug },
-      select: { id: true },
-    });
+  const schedules = await prisma.schedule.findMany({
+    where: { businessId: business.id, isActive: true },
+    select: { dayOfWeek: true, startTime: true, endTime: true, professionalId: true },
+    orderBy: { dayOfWeek: 'asc' },
+  });
 
-    if (!business) {
-      res.status(404).json({ error: 'Negocio no encontrado' });
-      return;
-    }
+  const professionals = await prisma.professional.findMany({
+    where: { businessId: business.id, isAvailable: true },
+    select: { id: true, specialties: true, user: { select: { name: true } } },
+    orderBy: { user: { name: 'asc' } },
+  });
 
-    const service = await prisma.service.findFirst({
-      where: { id: serviceId as string, businessId: business.id },
-      select: { duration: true },
-    });
+  const profList = professionals.map((p) => ({
+    id: p.id,
+    name: p.user.name,
+    specialties: p.specialties,
+  }));
 
-    if (!service) {
-      res.status(404).json({ error: 'Servicio no encontrado' });
-      return;
-    }
+  res.json({ business, services, schedules, professionals: profList });
+}));
 
-    const dateObj = new Date(date as string);
-    const dayOfWeek = dateObj.getDay();
+router.get('/book/:slug/slots', asyncHandler(async (req, res) => {
+  const { date, serviceId, professionalId } = req.query;
+  if (!date || !serviceId) {
+    res.status(400).json({ error: 'date and serviceId are required' });
+    return;
+  }
 
-    const schedWhere: any = { businessId: business.id, dayOfWeek, isActive: true };
-    if (professionalId) schedWhere.professionalId = professionalId as string;
+  const business = await prisma.business.findUnique({
+    where: { slug: String(req.params.slug) },
+    select: { id: true },
+  });
 
-    const schedules = await prisma.schedule.findMany({
-      where: schedWhere,
-      select: { startTime: true, endTime: true },
-    });
+  if (!business) {
+    res.status(404).json({ error: 'Negocio no encontrado' });
+    return;
+  }
 
-    if (schedules.length === 0) {
-      res.json({ slots: [] });
-      return;
-    }
+  const service = await prisma.service.findFirst({
+    where: { id: serviceId as string, businessId: business.id },
+    select: { duration: true },
+  });
 
-    const bookingWhere: any = {
-      businessId: business.id,
-      date: dateObj,
-      status: { notIn: ['CANCELLED'] },
-    };
-    if (professionalId) bookingWhere.professionalId = professionalId as string;
+  if (!service) {
+    res.status(404).json({ error: 'Servicio no encontrado' });
+    return;
+  }
 
-    const existingBookings = await prisma.booking.findMany({
-      where: bookingWhere,
-      select: { startTime: true, endTime: true },
-    });
+  const dateObj = new Date(date as string);
+  const dayOfWeek = dateObj.getDay();
 
-    const bookedRanges = existingBookings.map((b) => ({
-      start: b.startTime,
-      end: b.endTime,
-    }));
+  const schedWhere: any = { businessId: business.id, dayOfWeek, isActive: true };
+  if (professionalId) schedWhere.professionalId = professionalId as string;
 
-    const slots: string[] = [];
-    for (const sched of schedules) {
-      const [startH, startM] = sched.startTime.split(':').map(Number);
-      const [endH, endM] = sched.endTime.split(':').map(Number);
-      const startMin = startH * 60 + startM;
-      const endMin = endH * 60 + endM;
+  const schedules = await prisma.schedule.findMany({
+    where: schedWhere,
+    select: { startTime: true, endTime: true },
+  });
 
-      for (let t = startMin; t + service.duration <= endMin; t += 30) {
-        const slotStart = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-        const slotEndMin = t + service.duration;
-        const slotEnd = `${String(Math.floor(slotEndMin / 60)).padStart(2, '0')}:${String(slotEndMin % 60).padStart(2, '0')}`;
+  if (schedules.length === 0) {
+    res.json({ slots: [] });
+    return;
+  }
 
-        const isBooked = bookedRanges.some((b) => {
-          return slotStart < b.end && slotEnd > b.start;
-        });
+  const bookingWhere: any = {
+    businessId: business.id,
+    date: dateObj,
+    status: { notIn: ['CANCELLED'] },
+  };
+  if (professionalId) bookingWhere.professionalId = professionalId as string;
 
-        if (!isBooked) {
-          slots.push(slotStart);
-        }
+  const existingBookings = await prisma.booking.findMany({
+    where: bookingWhere,
+    select: { startTime: true, endTime: true },
+  });
+
+  const bookedRanges = existingBookings.map((b) => ({
+    start: b.startTime,
+    end: b.endTime,
+  }));
+
+  const slots: string[] = [];
+  for (const sched of schedules) {
+    const [startH, startM] = sched.startTime.split(':').map(Number);
+    const [endH, endM] = sched.endTime.split(':').map(Number);
+    const startMin = startH * 60 + startM;
+    const endMin = endH * 60 + endM;
+
+    for (let t = startMin; t + service.duration <= endMin; t += 30) {
+      const slotStart = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+      const slotEndMin = t + service.duration;
+      const slotEnd = `${String(Math.floor(slotEndMin / 60)).padStart(2, '0')}:${String(slotEndMin % 60).padStart(2, '0')}`;
+
+      const isBooked = bookedRanges.some((b) => {
+        return slotStart < b.end && slotEnd > b.start;
+      });
+
+      if (!isBooked) {
+        slots.push(slotStart);
       }
     }
-
-    res.json({ slots });
-  } catch (error) {
-    console.error('Public slots error:', error);
-    res.status(500).json({ error: 'Internal server error' });
   }
-});
 
-router.post('/book/:slug', async (req, res) => {
-  try {
-    const { serviceId, professionalId: reqProfId, date, time, name, phone, email } = req.body;
+  res.json({ slots });
+}));
+
+router.post('/book/:slug', asyncHandler(async (req, res) => {
+  const { serviceId, professionalId: reqProfId, date, time, name, phone, email } = req.body;
 
     if (!serviceId || !date || !time || !name || !phone) {
       res.status(400).json({ error: 'Faltan campos obligatorios' });
@@ -266,7 +237,7 @@ router.post('/book/:slug', async (req, res) => {
     }
 
     const business = await prisma.business.findUnique({
-      where: { slug: req.params.slug },
+      where: { slug: String(req.params.slug) },
       select: { id: true },
     });
 
@@ -355,10 +326,6 @@ router.post('/book/:slug', async (req, res) => {
     } catch { /* socket not initialized in tests */ }
 
     res.status(201).json(booking);
-  } catch (error) {
-    console.error('Public booking create error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+}));
 
 export { router as publicChatRouter };

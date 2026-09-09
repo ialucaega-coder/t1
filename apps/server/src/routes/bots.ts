@@ -1,7 +1,26 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+
+const createBotSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  channel: z.enum(['TELEGRAM', 'WHATSAPP', 'WEB']).default('TELEGRAM'),
+  config: z.record(z.unknown()).optional(),
+});
+
+const updateBotSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  channel: z.enum(['TELEGRAM', 'WHATSAPP', 'WEB']).optional(),
+  status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED']).optional(),
+  config: z.record(z.unknown()).optional(),
+  token: z.string().max(500).optional(),
+  webhookUrl: z.string().url().max(500).optional(),
+});
 
 const router = Router();
 
@@ -38,6 +57,7 @@ router.post(
   '/',
   requireAuth,
   requireRole('ADMIN'),
+  validate(createBotSchema),
   asyncHandler(async (req, res) => {
     const { name, description, channel, config } = req.body;
     const bot = await prisma.bot.create({
@@ -57,6 +77,7 @@ router.patch(
   '/:id',
   requireAuth,
   requireRole('ADMIN'),
+  validate(updateBotSchema),
   asyncHandler(async (req, res) => {
     const { name, description, channel, status, config, token, webhookUrl } = req.body;
     const bot = await prisma.bot.updateMany({
