@@ -1,9 +1,16 @@
 import { Router, type Request, type Response } from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler';
+import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { sendMessage, validateWebhookSignature, isConfigured } from '../services/whatsapp/client';
 import { requireAuth } from '../middleware/auth';
+
+const sendMessageSchema = z.object({
+  to: z.string().min(1),
+  message: z.string().min(1).max(5000),
+});
 
 const router = Router();
 
@@ -86,12 +93,9 @@ router.post(
 router.post(
   '/send',
   requireAuth,
+  validate(sendMessageSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const { to, message } = req.body;
-    if (!to || !message) {
-      res.status(400).json({ error: 'Se requiere "to" y "message"' });
-      return;
-    }
 
     const sid = await sendMessage(to, message);
     res.json({ success: true, sid });

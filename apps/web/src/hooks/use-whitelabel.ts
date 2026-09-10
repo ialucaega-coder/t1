@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { whitelabelApi } from '@/lib/api/index';
+import type { WhitelabelConfig } from '@/types/whitelabel';
 
-const DEFAULTS = {
+const DEFAULTS: WhitelabelConfig = {
   name: 'Mi Agencia',
   primaryColor: '#38BDF8',
   secondaryColor: '',
@@ -13,16 +14,16 @@ const DEFAULTS = {
 };
 
 export interface UseWhitelabelResult {
-  settings: typeof DEFAULTS;
+  settings: WhitelabelConfig;
   isLoading: boolean;
   error: string | null;
   saving: boolean;
   refetch: () => void;
-  saveSettings: (data: any) => Promise<void>;
+  saveSettings: (data: Partial<WhitelabelConfig>) => Promise<void>;
 }
 
 export function useWhitelabel(): UseWhitelabelResult {
-  const [settings, setSettings] = useState(DEFAULTS);
+  const [settings, setSettings] = useState<WhitelabelConfig>(DEFAULTS);
   const [isLoading, setIsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +63,7 @@ export function useWhitelabel(): UseWhitelabelResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  const saveSettings = useCallback(async (data: any) => {
+  const saveSettings = useCallback(async (data: Partial<WhitelabelConfig>) => {
     setSaving(true);
     try {
       await whitelabelApi.updateSettings(data);

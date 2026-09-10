@@ -1,15 +1,21 @@
 import { httpClient } from './http-client';
+import type { TeamMember } from '@/constants/team';
+
+export interface UpdateTeamMemberInput {
+  role?: string;
+  status?: string;
+}
 
 export function getMembers() {
-  return httpClient.get<any[]>('/team/members');
+  return httpClient.get<TeamMember[]>('/team/members');
 }
 
 export function inviteMember(data: { email: string; role: string }) {
-  return httpClient.post<any>('/team/invite', data);
+  return httpClient.post<TeamMember>('/team/invite', data);
 }
 
-export function updateMember(id: string, data: any) {
-  return httpClient.patch<any>(`/team/members/${id}`, data);
+export function updateMember(id: string, data: UpdateTeamMemberInput) {
+  return httpClient.patch<TeamMember>(`/team/members/${id}`, data);
 }
 
 export function removeMember(id: string) {

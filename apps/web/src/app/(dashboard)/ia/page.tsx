@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { Bot, Sparkles, Send, Loader2, CheckCircle2, XCircle, Copy, Check } from 'lucide-react';
 import * as aiApi from '@/lib/api/ai';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 import type { AIProviderStatus, AIProvidersResponse, ChatTurn } from '@/types';
 
 // Metadata solo visual (nombre lindo, descripción, colores) para cada proveedor
@@ -73,17 +75,9 @@ function ProvidersSection() {
       <p className="mono-label mb-2">PROVEEDORES</p>
       <h3 className="text-lg font-bold text-white mb-4">Estado de conexión</h3>
 
-      {loading && (
-        <div className="flex items-center gap-2 text-sm text-slate-400">
-          <Loader2 className="h-4 w-4 animate-spin" /> Consultando proveedores...
-        </div>
-      )}
+      {loading && <LoadingSpinner label="Cargando IA..." />}
 
-      {error && (
-        <div className="card-accent text-sm text-red-400 border-red-900/40">
-          No se pudo consultar /api/ai/providers: {error}
-        </div>
-      )}
+      {error && <ErrorAlert message={error} />}
 
       {!loading && !error && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

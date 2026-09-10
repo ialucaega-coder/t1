@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { teamApi } from '@/lib/api/index';
 import type { TeamMember } from '@/constants/team';
+import type { UpdateTeamMemberInput } from '@/lib/api/team';
 
 export interface UseTeamResult {
   members: TeamMember[];
@@ -10,7 +11,7 @@ export interface UseTeamResult {
   error: string | null;
   refetch: () => void;
   inviteMember: (data: { email: string; role: string }) => Promise<void>;
-  updateMember: (id: string, data: any) => Promise<void>;
+  updateMember: (id: string, data: UpdateTeamMemberInput) => Promise<void>;
   removeMember: (id: string) => Promise<void>;
 }
 
@@ -51,7 +52,7 @@ export function useTeam(): UseTeamResult {
     refetch();
   }, [refetch]);
 
-  const updateMember = useCallback(async (id: string, data: any) => {
+  const updateMember = useCallback(async (id: string, data: UpdateTeamMemberInput) => {
     await teamApi.updateMember(id, data);
     refetch();
   }, [refetch]);

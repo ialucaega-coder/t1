@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { agencyApi } from '@/lib/api/index';
 import { AGENCY_STATS } from '@/constants/agency';
 import type { AgencyClient } from '@/constants/agency';
+import type { CreateAgencyClientInput, UpdateAgencyClientInput } from '@/types/agency';
 
 export interface UseAgencyResult {
   stats: typeof AGENCY_STATS;
@@ -11,8 +12,8 @@ export interface UseAgencyResult {
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
-  createClient: (data: any) => Promise<void>;
-  updateClient: (id: string, data: any) => Promise<void>;
+  createClient: (data: CreateAgencyClientInput) => Promise<void>;
+  updateClient: (id: string, data: UpdateAgencyClientInput) => Promise<void>;
   deleteClient: (id: string) => Promise<void>;
 }
 
@@ -55,12 +56,12 @@ export function useAgency(): UseAgencyResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  const createClient = useCallback(async (data: any) => {
+  const createClient = useCallback(async (data: CreateAgencyClientInput) => {
     await agencyApi.createClient(data);
     refetch();
   }, [refetch]);
 
-  const updateClient = useCallback(async (id: string, data: any) => {
+  const updateClient = useCallback(async (id: string, data: UpdateAgencyClientInput) => {
     await agencyApi.updateClient(id, data);
     refetch();
   }, [refetch]);

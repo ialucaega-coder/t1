@@ -2,22 +2,29 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { arenaApi } from '@/lib/api/index';
+import type {
+  ArenaBuilder,
+  CreateBuilderInput,
+  ArenaIdea,
+  CreateIdeaInput,
+  ArenaChatResponse,
+} from '@/types/arena';
 
 export interface UseArenaResult {
-  builders: any[];
-  ideas: any[];
+  builders: ArenaBuilder[];
+  ideas: ArenaIdea[];
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
-  createBuilder: (data: any) => Promise<void>;
+  createBuilder: (data: CreateBuilderInput) => Promise<void>;
   voteIdea: (id: string) => Promise<void>;
-  createIdea: (data: any) => Promise<void>;
-  sendChat: (message: string) => Promise<any>;
+  createIdea: (data: CreateIdeaInput) => Promise<void>;
+  sendChat: (message: string) => Promise<ArenaChatResponse>;
 }
 
 export function useArena(): UseArenaResult {
-  const [builders, setBuilders] = useState<any[]>([]);
-  const [ideas, setIdeas] = useState<any[]>([]);
+  const [builders, setBuilders] = useState<ArenaBuilder[]>([]);
+  const [ideas, setIdeas] = useState<ArenaIdea[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -54,7 +61,7 @@ export function useArena(): UseArenaResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  const createBuilder = useCallback(async (data: any) => {
+  const createBuilder = useCallback(async (data: CreateBuilderInput) => {
     await arenaApi.createBuilder(data);
     refetch();
   }, [refetch]);
@@ -64,7 +71,7 @@ export function useArena(): UseArenaResult {
     refetch();
   }, [refetch]);
 
-  const createIdea = useCallback(async (data: any) => {
+  const createIdea = useCallback(async (data: CreateIdeaInput) => {
     await arenaApi.createIdea(data);
     refetch();
   }, [refetch]);

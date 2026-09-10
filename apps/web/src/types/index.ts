@@ -12,3 +12,6 @@ export * from './schedule';
 export * from './stats';
 export * from './common';
 export * from './ai';
+export * from './arena';
+export * from './whitelabel';
+export * from './agency';

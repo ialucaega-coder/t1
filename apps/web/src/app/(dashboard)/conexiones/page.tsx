@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { useConnections } from '@/hooks/use-connections';
 import { useBots } from '@/hooks/use-bots';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 import * as webhooksApi from '@/lib/api/webhooks';
 import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 
@@ -394,12 +396,15 @@ function WebhooksSection() {
   const [formUrl, setFormUrl] = useState('');
   const [formSecret, setFormSecret] = useState('');
   const [formEvents, setFormEvents] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchWebhooks = useCallback(async () => {
     try {
       const data = await webhooksApi.getWebhooks();
       setWebhooks(data);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudieron cargar los webhooks');
+    }
     setIsLoading(false);
   }, []);
 
@@ -483,10 +488,11 @@ function WebhooksSection() {
     setTimeout(() => setTestResult(null), 4000);
   }
 
-  if (isLoading) return null;
+  if (isLoading) return <LoadingSpinner label="Cargando conexiones..." />;
 
   return (
     <div>
+      {error && <ErrorAlert message={error} className="mb-4" />}
       <div className="flex items-center justify-between mb-4">
         <h3 className="mono-label">WEBHOOKS</h3>
         <button onClick={openCreate} className="btn-secondary text-xs">

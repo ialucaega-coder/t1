@@ -24,6 +24,7 @@ router.post(
   '/webhook/:businessId',
   asyncHandler(async (req, res) => {
     const businessId = String(req.params.businessId);
+    const queryToken = req.query.token as string | undefined;
 
     // Verificar que la conexión existe y está activa
     const connection = await prisma.connection.findFirst({
@@ -33,6 +34,13 @@ router.post(
     if (!connection) {
       // Responder 200 para que Telegram no reintente
       res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Validar token del webhook contra el botToken almacenado
+    const config = connection.config as { botToken?: string } | null;
+    if (!queryToken || !config?.botToken || queryToken !== config.botToken) {
+      res.status(403).json({ error: 'Invalid webhook token' });
       return;
     }
 
@@ -78,7 +86,7 @@ router.post(
 
     // Construir URL del webhook
     const baseUrl = process.env.API_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:4000';
-    const webhookUrl = `${baseUrl}/api/telegram/webhook/${businessId}`;
+    const webhookUrl = `${baseUrl}/api/telegram/webhook/${businessId}?token=${encodeURIComponent(botToken)}`;
 
     // Configurar webhook en Telegram
     try {

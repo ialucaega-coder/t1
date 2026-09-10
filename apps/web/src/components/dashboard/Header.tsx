@@ -210,7 +210,7 @@ export function Header() {
   const latestNotifications = notifications.slice(0, 5);
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700/50 bg-surface/80 backdrop-blur-sm px-8 py-4">
+    <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700/50 bg-surface/80 backdrop-blur-sm px-4 pl-14 lg:pl-8 lg:px-8 py-4">
       <div>
         <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500 mb-1">
           {page.breadcrumb}

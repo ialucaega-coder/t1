@@ -5,7 +5,14 @@ import { prisma } from '../lib/prisma';
 import { authRateLimit } from '../middleware/rateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
+import { z } from 'zod';
 import { registerSchema, loginSchema, RegisterInput, LoginInput } from '../validators/auth';
+
+const updateMeSchema = z.object({
+  name: z.string().max(100).optional(),
+  currentPassword: z.string().optional(),
+  newPassword: z.string().min(6).max(100).optional(),
+});
 import { auditAuthEvent } from '../middleware/audit';
 import type { Response } from 'express';
 
@@ -182,6 +189,7 @@ router.get(
 
 router.patch(
   '/me',
+  validate(updateMeSchema),
   asyncHandler(async (req, res) => {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) {

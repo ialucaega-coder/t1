@@ -1,15 +1,22 @@
 import { httpClient } from './http-client';
+import type {
+  ArenaBuilder,
+  CreateBuilderInput,
+  ArenaIdea,
+  CreateIdeaInput,
+  ArenaChatResponse,
+} from '@/types/arena';
 
 export function getBuilders() {
-  return httpClient.get<any[]>('/arena/builders');
+  return httpClient.get<ArenaBuilder[]>('/arena/builders');
 }
 
-export function createBuilder(data: any) {
-  return httpClient.post<any>('/arena/builders', data);
+export function createBuilder(data: CreateBuilderInput) {
+  return httpClient.post<ArenaBuilder>('/arena/builders', data);
 }
 
-export function updateBuilder(id: string, data: any) {
-  return httpClient.patch<any>(`/arena/builders/${id}`, data);
+export function updateBuilder(id: string, data: Partial<CreateBuilderInput>) {
+  return httpClient.patch<ArenaBuilder>(`/arena/builders/${id}`, data);
 }
 
 export function deleteBuilder(id: string) {
@@ -17,17 +24,17 @@ export function deleteBuilder(id: string) {
 }
 
 export function getIdeas() {
-  return httpClient.get<any[]>('/arena/ideas');
+  return httpClient.get<ArenaIdea[]>('/arena/ideas');
 }
 
-export function createIdea(data: any) {
-  return httpClient.post<any>('/arena/ideas', data);
+export function createIdea(data: CreateIdeaInput) {
+  return httpClient.post<ArenaIdea>('/arena/ideas', data);
 }
 
 export function voteIdea(id: string) {
-  return httpClient.post<any>(`/arena/ideas/${id}/vote`, {});
+  return httpClient.post<ArenaIdea>(`/arena/ideas/${id}/vote`, {});
 }
 
 export function sendChat(message: string) {
-  return httpClient.post<any>('/arena/chat', { message });
+  return httpClient.post<ArenaChatResponse>('/arena/chat', { message });
 }

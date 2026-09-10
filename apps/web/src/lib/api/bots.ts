@@ -8,7 +8,7 @@ export interface Bot {
   status: 'ACTIVE' | 'PAUSED' | 'DRAFT' | 'ERROR';
   token: string | null;
   webhookUrl: string | null;
-  config: any;
+  config: Record<string, unknown>;
   lastActiveAt: string | null;
   messageCount: number;
   createdAt: string;
@@ -25,7 +25,7 @@ export function getById(id: string) {
   return httpClient.get<Bot>(`/bots/${id}`);
 }
 
-export function create(data: Pick<Bot, 'name' | 'description' | 'channel'> & { config?: any }) {
+export function create(data: Pick<Bot, 'name' | 'description' | 'channel'> & { config?: Record<string, unknown> }) {
   return httpClient.post<Bot>('/bots', data);
 }
 

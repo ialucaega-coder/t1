@@ -70,7 +70,7 @@ export default function BotDetailPage() {
       setChannel(data.channel);
       setToken(data.token || '');
       setWebhookUrl(data.webhookUrl || '');
-      setSystemPrompt(data.config?.systemPrompt || '');
+      setSystemPrompt((data.config?.systemPrompt as string) || '');
     } catch {
       setError('No se pudo cargar el bot');
     } finally {
