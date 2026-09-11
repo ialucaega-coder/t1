@@ -17,8 +17,8 @@ import {
   Stethoscope,
   Dumbbell,
   Wrench,
-  Check,
 } from 'lucide-react';
+import PricingSection from '@/components/landing/PricingSection';
 
 export const metadata: Metadata = {
   title: 'Local B — Tu negocio en piloto automático',
@@ -96,40 +96,6 @@ const stats = [
   { value: '24/7', label: 'atención' },
 ];
 
-const plans = [
-  {
-    name: 'Gratis',
-    price: 0,
-    description: 'Para probar sin compromiso',
-    features: ['1 bot', '500 mensajes/mes', '100 contactos', 'Web Chat', 'Soporte por email'],
-    cta: 'Empezar gratis',
-    popular: false,
-  },
-  {
-    name: 'Starter',
-    price: 29,
-    description: 'Para negocios que arrancan',
-    features: ['3 bots', '5,000 mensajes/mes', '1,000 contactos', 'WhatsApp + Telegram', '5 superpoderes', 'Reportes básicos'],
-    cta: 'Elegir Starter',
-    popular: false,
-  },
-  {
-    name: 'Pro',
-    price: 79,
-    description: 'Para negocios en crecimiento',
-    features: ['10 bots', '25,000 mensajes/mes', '10,000 contactos', 'Todos los canales', 'Todos los superpoderes', 'API + Webhooks', 'White-label', 'Soporte prioritario'],
-    cta: 'Elegir Pro',
-    popular: true,
-  },
-  {
-    name: 'Enterprise',
-    price: 199,
-    description: 'Para agencias y equipos grandes',
-    features: ['Bots ilimitados', 'Mensajes ilimitados', 'Contactos ilimitados', 'Modo Agencia', 'Soporte dedicado', 'SLA 99.9%', 'Onboarding personalizado'],
-    cta: 'Contactar ventas',
-    popular: false,
-  },
-];
 
 export default function Home() {
   return (
@@ -335,48 +301,7 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="mt-16 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-              {plans.map((plan) => (
-                <div
-                  key={plan.name}
-                  className={`relative rounded-2xl border p-6 flex flex-col transition-transform hover:-translate-y-1 ${
-                    plan.popular
-                      ? 'border-brand-400/50 bg-brand-400/5 shadow-lg shadow-brand-400/10'
-                      : 'border-slate-700/50 bg-surface'
-                  }`}
-                >
-                  {plan.popular && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-400 px-3 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
-                      Popular
-                    </span>
-                  )}
-                  <h3 className="text-lg font-bold text-white">{plan.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1">{plan.description}</p>
-                  <div className="mt-4 mb-6">
-                    <span className="text-4xl font-bold text-white">${plan.price}</span>
-                    <span className="text-sm text-slate-500">/mes</span>
-                  </div>
-                  <ul className="space-y-2.5 flex-1 mb-6">
-                    {plan.features.map((feature) => (
-                      <li key={feature} className="flex items-start gap-2 text-sm text-slate-300">
-                        <Check className="h-4 w-4 text-brand-400 shrink-0 mt-0.5" />
-                        {feature}
-                      </li>
-                    ))}
-                  </ul>
-                  <Link
-                    href="/register"
-                    className={`w-full text-center rounded-lg py-2.5 text-sm font-medium transition-colors ${
-                      plan.popular
-                        ? 'bg-brand-400 text-white hover:bg-brand-500'
-                        : 'border border-slate-700 text-slate-300 hover:bg-surface-100 hover:text-white'
-                    }`}
-                  >
-                    {plan.cta}
-                  </Link>
-                </div>
-              ))}
-            </div>
+            <PricingSection />
           </div>
         </section>
 
