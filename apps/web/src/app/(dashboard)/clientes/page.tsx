@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useClients, useClientDetail } from '@/hooks/use-clients';
 import * as clientsApi from '@/lib/api/clients';
+import { EmptyState } from '@/components/common/EmptyState';
 import { ClientFormModal } from '@/components/clients/ClientFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -116,12 +117,11 @@ export default function ClientesPage() {
         {/* Client list */}
         <div className="lg:col-span-1 space-y-1">
           {clients.length === 0 && (
-            <div className="text-center py-12">
-              <Users className="h-10 w-10 text-slate-700 mx-auto mb-3" />
-              <p className="text-sm text-slate-500">
-                {search ? 'Sin resultados para la búsqueda.' : 'No hay clientes todavía.'}
-              </p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title={search ? 'Sin resultados para la búsqueda' : 'No hay clientes todavía'}
+              description={search ? undefined : 'Los clientes aparecerán cuando reserven o interactúen con tus bots.'}
+            />
           )}
           {clients.map((client) => {
             const bookings = client._count?.bookingsAsClient ?? 0;

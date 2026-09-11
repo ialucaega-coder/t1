@@ -1,11 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Clock, DollarSign, Pencil, Trash2, ToggleLeft, ToggleRight, Search } from 'lucide-react';
+import { Plus, Clock, DollarSign, Pencil, Trash2, ToggleLeft, ToggleRight, Search, Briefcase } from 'lucide-react';
 import { useServices } from '@/hooks/use-services';
 import { ServiceFormModal } from '@/components/services/ServiceFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 import type { Service } from '@/types';
 
 export default function ServiciosPage() {
@@ -89,9 +90,12 @@ export default function ServiciosPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-sm text-slate-500">{search ? 'Sin resultados' : 'No hay servicios creados'}</p>
-        </div>
+        <EmptyState
+          icon={Briefcase}
+          title={search ? 'Sin resultados' : 'No hay servicios creados'}
+          description={search ? undefined : 'Creá tu primer servicio para que tus clientes puedan reservar.'}
+          action={!search ? { label: 'Crear servicio', onClick: () => setEditing({} as Service) } : undefined}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {filtered.map((service) => (

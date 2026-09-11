@@ -1,11 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, DollarSign, Package, Pencil, Trash2, ToggleLeft, ToggleRight, Search } from 'lucide-react';
+import { Plus, DollarSign, Package, Pencil, Trash2, ToggleLeft, ToggleRight, Search, ShoppingBag } from 'lucide-react';
 import { useProducts } from '@/hooks/use-products';
 import { ProductFormModal } from '@/components/products/ProductFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 import type { Product } from '@/types';
 
 export default function ProductosPage() {
@@ -89,9 +90,12 @@ export default function ProductosPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-sm text-slate-500">{search ? 'Sin resultados' : 'No hay productos creados'}</p>
-        </div>
+        <EmptyState
+          icon={ShoppingBag}
+          title={search ? 'Sin resultados' : 'No hay productos creados'}
+          description={search ? undefined : 'Agregá productos a tu catálogo para vender online.'}
+          action={!search ? { label: 'Crear producto', onClick: () => setEditing({} as Product) } : undefined}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {filtered.map((product) => (
