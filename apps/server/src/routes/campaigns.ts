@@ -14,6 +14,10 @@ const createCampaignSchema = z.object({
   scheduledAt: z.string().datetime().optional(),
 });
 
+const sendCampaignSchema = z.object({
+  message: z.string().max(2000).optional(),
+});
+
 const updateCampaignSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
@@ -117,6 +121,7 @@ router.post(
   '/:id/send',
   requireAuth,
   requireRole('ADMIN'),
+  validate(sendCampaignSchema),
   asyncHandler(async (req, res) => {
     const id = String(req.params.id);
     const campaign = await prisma.campaign.findFirst({

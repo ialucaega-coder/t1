@@ -19,6 +19,7 @@ import { useCampaigns } from '@/hooks/use-campaigns';
 import * as campaignsApi from '@/lib/api/campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {
   draft: { label: 'Borrador', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
@@ -161,20 +162,12 @@ export default function CampanasPage() {
       {error && <ErrorAlert message={error} onRetry={refetch} />}
 
       {campaigns.length === 0 ? (
-        <div className="rounded-xl border border-slate-700 bg-slate-800/50 py-16 text-center">
-          <Megaphone className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-white mb-1">Sin campañas</h3>
-          <p className="text-sm text-slate-400 mb-4">
-            Creá tu primera campaña para llegar a todos tus clientes.
-          </p>
-          <button
-            onClick={openCreate}
-            className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            Crear campaña
-          </button>
-        </div>
+        <EmptyState
+          icon={Megaphone}
+          title="No hay campañas"
+          description="Creá tu primera campaña para llegar a todos tus clientes."
+          action={{ label: 'Crear campaña', onClick: openCreate }}
+        />
       ) : (
         <div className="grid gap-4">
           {campaigns.map((c) => {

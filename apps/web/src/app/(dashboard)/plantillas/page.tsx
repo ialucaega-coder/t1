@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  MessageCircle, Plus, X, Edit2, Trash2, Copy, Check, Search,
+  MessageCircle, Plus, X, Edit2, Trash2, Copy, Check, Search, FileText,
 } from 'lucide-react';
 import * as templatesApi from '@/lib/api/templates';
 import type { Template } from '@/lib/api/templates';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const CATEGORY_OPTIONS = ['Recordatorio', 'Marketing', 'Cobro', 'Post-venta', 'Reenganche', 'Otro'];
 
@@ -194,17 +195,12 @@ export default function PlantillasPage() {
       {isLoading ? (
         <LoadingSpinner label="Cargando plantillas..." />
       ) : filtered.length === 0 ? (
-        <div className="text-center py-16">
-          <MessageCircle className="h-10 w-10 text-slate-700 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">
-            {search ? 'Sin resultados' : 'No hay plantillas aún'}
-          </p>
-          {!search && (
-            <button onClick={openCreate} className="btn-primary text-xs mt-3">
-              <Plus className="h-3.5 w-3.5" /> Crear primera plantilla
-            </button>
-          )}
-        </div>
+        <EmptyState
+          icon={FileText}
+          title="No hay plantillas"
+          description={search ? 'Sin resultados para esa búsqueda' : 'No hay plantillas aún'}
+          action={!search ? { label: 'Crear primera plantilla', onClick: openCreate } : undefined}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {filtered.map((t) => (

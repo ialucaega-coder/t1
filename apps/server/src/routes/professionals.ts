@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import type { Prisma } from '@prisma/client';
 
 const createProfessionalSchema = z.object({
   name: z.string().min(1).max(100),
@@ -165,7 +166,7 @@ router.put(
     });
     if (!existing) throw new AppError(404, 'Professional not found');
 
-    const updateData: any = {};
+    const updateData: Prisma.ProfessionalUpdateInput = {};
     if (bio !== undefined) updateData.bio = bio;
     if (specialties !== undefined) updateData.specialties = specialties;
     if (isAvailable !== undefined) updateData.isAvailable = isAvailable;

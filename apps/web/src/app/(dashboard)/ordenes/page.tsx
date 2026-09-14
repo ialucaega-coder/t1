@@ -3,12 +3,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Package, Search, ChevronLeft, ChevronRight, Eye, X,
-  Clock, DollarSign, User, ShoppingBag,
+  Clock, DollarSign, User, ShoppingBag, ShoppingCart,
 } from 'lucide-react';
 import * as ordersApi from '@/lib/api/orders';
 import type { Order } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; next?: string; nextLabel?: string }> = {
   PENDING: { label: 'Pendiente', color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', next: 'CONFIRMED', nextLabel: 'Confirmar' },
@@ -123,10 +124,7 @@ export default function OrdenesPage() {
           {isLoading ? (
             <LoadingSpinner label="Cargando órdenes..." />
           ) : orders.length === 0 ? (
-            <div className="text-center py-16">
-              <Package className="h-10 w-10 text-slate-700 mx-auto mb-3" />
-              <p className="text-sm text-slate-500">No hay órdenes {statusFilter && 'con ese estado'}</p>
-            </div>
+            <EmptyState icon={ShoppingCart} title="No hay órdenes" description={statusFilter ? 'No hay órdenes con ese estado' : undefined} />
           ) : (
             <>
               {orders.map((order) => {

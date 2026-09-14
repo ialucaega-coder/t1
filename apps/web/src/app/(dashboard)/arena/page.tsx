@@ -5,6 +5,7 @@ import { Send, Bot, User, Clock, Zap, Trophy, Github, ThumbsUp, Upload, Code2, L
 import { useArena } from '@/hooks/use-arena';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import type { ArenaBuilder, ArenaIdea } from '@/types/arena';
 
 type Tab = 'chat' | 'builders' | 'ideas';
 
@@ -65,8 +66,8 @@ export default function ArenaPage() {
     } finally { setIsTyping(false); }
   };
 
-  const podio = builders.filter((b: any) => b.rank <= 3).sort((a: any, b: any) => a.rank - b.rank);
-  const ranking = builders.filter((b: any) => b.rank > 3).sort((a: any, b: any) => a.rank - b.rank);
+  const podio = builders.filter((b: ArenaBuilder) => b.rank <= 3).sort((a: ArenaBuilder, b: ArenaBuilder) => a.rank - b.rank);
+  const ranking = builders.filter((b: ArenaBuilder) => b.rank > 3).sort((a: ArenaBuilder, b: ArenaBuilder) => a.rank - b.rank);
 
   return (
     <div className="space-y-6">
@@ -178,7 +179,7 @@ export default function ArenaPage() {
                 </div>
                 {podio.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {podio.map((entry: any) => (
+                    {podio.map((entry: ArenaBuilder) => (
                       <div key={entry.id} className="card-accent">
                         <div className="flex items-center gap-2 mb-3">
                           <span className="text-xl">{entry.rank === 1 ? String.fromCodePoint(0x1F947) : entry.rank === 2 ? String.fromCodePoint(0x1F948) : String.fromCodePoint(0x1F949)}</span>
@@ -207,7 +208,7 @@ export default function ArenaPage() {
                 <div>
                   <p className="mono-label mb-3">RANKING</p>
                   <div className="space-y-2">
-                    {ranking.map((entry: any) => (
+                    {ranking.map((entry: ArenaBuilder) => (
                       <div key={entry.id} className="card flex items-center gap-4">
                         <span className="text-lg font-bold text-slate-500 w-8">{entry.rank}</span>
                         <div className="h-7 w-7 rounded-full bg-brand-400/20 flex items-center justify-center text-[10px] font-bold text-brand-400">
@@ -235,7 +236,7 @@ export default function ArenaPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {ideas.map((idea: any) => (
+              {ideas.map((idea: ArenaIdea) => (
                 <div key={idea.id} className="card flex items-center gap-4">
                   <button onClick={() => voteIdea(idea.id)} className="flex flex-col items-center gap-0.5 text-slate-400 hover:text-brand-400">
                     <ThumbsUp className="h-4 w-4" /><span className="text-xs font-bold">{idea.votes || 0}</span>

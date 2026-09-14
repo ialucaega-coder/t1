@@ -13,6 +13,9 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { httpClient } from '@/lib/api';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 interface Plan {
   id: string;
@@ -131,11 +134,7 @@ export default function FacturacionPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-8 w-8 text-sky-400 animate-spin" />
-      </div>
-    );
+    return <LoadingSpinner label="Cargando facturación..." />;
   }
 
   return (
@@ -147,15 +146,7 @@ export default function FacturacionPage() {
         </p>
       </div>
 
-      {error && (
-        <div className="flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
-          <AlertTriangle className="h-5 w-5 text-red-400 shrink-0" />
-          <p className="text-sm text-red-300">{error}</p>
-          <button onClick={loadData} className="ml-auto text-xs text-red-400 hover:text-red-300 underline">
-            Reintentar
-          </button>
-        </div>
-      )}
+      {error && <ErrorAlert message={error} onRetry={loadData} />}
 
       {/* Suscripción actual */}
       {subscription && (
@@ -326,10 +317,7 @@ export default function FacturacionPage() {
           </h2>
         </div>
         {invoices.length === 0 ? (
-          <div className="px-6 py-12 text-center text-slate-400">
-            <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p>No hay facturas aún</p>
-          </div>
+          <EmptyState icon={FileText} title="No hay facturas" description="No hay facturas aún" />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

@@ -11,9 +11,10 @@ import { SalesHistory } from '@/components/pos/SalesHistory';
 import { PosStats } from '@/components/pos/PosStats';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 import {
   ShoppingCart, History, Wallet, BarChart3, Search,
-  Trash2, User, ReceiptText,
+  Trash2, User, ReceiptText, ShoppingBag,
 } from 'lucide-react';
 
 type Tab = 'venta' | 'historial' | 'caja' | 'resumen';
@@ -121,11 +122,7 @@ export default function POSPage() {
             {/* Items del carrito */}
             <div className="flex-1 space-y-1.5 overflow-y-auto min-h-0">
               {cart.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-slate-500">
-                  <ShoppingCart className="h-10 w-10 mb-2 opacity-30" />
-                  <p className="text-sm">Carrito vacío</p>
-                  <p className="text-xs mt-1">Hacé clic en un producto para agregar</p>
-                </div>
+                <EmptyState icon={ShoppingBag} title="Carrito vacío" description="Hacé clic en un producto para agregar" />
               ) : (
                 cart.map((item) => (
                   <CartItem

@@ -9,6 +9,8 @@ import type { Template } from '@/lib/api/templates';
 import { BUSINESS_TEMPLATES as PRESETS } from '@/constants/business-templates';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
+import { Building2 } from 'lucide-react';
 
 export default function PlantillasNegocioPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -294,10 +296,7 @@ export default function PlantillasNegocioPage() {
 
       {/* Empty state */}
       {!isLoading && templates.length === 0 && availablePresets.length === 0 && (
-        <div className="text-center py-16">
-          <Store className="h-10 w-10 text-slate-700 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Todas las plantillas fueron instaladas</p>
-        </div>
+        <EmptyState icon={Building2} title="No hay plantillas" description="Todas las plantillas fueron instaladas" />
       )}
     </div>
   );

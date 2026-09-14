@@ -1,11 +1,15 @@
 export interface ArenaBuilder {
   id: string;
   name: string;
+  title: string;
   description: string;
   systemPrompt: string;
   model: string;
   temperature: number;
   status: 'ACTIVE' | 'DRAFT' | 'ARCHIVED';
+  rank: number;
+  votes: number;
+  github?: string;
   businessId: string;
   createdAt: string;
   updatedAt: string;

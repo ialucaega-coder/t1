@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift, Trash2 } from 'lucide-react';
+import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift, Trash2, Store } from 'lucide-react';
 import { useMarketplace } from '@/hooks/use-marketplace';
 import { MARKETPLACE_CATEGORIES, type MarketplaceCategory } from '@/constants/marketplace';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const iconMap: Record<string, React.ElementType> = {
   'calendar': Calendar, 'shopping-bag': ShoppingBag, 'heart-pulse': HeartPulse,
@@ -99,7 +100,7 @@ export default function MarketplacePage() {
       </div>
 
       {filtered.length === 0 && (
-        <div className="text-center py-12"><p className="text-sm text-slate-500">No se encontraron templates para esta búsqueda.</p></div>
+        <EmptyState icon={Store} title="No hay items" description="No se encontraron templates para esta búsqueda." />
       )}
     </div>
   );

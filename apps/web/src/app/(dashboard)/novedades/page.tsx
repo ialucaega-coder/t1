@@ -14,7 +14,7 @@ import {
 import { useNotifications } from '@/hooks/use-notifications';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState } from '@/components/common/EmptyState';
 import type { AppNotification } from '@/types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────

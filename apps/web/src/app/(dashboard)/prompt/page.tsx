@@ -3,13 +3,14 @@
 import { useState } from 'react';
 import {
   Plus, Copy, Check, Pencil, Trash2, X, Save, FileText,
-  Loader2, ToggleLeft, ToggleRight,
+  Loader2, ToggleLeft, ToggleRight, MessageSquare,
 } from 'lucide-react';
 import { usePrompts } from '@/hooks/use-prompts';
 import { useClipboard } from '@/hooks';
 import * as promptsApi from '@/lib/api/prompts';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 
 const CATEGORIES = ['General', 'Reservas', 'Notificaciones', 'Seguimiento', 'Ventas', 'Soporte'];
@@ -108,13 +109,12 @@ export default function PromptPage() {
 
       {/* Grid */}
       {prompts.length === 0 ? (
-        <div className="text-center py-12">
-          <FileText className="h-10 w-10 text-slate-700 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">No hay prompts todavía.</p>
-          <button onClick={openCreate} className="btn-primary text-xs mt-3">
-            <Plus className="h-3.5 w-3.5" /> Crear primer prompt
-          </button>
-        </div>
+        <EmptyState
+          icon={MessageSquare}
+          title="No hay prompts"
+          description="No hay prompts todavía."
+          action={{ label: 'Crear primer prompt', onClick: openCreate }}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {prompts.map((prompt) => (

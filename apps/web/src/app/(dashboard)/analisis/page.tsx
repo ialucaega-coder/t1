@@ -6,6 +6,7 @@ import { useAnalytics } from '@/hooks/use-analytics';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const TABS = [
   { id: 'insights', label: 'Insights', icon: Brain },
@@ -274,11 +275,7 @@ export default function AnalisisPage() {
           {campaignsLoading ? (
             <LoadingSpinner label="Cargando campañas..." />
           ) : campaigns.length === 0 ? (
-            <div className="card-accent text-center py-12">
-              <Megaphone className="h-12 w-12 text-slate-700 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-slate-400 mb-2">Sin campañas todavía</h3>
-              <p className="text-sm text-slate-500 max-w-sm mx-auto">Creá tu primera campaña para enviar mensajes masivos por WhatsApp.</p>
-            </div>
+            <EmptyState icon={BarChart3} title="Sin datos" description="Creá tu primera campaña para enviar mensajes masivos por WhatsApp." />
           ) : (
             <div className="space-y-2">
               {campaigns.map((c) => (

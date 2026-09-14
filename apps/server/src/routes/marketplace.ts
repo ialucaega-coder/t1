@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import type { Prisma } from '@prisma/client';
 
 const router = Router();
 
@@ -30,7 +31,7 @@ router.get(
     await ensureDefaults();
     const category = req.query.category as string | undefined;
     const search = req.query.search as string | undefined;
-    const where: any = { isPublished: true };
+    const where: Prisma.MarketplaceItemWhereInput = { isPublished: true };
     if (category && category !== 'Todos') where.category = category;
     if (search) where.name = { contains: search, mode: 'insensitive' };
     const items = await prisma.marketplaceItem.findMany({

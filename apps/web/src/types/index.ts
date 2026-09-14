@@ -15,3 +15,5 @@ export * from './ai';
 export * from './arena';
 export * from './whitelabel';
 export * from './agency';
+export * from './analytics';
+export * from './marketplace';

@@ -1,23 +1,30 @@
 import { httpClient } from './http-client';
+import type {
+  AnalyticsKpi,
+  AnalyticsConversation,
+  AnalyticsSatisfaction,
+  AnalyticsImprovement,
+  AnalyticsCost,
+} from '@/types/analytics';
 
 export function getKpi() {
-  return httpClient.get<any>('/analytics/kpi');
+  return httpClient.get<AnalyticsKpi>('/analytics/kpi');
 }
 
 export function getConversations() {
-  return httpClient.get<any[]>('/analytics/conversations');
+  return httpClient.get<AnalyticsConversation[]>('/analytics/conversations');
 }
 
 export function getSatisfaction() {
-  return httpClient.get<any[]>('/analytics/satisfaction');
+  return httpClient.get<AnalyticsSatisfaction[]>('/analytics/satisfaction');
 }
 
 export function getImprovements() {
-  return httpClient.get<any[]>('/analytics/improvements');
+  return httpClient.get<AnalyticsImprovement[]>('/analytics/improvements');
 }
 
 export function getCosts() {
-  return httpClient.get<any[]>('/analytics/costs');
+  return httpClient.get<AnalyticsCost[]>('/analytics/costs');
 }
 
 export function getMetrics() {

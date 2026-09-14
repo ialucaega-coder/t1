@@ -3,12 +3,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign, ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight,
-  Plus, X, Wallet, CreditCard, Building, QrCode, Clock, Download,
+  Plus, X, Wallet, CreditCard, Building, QrCode, Clock, Download, ArrowUpDown,
 } from 'lucide-react';
 import * as transactionsApi from '@/lib/api/transactions';
 import type { Transaction } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof ArrowUpRight }> = {
   SALE: { label: 'Venta', color: 'text-emerald-400', icon: ArrowUpRight },
@@ -210,10 +211,7 @@ export default function MovimientosPage() {
       {isLoading ? (
         <LoadingSpinner label="Cargando movimientos..." />
       ) : transactions.length === 0 ? (
-        <div className="text-center py-16">
-          <DollarSign className="h-10 w-10 text-slate-700 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">No hay movimientos {typeFilter && 'con ese filtro'}</p>
-        </div>
+        <EmptyState icon={ArrowUpDown} title="No hay movimientos" description={typeFilter ? 'No hay movimientos con ese filtro' : undefined} />
       ) : (
         <div className="space-y-1.5">
           {transactions.map((tx) => {

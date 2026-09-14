@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { UserPlus, Shield, MoreVertical, Mail, Clock } from 'lucide-react';
+import { UserPlus, Shield, MoreVertical, Mail, Clock, Users } from 'lucide-react';
 import { useTeam } from '@/hooks/use-team';
 import { ROLE_CONFIG, type TeamRole } from '@/constants/team';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export default function EquipoPage() {
   const { members, isLoading, error, refetch, inviteMember } = useTeam();
@@ -127,7 +128,7 @@ export default function EquipoPage() {
             );
           })}
           {filtered.length === 0 && (
-            <div className="text-center py-8"><p className="text-sm text-slate-500">No se encontraron miembros</p></div>
+            <EmptyState icon={Users} title="Sin resultados" description="No se encontraron miembros con esa búsqueda" />
           )}
         </div>
       </div>
