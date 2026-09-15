@@ -148,7 +148,7 @@ export default function ConversacionesPage() {
 
       {/* Filters + Search */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5 flex-wrap">
           {[
             { value: '', label: 'Todas' },
             { value: 'OPEN', label: 'Abiertas' },
@@ -168,7 +168,7 @@ export default function ConversacionesPage() {
             </button>
           ))}
         </div>
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
           <input
             type="text"
@@ -260,7 +260,7 @@ export default function ConversacionesPage() {
           {selectedId && detail && (
             <>
               {/* Chat header */}
-              <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
+              <div className="flex flex-wrap items-center justify-between gap-2 p-4 border-b border-slate-700/50">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-full bg-brand-400/10 flex items-center justify-center">
                     <User className="h-5 w-5 text-brand-400" />

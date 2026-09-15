@@ -8,6 +8,17 @@ import {
   BarChart3,
 } from 'lucide-react';
 
+interface TransactionRecord {
+  id: string;
+  amount: string | number;
+  type: string;
+  paymentMethod: string;
+  reference: string | null;
+  notes: string | null;
+  createdAt: string;
+  orderId: string | null;
+}
+
 interface DailyStats {
   totalSales: number;
   transactionCount: number;
@@ -36,8 +47,8 @@ export function PosStats() {
     setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: any[] }>(`/transactions?from=${today}&pageSize=500`);
-      const txs: any[] = res.data || [];
+      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&pageSize=500`);
+      const txs: TransactionRecord[] = res.data || [];
 
       const byMethod: Record<string, { count: number; total: number }> = {};
       const hourBuckets: Record<number, { sales: number; count: number }> = {};
@@ -66,7 +77,7 @@ export function PosStats() {
         hourly.push({ hour: h, ...(hourBuckets[h] || { sales: 0, count: 0 }) });
       }
 
-      const totalSales = txs.reduce((s: number, t: any) => s + Number(t.amount), 0);
+      const totalSales = txs.reduce((s: number, t: TransactionRecord) => s + Number(t.amount), 0);
 
       setStats({
         totalSales,

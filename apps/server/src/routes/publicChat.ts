@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
@@ -173,7 +174,7 @@ router.get('/book/:slug/slots', asyncHandler(async (req, res) => {
   const dateObj = new Date(date as string);
   const dayOfWeek = dateObj.getDay();
 
-  const schedWhere: any = { businessId: business.id, dayOfWeek, isActive: true };
+  const schedWhere: Prisma.ScheduleWhereInput = { businessId: business.id, dayOfWeek, isActive: true };
   if (professionalId) schedWhere.professionalId = professionalId as string;
 
   const schedules = await prisma.schedule.findMany({
@@ -186,7 +187,7 @@ router.get('/book/:slug/slots', asyncHandler(async (req, res) => {
     return;
   }
 
-  const bookingWhere: any = {
+  const bookingWhere: Prisma.BookingWhereInput = {
     businessId: business.id,
     date: dateObj,
     status: { notIn: ['CANCELLED'] },

@@ -340,7 +340,7 @@ export default function DashboardPage() {
               const channel = CHANNEL_LABELS[bot.channel] || CHANNEL_LABELS.WEBCHAT;
               const status = STATUS_LABELS[bot.status] || STATUS_LABELS.DRAFT;
               return (
-                <div key={bot.id} className="card flex items-center gap-4">
+                <div key={bot.id} className="card flex flex-wrap items-center gap-4">
                   <div className="h-10 w-10 rounded-lg bg-brand-400/10 flex items-center justify-center shrink-0">
                     <Bot className="h-5 w-5 text-brand-400" />
                   </div>

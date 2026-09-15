@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 
@@ -21,9 +22,9 @@ router.get(
     const status = req.query.status as string | undefined;
     const channel = req.query.channel as string | undefined;
 
-    const where: any = { businessId: req.auth!.businessId };
-    if (status) where.status = status;
-    if (channel) where.channel = channel;
+    const where: Prisma.ConversationWhereInput = { businessId: req.auth!.businessId };
+    if (status) where.status = status as Prisma.ConversationWhereInput['status'];
+    if (channel) where.channel = channel as Prisma.ConversationWhereInput['channel'];
 
     const [conversations, total] = await Promise.all([
       prisma.conversation.findMany({

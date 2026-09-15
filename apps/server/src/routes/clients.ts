@@ -4,6 +4,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { listClientsQuerySchema, updateClientSchema } from '../validators/clients';
 import { toSkipTake } from '../validators/common';
+import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 
@@ -31,7 +32,7 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const query = listClientsQuerySchema.parse(req.query);
-    const where: any = {
+    const where: Prisma.UserWhereInput = {
       businessId: req.auth!.businessId,
       role: 'CLIENT',
       deletedAt: null,

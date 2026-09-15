@@ -11,10 +11,15 @@ interface ChatMessage {
   timestamp: Date;
 }
 
+interface ChatAction {
+  type: 'createBooking' | 'showCatalog' | 'checkAvailability' | 'escalateToHuman';
+  payload?: Record<string, unknown>;
+}
+
 interface ChatResponse {
   text: string;
   intent: string;
-  actions: any[];
+  actions: ChatAction[];
   conversationId: string;
 }
 

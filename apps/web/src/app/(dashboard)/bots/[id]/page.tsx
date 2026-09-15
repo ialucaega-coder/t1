@@ -130,7 +130,7 @@ export default function BotDetailPage() {
       {error && <ErrorAlert message={error} onRetry={() => setError('')} />}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Link href="/dashboard" className="p-1.5 rounded-lg hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors">
             <ArrowLeft className="h-4 w-4" />
@@ -170,7 +170,7 @@ export default function BotDetailPage() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { icon: MessageSquare, label: 'Conversaciones', value: bot._count?.conversations || 0 },
           { icon: Hash, label: 'Mensajes', value: bot.messageCount },
@@ -188,7 +188,7 @@ export default function BotDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-slate-700/50 pb-px">
+      <div className="flex gap-1 border-b border-slate-700/50 pb-px overflow-x-auto">
         {([
           { key: 'general' as const, label: 'General', icon: Settings },
           { key: 'config' as const, label: 'Configuración', icon: Key },

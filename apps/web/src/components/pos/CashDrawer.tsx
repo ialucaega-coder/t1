@@ -7,6 +7,17 @@ import {
   Plus, Minus, DollarSign, Calculator,
 } from 'lucide-react';
 
+interface TransactionRecord {
+  id: string;
+  amount: string | number;
+  type: string;
+  paymentMethod: string;
+  reference: string | null;
+  notes: string | null;
+  createdAt: string;
+  orderId: string | null;
+}
+
 type DrawerStatus = 'closed' | 'open' | 'reconciling';
 
 interface CashMovement {
@@ -51,8 +62,8 @@ export function CashDrawer() {
   async function loadMovements() {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: any[] }>(`/transactions?from=${today}&pageSize=100`);
-      const txs: CashMovement[] = (res.data || []).map((t: any) => ({
+      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&pageSize=100`);
+      const txs: CashMovement[] = (res.data || []).map((t: TransactionRecord) => ({
         id: t.id,
         type: (t.type === 'SALE' ? 'SALE' : (t.notes?.includes('Retiro') ? 'WITHDRAWAL' : t.notes?.includes('Ingreso') ? 'DEPOSIT' : 'SALE')) as CashMovement['type'],
         amount: Number(t.amount),

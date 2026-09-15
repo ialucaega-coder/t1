@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { paginationSchema, toSkipTake } from '../validators/common';
 
@@ -51,7 +52,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const pagination = paginationSchema.parse(req.query);
     const search = req.query.search as string | undefined;
-    const where: any = { businessId: req.auth!.businessId };
+    const where: Prisma.AgencyClientWhereInput = { businessId: req.auth!.businessId };
     if (search) where.name = { contains: search, mode: 'insensitive' };
     const [clients, total] = await Promise.all([
       prisma.agencyClient.findMany({

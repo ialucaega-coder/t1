@@ -56,7 +56,7 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
   let offset = 0;
 
   return (
-    <div className="flex items-center gap-6">
+    <div className="flex flex-wrap items-center gap-6">
       <svg viewBox="0 0 160 160" className="w-36 h-36">
         {data.map((d) => {
           const pct = d.count / total;
@@ -158,7 +158,7 @@ export default function AnalisisPage() {
         <div className="space-y-3">
           {improvements.map((item) => (
             <div key={item.id} className="card-accent">
-              <div className="flex items-start justify-between mb-2">
+              <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className={`h-4 w-4 ${item.severity === 'alta' ? 'text-red-400' : item.severity === 'media' ? 'text-yellow-400' : 'text-slate-400'}`} />
                   <h4 className="text-sm font-medium text-white">{item.title}</h4>
@@ -227,7 +227,7 @@ export default function AnalisisPage() {
 
       {activeTab === 'campanas' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-slate-400">Mandá mensajes a tus segmentos de clientes por WhatsApp — promociones, avisos, seguimientos.</p>
             <button onClick={() => setShowNewCampaign(!showNewCampaign)} className="btn-primary text-xs">
               <Plus className="h-3.5 w-3.5" /> Nueva campaña
@@ -279,7 +279,7 @@ export default function AnalisisPage() {
           ) : (
             <div className="space-y-2">
               {campaigns.map((c) => (
-                <div key={c.id} className="card flex items-center gap-4">
+                <div key={c.id} className="card flex flex-wrap items-center gap-4">
                   <div className="h-9 w-9 rounded-lg bg-brand-400/10 flex items-center justify-center shrink-0">
                     <Send className="h-4 w-4 text-brand-400" />
                   </div>
