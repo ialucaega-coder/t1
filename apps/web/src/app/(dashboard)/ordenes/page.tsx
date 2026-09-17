@@ -10,6 +10,8 @@ import type { Order } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; next?: string; nextLabel?: string }> = {
   PENDING: { label: 'Pendiente', color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', next: 'CONFIRMED', nextLabel: 'Confirmar' },
@@ -30,6 +32,8 @@ export default function OrdenesPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [selected, setSelected] = useState<Order | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<Order | null>(null);
+  const { toast } = useToast();
 
   const fetchOrders = useCallback(async () => {
     setIsLoading(true);
@@ -57,22 +61,25 @@ export default function OrdenesPage() {
       const updated = await ordersApi.updateOrderStatus(order.id, cfg.next);
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selected?.id === order.id) setSelected(updated);
+      toast({ type: 'success', message: 'Estado de orden actualizado correctamente' });
     } catch {
       setError('Error al actualizar estado');
+      toast({ type: 'error', message: 'Error al actualizar estado de la orden' });
     } finally {
       setUpdatingStatus(false);
     }
   }
 
   async function handleCancel(order: Order) {
-    if (!confirm('¿Cancelar esta orden?')) return;
     setUpdatingStatus(true);
     try {
       const updated = await ordersApi.updateOrderStatus(order.id, 'CANCELLED');
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selected?.id === order.id) setSelected(updated);
+      toast({ type: 'success', message: 'Orden cancelada correctamente' });
     } catch {
       setError('Error al cancelar');
+      toast({ type: 'error', message: 'Error al cancelar orden' });
     } finally {
       setUpdatingStatus(false);
     }
@@ -83,6 +90,16 @@ export default function OrdenesPage() {
   return (
     <div className="space-y-4">
       {error && <ErrorAlert message={error} onRetry={() => { setError(''); fetchOrders(); }} />}
+
+      <ConfirmDialog
+        isOpen={cancelTarget !== null}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={() => { if (cancelTarget) { handleCancel(cancelTarget); } setCancelTarget(null); }}
+        title="Cancelar orden"
+        message="¿Cancelar esta orden?"
+        confirmLabel="Cancelar orden"
+        variant="warning"
+      />
 
       <div className="flex items-center justify-between">
         <div>
@@ -254,7 +271,7 @@ export default function OrdenesPage() {
                       {updatingStatus ? '...' : STATUS_CONFIG[selected.status].nextLabel}
                     </button>
                   )}
-                  <button onClick={() => handleCancel(selected)} disabled={updatingStatus}
+                  <button onClick={() => setCancelTarget(selected)} disabled={updatingStatus}
                     className="px-3 py-2 rounded-lg text-xs text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-colors disabled:opacity-50">
                     Cancelar
                   </button>

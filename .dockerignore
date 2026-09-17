@@ -37,6 +37,9 @@ coverage
 # Archivos de Claude Code / herramientas de desarrollo
 .claude
 
+# Obsidian (notas del proyecto)
+Obsidian
+
 # Documentacion y artefactos varios
 README.md
 *.md

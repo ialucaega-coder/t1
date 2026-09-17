@@ -10,6 +10,8 @@ import Link from 'next/link';
 import * as botsApi from '@/lib/api/bots';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { useToast } from '@/components/common/Toast';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const CHANNEL_LABELS: Record<string, { label: string; color: string; icon: string }> = {
   TELEGRAM: { label: 'Telegram', color: 'bg-blue-500/10 text-blue-400 border-blue-500/20', icon: '✈️' },
@@ -51,6 +53,7 @@ export default function BotDetailPage() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [activeTab, setActiveTab] = useState<'general' | 'config' | 'conversations'>('general');
 
   const [name, setName] = useState('');
@@ -59,6 +62,7 @@ export default function BotDetailPage() {
   const [token, setToken] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const { toast } = useToast();
 
   const fetchBot = useCallback(async () => {
     setIsLoading(true);
@@ -86,8 +90,10 @@ export default function BotDetailPage() {
       const config = { ...(bot?.config || {}), systemPrompt };
       await botsApi.update(id, { name, description, channel, token: token || null, webhookUrl: webhookUrl || null, config });
       await fetchBot();
+      toast({ type: 'success', message: 'Bot actualizado correctamente' });
     } catch {
       setError('Error al guardar');
+      toast({ type: 'error', message: 'Error al guardar bot' });
     } finally {
       setSaving(false);
     }
@@ -99,19 +105,22 @@ export default function BotDetailPage() {
     try {
       await botsApi.update(id, { status: newStatus });
       await fetchBot();
+      toast({ type: 'success', message: newStatus === 'ACTIVE' ? 'Bot activado' : 'Bot pausado' });
     } catch {
       setError('Error al cambiar estado');
+      toast({ type: 'error', message: 'Error al cambiar estado del bot' });
     }
   }
 
   async function handleDelete() {
-    if (!confirm('¿Eliminar este bot? Esta acción no se puede deshacer.')) return;
     setDeleting(true);
     try {
       await botsApi.remove(id);
+      toast({ type: 'success', message: 'Bot eliminado correctamente' });
       router.push('/dashboard');
     } catch {
       setError('Error al eliminar');
+      toast({ type: 'error', message: 'Error al eliminar bot' });
       setDeleting(false);
     }
   }
@@ -161,7 +170,7 @@ export default function BotDetailPage() {
             {bot.status === 'ACTIVE' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
             {bot.status === 'ACTIVE' ? 'Pausar' : 'Activar'}
           </button>
-          <button onClick={handleDelete} disabled={deleting}
+          <button onClick={() => setConfirmDelete(true)} disabled={deleting}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50">
             <Trash2 className="h-3.5 w-3.5" />
             Eliminar
@@ -294,6 +303,17 @@ export default function BotDetailPage() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => { setConfirmDelete(false); handleDelete(); }}
+        title="Eliminar bot"
+        message="¿Eliminar este bot? Esta acción no se puede deshacer."
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting}
+      />
 
       {activeTab === 'conversations' && (
         <div className="space-y-3">

@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { ClientFormModal } from '@/components/clients/ClientFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { useToast } from '@/components/common/Toast';
 
 type Interest = 'hot' | 'warm' | 'cold';
 
@@ -49,6 +50,7 @@ export default function ClientesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const { clients, total, totalPages, isLoading, error, refetch } = useClients({
     search: search || undefined,
@@ -57,8 +59,13 @@ export default function ClientesPage() {
   const { detail, isLoading: detailLoading, refetchDetail } = useClientDetail(selectedId);
 
   async function handleCreate(data: { name: string; email: string; phone: string; notes: string }) {
-    await clientsApi.createClient({ name: data.name, email: data.email, phone: data.phone || undefined });
-    refetch();
+    try {
+      await clientsApi.createClient({ name: data.name, email: data.email, phone: data.phone || undefined });
+      refetch();
+      toast({ type: 'success', message: 'Cliente creado correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al crear cliente' });
+    }
   }
 
   async function handleDelete(id: string) {
@@ -67,6 +74,9 @@ export default function ClientesPage() {
       await clientsApi.deleteClient(id);
       if (selectedId === id) setSelectedId(null);
       refetch();
+      toast({ type: 'success', message: 'Cliente eliminado correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al eliminar cliente' });
     } finally {
       setDeleting(null);
     }

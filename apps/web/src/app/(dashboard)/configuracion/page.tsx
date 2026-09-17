@@ -9,6 +9,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import * as schedulesApi from '@/lib/api/schedules';
 import * as settingsApi from '@/lib/api/settings';
+import { useToast } from '@/components/common/Toast';
 import type { AiProviderInfo } from '@/lib/api/settings';
 import type { Schedule } from '@/types';
 
@@ -31,6 +32,7 @@ export default function ConfiguracionPage() {
   const [aiKey, setAiKey] = useState('');
   const [aiKeyVisible, setAiKeyVisible] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     setForm(settings);
@@ -159,6 +161,9 @@ export default function ConfiguracionPage() {
     setIsSaving(true);
     try {
       await updateSettings(form);
+      toast({ type: 'success', message: 'Configuración guardada correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al guardar configuración' });
     } finally {
       setIsSaving(false);
     }

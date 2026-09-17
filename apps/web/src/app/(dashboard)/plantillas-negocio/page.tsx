@@ -10,6 +10,7 @@ import { BUSINESS_TEMPLATES as PRESETS } from '@/constants/business-templates';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { Building2 } from 'lucide-react';
 
 export default function PlantillasNegocioPage() {
@@ -22,6 +23,7 @@ export default function PlantillasNegocioPage() {
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
@@ -91,7 +93,6 @@ export default function PlantillasNegocioPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta plantilla de negocio?')) return;
     try {
       await templatesApi.deleteTemplate(id);
       setTemplates((prev) => prev.filter((t) => t.id !== id));
@@ -136,6 +137,16 @@ export default function PlantillasNegocioPage() {
   return (
     <div className="space-y-4">
       {error && <ErrorAlert message={error} onRetry={() => { setError(''); fetchTemplates(); }} />}
+
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } setDeleteTarget(null); }}
+        title="Eliminar plantilla"
+        message="¿Eliminar esta plantilla de negocio?"
+        confirmLabel="Eliminar"
+        variant="danger"
+      />
 
       <div className="flex items-center justify-between">
         <div>
@@ -198,7 +209,7 @@ export default function PlantillasNegocioPage() {
                     className="btn-secondary text-[10px] py-1 px-2">
                     <Edit2 className="h-3 w-3" />
                   </button>
-                  <button onClick={() => handleDelete(t.id)}
+                  <button onClick={() => setDeleteTarget(t.id)}
                     className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
                     <Trash2 className="h-3 w-3" />
                   </button>

@@ -14,6 +14,7 @@ import { BookingFormModal } from '@/components/bookings/BookingFormModal';
 import { BookingDetailModal } from '@/components/bookings/BookingDetailModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { useToast } from '@/components/common/Toast';
 
 type ViewMode = 'calendar' | 'list';
 
@@ -49,6 +50,7 @@ export default function ReservasPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   const { bookings, isLoading, error, refetch, createBooking, updateStatus } = useBookings(selectedDate);
+  const { toast } = useToast();
   const { business } = useAuth();
   useSocket(business?.id ?? null);
   useSocketEvent('booking:created', () => refetch());
@@ -60,14 +62,25 @@ export default function ReservasPage() {
     : legacyBookings.filter((b) => b.status === statusFilter);
 
   const handleCreate = useCallback(async (data: CreateBookingData) => {
-    await createBooking(data);
-    refetch();
-  }, [createBooking, refetch]);
+    try {
+      await createBooking(data);
+      refetch();
+      toast({ type: 'success', message: 'Reserva creada correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al crear reserva' });
+    }
+  }, [createBooking, refetch, toast]);
 
   const handleUpdateStatus = useCallback(async (id: string, status: string) => {
-    await updateStatus(id, status);
-    refetch();
-  }, [updateStatus, refetch]);
+    try {
+      await updateStatus(id, status);
+      refetch();
+      const label = status === 'CANCELLED' ? 'Reserva cancelada' : 'Reserva actualizada correctamente';
+      toast({ type: 'success', message: label });
+    } catch {
+      toast({ type: 'error', message: 'Error al actualizar reserva' });
+    }
+  }, [updateStatus, refetch, toast]);
 
   const isToday = selectedDate === today;
 

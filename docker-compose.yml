@@ -62,17 +62,28 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      # --- Base de datos ---
       DATABASE_URL: ${DATABASE_URL:-postgresql://user:password@postgres:5432/localb?schema=public}
+      DIRECT_URL: ${DIRECT_URL:-postgresql://user:password@postgres:5432/localb?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      # --- Auth ---
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # --- IA ---
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # --- Canales de comunicacion ---
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       WHATSAPP_TOKEN: ${WHATSAPP_TOKEN}
       WHATSAPP_PHONE_ID: ${WHATSAPP_PHONE_ID}
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # --- Supabase ---
+      SUPABASE_PROJECT_REF: ${SUPABASE_PROJECT_REF}
     ports:
       - '4000:4000'
     depends_on:
@@ -101,10 +112,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # --- Base de datos ---
       DATABASE_URL: ${DATABASE_URL:-postgresql://user:password@postgres:5432/localb?schema=public}
+      DIRECT_URL: ${DIRECT_URL:-postgresql://user:password@postgres:5432/localb?schema=public}
+      # --- Auth ---
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      # --- Supabase (publicas) ---
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
     ports:
       - '3000:3000'
     depends_on:

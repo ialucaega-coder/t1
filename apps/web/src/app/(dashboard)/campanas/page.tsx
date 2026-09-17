@@ -20,6 +20,7 @@ import * as campaignsApi from '@/lib/api/campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { useToast } from '@/components/common/Toast';
 
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {
   draft: { label: 'Borrador', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
@@ -55,6 +56,7 @@ export default function CampanasPage() {
   const [sending, setSending] = useState<string | null>(null);
   const [recipientCount, setRecipientCount] = useState<number | null>(null);
   const [loadingRecipients, setLoadingRecipients] = useState(false);
+  const { toast } = useToast();
 
   async function fetchRecipientCount(channel: string) {
     setLoadingRecipients(true);
@@ -103,6 +105,7 @@ export default function CampanasPage() {
           channel: form.channel,
           scheduledAt: form.scheduledAt || undefined,
         });
+        toast({ type: 'success', message: 'Campaña actualizada correctamente' });
       } else {
         await createCampaign({
           name: form.name,
@@ -110,10 +113,12 @@ export default function CampanasPage() {
           channel: form.channel,
           scheduledAt: form.scheduledAt || undefined,
         });
+        toast({ type: 'success', message: 'Campaña creada correctamente' });
       }
       setShowModal(false);
     } catch (err) {
       console.error('Error saving campaign:', err);
+      toast({ type: 'error', message: 'Error al guardar campaña' });
     } finally {
       setSaving(false);
     }
@@ -123,6 +128,9 @@ export default function CampanasPage() {
     setDeleting(id);
     try {
       await deleteCampaign(id);
+      toast({ type: 'success', message: 'Campaña eliminada correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al eliminar campaña' });
     } finally {
       setDeleting(null);
     }
@@ -132,6 +140,9 @@ export default function CampanasPage() {
     setSending(id);
     try {
       await sendCampaign(id);
+      toast({ type: 'success', message: 'Campaña enviada correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al enviar campaña' });
     } finally {
       setSending(null);
     }

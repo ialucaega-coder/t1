@@ -27,6 +27,7 @@ import { useConnections } from '@/hooks/use-connections';
 import { useBots } from '@/hooks/use-bots';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import * as webhooksApi from '@/lib/api/webhooks';
 import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 
@@ -397,6 +398,7 @@ function WebhooksSection() {
   const [formSecret, setFormSecret] = useState('');
   const [formEvents, setFormEvents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const fetchWebhooks = useCallback(async () => {
     try {
@@ -461,7 +463,6 @@ function WebhooksSection() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este webhook?')) return;
     try {
       await webhooksApi.deleteWebhook(id);
       setWebhooks((prev) => prev.filter((w) => w.id !== id));
@@ -553,6 +554,16 @@ function WebhooksSection() {
         </div>
       )}
 
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } setDeleteTarget(null); }}
+        title="Eliminar webhook"
+        message="¿Eliminar este webhook?"
+        confirmLabel="Eliminar"
+        variant="danger"
+      />
+
       {webhooks.length === 0 && !showForm ? (
         <div className="card text-center py-8">
           <Webhook className="h-8 w-8 text-slate-700 mx-auto mb-2" />
@@ -591,7 +602,7 @@ function WebhooksSection() {
                   <button onClick={() => openEdit(w)} className="btn-secondary text-[10px] py-1 px-2">
                     <Edit2 className="h-3 w-3" />
                   </button>
-                  <button onClick={() => handleDelete(w.id)}
+                  <button onClick={() => setDeleteTarget(w.id)}
                     className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
                     <Trash2 className="h-3 w-3" />
                   </button>

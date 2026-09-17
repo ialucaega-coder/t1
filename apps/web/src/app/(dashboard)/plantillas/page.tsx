@@ -9,6 +9,8 @@ import type { Template } from '@/lib/api/templates';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { useToast } from '@/components/common/Toast';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const CATEGORY_OPTIONS = ['Recordatorio', 'Marketing', 'Cobro', 'Post-venta', 'Reenganche', 'Otro'];
 
@@ -21,6 +23,8 @@ export default function PlantillasPage() {
   const [editing, setEditing] = useState<Template | null>(null);
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const { toast } = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
@@ -71,6 +75,7 @@ export default function PlantillasPage() {
           category: formCategory,
         });
         setTemplates((prev) => prev.map((t) => (t.id === editing.id ? updated : t)));
+        toast({ type: 'success', message: 'Plantilla actualizada correctamente' });
       } else {
         const created = await templatesApi.createTemplate({
           name: formName,
@@ -80,22 +85,25 @@ export default function PlantillasPage() {
           type: 'whatsapp',
         });
         setTemplates((prev) => [...prev, created]);
+        toast({ type: 'success', message: 'Plantilla creada correctamente' });
       }
       setShowForm(false);
     } catch {
       setError('Error al guardar plantilla');
+      toast({ type: 'error', message: 'Error al guardar plantilla' });
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta plantilla?')) return;
     try {
       await templatesApi.deleteTemplate(id);
       setTemplates((prev) => prev.filter((t) => t.id !== id));
+      toast({ type: 'success', message: 'Plantilla eliminada correctamente' });
     } catch {
       setError('Error al eliminar');
+      toast({ type: 'error', message: 'Error al eliminar plantilla' });
     }
   }
 
@@ -113,6 +121,16 @@ export default function PlantillasPage() {
   return (
     <div className="space-y-4">
       {error && <ErrorAlert message={error} onRetry={() => { setError(''); fetchTemplates(); }} />}
+
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } setDeleteTarget(null); }}
+        title="Eliminar plantilla"
+        message="¿Eliminar esta plantilla?"
+        confirmLabel="Eliminar"
+        variant="danger"
+      />
 
       <div className="flex items-center justify-between">
         <div>
@@ -237,7 +255,7 @@ export default function PlantillasPage() {
                   className="btn-secondary text-[10px] py-1 px-2">
                   <Edit2 className="h-3 w-3" />
                 </button>
-                <button onClick={() => handleDelete(t.id)}
+                <button onClick={() => setDeleteTarget(t.id)}
                   className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
                   <Trash2 className="h-3 w-3" />
                 </button>
