@@ -14,7 +14,7 @@ export default function DashboardLayout({
         <Sidebar />
         <main className="lg:ml-60">
           <Header />
-          <div className="p-4 pt-16 lg:p-8 lg:pt-8">
+          <div className="p-4 pt-16 lg:p-8 lg:pt-8 animate-fade-in">
             {children}
           </div>
         </main>
