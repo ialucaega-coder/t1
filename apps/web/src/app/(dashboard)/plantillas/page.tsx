@@ -25,6 +25,7 @@ export default function PlantillasPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const { toast } = useToast();
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
@@ -97,13 +98,17 @@ export default function PlantillasPage() {
   }
 
   async function handleDelete(id: string) {
+    setDeleting(true);
     try {
       await templatesApi.deleteTemplate(id);
       setTemplates((prev) => prev.filter((t) => t.id !== id));
       toast({ type: 'success', message: 'Plantilla eliminada correctamente' });
+      setDeleteTarget(null);
     } catch {
       setError('Error al eliminar');
       toast({ type: 'error', message: 'Error al eliminar plantilla' });
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -124,12 +129,13 @@ export default function PlantillasPage() {
 
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } setDeleteTarget(null); }}
+        onClose={() => { if (!deleting) setDeleteTarget(null); }}
+        onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget); }}
         title="Eliminar plantilla"
         message="¿Eliminar esta plantilla?"
         confirmLabel="Eliminar"
         variant="danger"
+        loading={deleting}
       />
 
       <div className="flex items-center justify-between">

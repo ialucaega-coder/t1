@@ -399,6 +399,7 @@ function WebhooksSection() {
   const [formEvents, setFormEvents] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchWebhooks = useCallback(async () => {
     try {
@@ -463,10 +464,13 @@ function WebhooksSection() {
   }
 
   async function handleDelete(id: string) {
+    setDeleting(true);
     try {
       await webhooksApi.deleteWebhook(id);
       setWebhooks((prev) => prev.filter((w) => w.id !== id));
+      setDeleteTarget(null);
     } catch { /* ignore */ }
+    setDeleting(false);
   }
 
   async function handleToggle(w: WebhookType) {

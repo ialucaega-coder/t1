@@ -81,7 +81,7 @@ const corsOrigin: cors.CorsOptions['origin'] = (origin, callback) => {
   callback(new Error(`CORS origin not allowed: ${origin}`));
 };
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins },
+  cors: { origin: allowedOrigins, credentials: true },
 });
 initSocket(io);
 

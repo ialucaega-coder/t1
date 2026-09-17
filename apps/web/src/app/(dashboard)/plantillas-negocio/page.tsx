@@ -24,6 +24,7 @@ export default function PlantillasNegocioPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
@@ -93,11 +94,15 @@ export default function PlantillasNegocioPage() {
   }
 
   async function handleDelete(id: string) {
+    setDeleting(true);
     try {
       await templatesApi.deleteTemplate(id);
       setTemplates((prev) => prev.filter((t) => t.id !== id));
+      setDeleteTarget(null);
     } catch {
       setError('Error al eliminar');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -140,12 +145,13 @@ export default function PlantillasNegocioPage() {
 
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } setDeleteTarget(null); }}
+        onClose={() => { if (!deleting) setDeleteTarget(null); }}
+        onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget); }}
         title="Eliminar plantilla"
         message="¿Eliminar esta plantilla de negocio?"
         confirmLabel="Eliminar"
         variant="danger"
+        loading={deleting}
       />
 
       <div className="flex items-center justify-between">
