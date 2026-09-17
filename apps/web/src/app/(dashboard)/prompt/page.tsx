@@ -8,6 +8,7 @@ import {
 import { usePrompts } from '@/hooks/use-prompts';
 import { useClipboard } from '@/hooks';
 import * as promptsApi from '@/lib/api/prompts';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -23,6 +24,7 @@ interface PromptFormData {
 }
 
 export default function PromptPage() {
+  const { toast } = useToast();
   const { prompts, isLoading, error, refetch } = usePrompts();
   const { copiedId, copy } = useClipboard();
   const [showModal, setShowModal] = useState(false);
@@ -59,8 +61,10 @@ export default function PromptPage() {
       }
       setShowModal(false);
       refetch();
+      toast({ type: 'success', message: editingId ? 'Prompt actualizado' : 'Prompt creado correctamente' });
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Error al guardar');
+      toast({ type: 'error', message: 'Error al guardar el prompt' });
     } finally {
       setSaving(false);
     }
@@ -71,14 +75,22 @@ export default function PromptPage() {
     try {
       await promptsApi.deletePrompt(id);
       refetch();
+      toast({ type: 'success', message: 'Prompt eliminado' });
+    } catch {
+      toast({ type: 'error', message: 'Error al eliminar el prompt' });
     } finally {
       setDeleting(null);
     }
   }
 
   async function handleToggle(prompt: { id: string; name: string; category: string; content: string; isActive: boolean }) {
-    await promptsApi.updatePrompt(prompt.id, { isActive: !prompt.isActive });
-    refetch();
+    try {
+      await promptsApi.updatePrompt(prompt.id, { isActive: !prompt.isActive });
+      refetch();
+      toast({ type: 'success', message: `Prompt ${!prompt.isActive ? 'activado' : 'desactivado'}` });
+    } catch {
+      toast({ type: 'error', message: 'Error al cambiar estado del prompt' });
+    }
   }
 
   if (isLoading) return <LoadingSpinner label="Cargando prompts..." />;

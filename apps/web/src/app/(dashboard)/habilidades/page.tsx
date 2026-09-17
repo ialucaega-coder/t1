@@ -4,10 +4,12 @@ import { useState } from 'react';
 import { ToggleLeft, ToggleRight, Info } from 'lucide-react';
 import { useSkills } from '@/hooks/use-skills';
 import * as skillsApi from '@/lib/api/skills';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function HabilidadesPage() {
+  const { toast } = useToast();
   const { skills, isLoading, error, refetch } = useSkills();
   const [toggling, setToggling] = useState<string | null>(null);
 
@@ -16,8 +18,10 @@ export default function HabilidadesPage() {
     try {
       await skillsApi.updateSkill(name, { isActive: !currentActive });
       refetch();
+      toast({ type: 'success', message: `Habilidad ${!currentActive ? 'activada' : 'desactivada'}` });
     } catch (err) {
       console.error('Error toggling skill:', err);
+      toast({ type: 'error', message: 'Error al cambiar estado de la habilidad' });
     } finally {
       setToggling(null);
     }

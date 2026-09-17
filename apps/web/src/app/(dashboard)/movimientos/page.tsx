@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import * as transactionsApi from '@/lib/api/transactions';
 import type { Transaction } from '@/types';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -25,6 +26,7 @@ const PAYMENT_CONFIG: Record<string, { label: string; icon: typeof Wallet }> = {
 };
 
 export default function MovimientosPage() {
+  const { toast } = useToast();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -74,8 +76,10 @@ export default function MovimientosPage() {
       setShowCreate(false);
       setNewAmount(''); setNewReference(''); setNewNotes('');
       fetchTransactions();
+      toast({ type: 'success', message: 'Movimiento registrado correctamente' });
     } catch {
       setError('Error al registrar movimiento');
+      toast({ type: 'error', message: 'Error al registrar el movimiento' });
     } finally {
       setCreating(false);
     }

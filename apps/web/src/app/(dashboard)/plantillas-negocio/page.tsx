@@ -7,6 +7,7 @@ import {
 import * as templatesApi from '@/lib/api/templates';
 import type { Template } from '@/lib/api/templates';
 import { BUSINESS_TEMPLATES as PRESETS } from '@/constants/business-templates';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -14,6 +15,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { Building2 } from 'lucide-react';
 
 export default function PlantillasNegocioPage() {
+  const { toast } = useToast();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -86,8 +88,10 @@ export default function PlantillasNegocioPage() {
         setTemplates((prev) => [...prev, created]);
       }
       setShowForm(false);
+      toast({ type: 'success', message: editing ? 'Plantilla actualizada' : 'Plantilla creada correctamente' });
     } catch {
       setError('Error al guardar');
+      toast({ type: 'error', message: 'Error al guardar la plantilla' });
     } finally {
       setSaving(false);
     }
@@ -99,8 +103,10 @@ export default function PlantillasNegocioPage() {
       await templatesApi.deleteTemplate(id);
       setTemplates((prev) => prev.filter((t) => t.id !== id));
       setDeleteTarget(null);
+      toast({ type: 'success', message: 'Plantilla eliminada' });
     } catch {
       setError('Error al eliminar');
+      toast({ type: 'error', message: 'Error al eliminar la plantilla' });
     } finally {
       setDeleting(false);
     }
@@ -118,8 +124,10 @@ export default function PlantillasNegocioPage() {
         type: 'business',
       });
       setTemplates((prev) => [...prev, created]);
+      toast({ type: 'success', message: `Plantilla "${preset.name}" instalada` });
     } catch {
       setError('Error al instalar plantilla');
+      toast({ type: 'error', message: 'Error al instalar la plantilla' });
     } finally {
       setInstalling(null);
     }

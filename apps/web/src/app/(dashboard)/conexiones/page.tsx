@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useConnections } from '@/hooks/use-connections';
 import { useBots } from '@/hooks/use-bots';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
@@ -186,6 +187,7 @@ function WebChatWidgetCard() {
 // ────────────────────────────────────────────────────────────────
 
 function TelegramCard() {
+  const { toast } = useToast();
   const {
     telegramStatus,
     isTelegramLoading,
@@ -212,7 +214,10 @@ function TelegramCard() {
       setBotToken('');
       setShowTokenInput(false);
       setSuccessMessage('Bot conectado exitosamente');
+      toast({ type: 'success', message: 'Bot de Telegram conectado exitosamente' });
       setTimeout(() => setSuccessMessage(null), 5000);
+    } else {
+      toast({ type: 'error', message: 'Error al conectar el bot de Telegram' });
     }
   };
 
@@ -220,6 +225,7 @@ function TelegramCard() {
     setIsDisconnecting(true);
     await disconnectTelegram();
     setIsDisconnecting(false);
+    toast({ type: 'success', message: 'Bot de Telegram desconectado' });
   };
 
   return (
@@ -385,6 +391,7 @@ const EVENT_LABELS: Record<string, string> = {
 };
 
 function WebhooksSection() {
+  const { toast } = useToast();
   const [webhooks, setWebhooks] = useState<WebhookType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -459,7 +466,10 @@ function WebhooksSection() {
         setWebhooks((prev) => [...prev, created]);
       }
       setShowForm(false);
-    } catch { /* ignore */ }
+      toast({ type: 'success', message: editing ? 'Webhook actualizado' : 'Webhook creado correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al guardar el webhook' });
+    }
     setSaving(false);
   }
 
@@ -469,7 +479,10 @@ function WebhooksSection() {
       await webhooksApi.deleteWebhook(id);
       setWebhooks((prev) => prev.filter((w) => w.id !== id));
       setDeleteTarget(null);
-    } catch { /* ignore */ }
+      toast({ type: 'success', message: 'Webhook eliminado' });
+    } catch {
+      toast({ type: 'error', message: 'Error al eliminar el webhook' });
+    }
     setDeleting(false);
   }
 
@@ -477,7 +490,10 @@ function WebhooksSection() {
     try {
       const updated = await webhooksApi.updateWebhook(w.id, { isActive: !w.isActive });
       setWebhooks((prev) => prev.map((x) => (x.id === w.id ? updated : x)));
-    } catch { /* ignore */ }
+      toast({ type: 'success', message: `Webhook ${!w.isActive ? 'activado' : 'desactivado'}` });
+    } catch {
+      toast({ type: 'error', message: 'Error al cambiar estado del webhook' });
+    }
   }
 
   async function handleTest(id: string) {

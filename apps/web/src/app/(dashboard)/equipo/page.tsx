@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { UserPlus, Shield, MoreVertical, Mail, Clock, Users } from 'lucide-react';
 import { useTeam } from '@/hooks/use-team';
 import { ROLE_CONFIG, type TeamRole } from '@/constants/team';
+import { useToast } from '@/components/common/Toast';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -11,6 +12,7 @@ import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 
 export default function EquipoPage() {
+  const { toast } = useToast();
   const { members, isLoading, error, refetch, inviteMember } = useTeam();
   const [search, setSearch] = useState('');
   const [showInvite, setShowInvite] = useState(false);
@@ -31,7 +33,10 @@ export default function EquipoPage() {
       await inviteMember({ email: inviteEmail, role: inviteRole });
       setInviteEmail('');
       setShowInvite(false);
-    } catch { /* error shown via hook */ }
+      toast({ type: 'success', message: 'Invitación enviada correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al enviar la invitación' });
+    }
     finally { setInviting(false); }
   };
 

@@ -3,10 +3,12 @@
 import { useState } from 'react';
 import { useSuperpowers } from '@/hooks/use-superpowers';
 import { superpowersApi } from '@/lib/api/index';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 export default function SuperpoderesPage() {
+  const { toast } = useToast();
   const { superpowers, isLoading, error, refetch } = useSuperpowers();
   const [toggling, setToggling] = useState<string | null>(null);
 
@@ -15,8 +17,10 @@ export default function SuperpoderesPage() {
     try {
       await superpowersApi.updateSuperpower(name, { isActive: !currentActive });
       refetch();
+      toast({ type: 'success', message: `Superpoder ${!currentActive ? 'activado' : 'desactivado'}` });
     } catch (err) {
       console.error('Error toggling superpower:', err);
+      toast({ type: 'error', message: 'Error al cambiar estado del superpoder' });
     } finally {
       setToggling(null);
     }
