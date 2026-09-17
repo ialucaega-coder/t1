@@ -7,15 +7,19 @@ import { ProductFormModal } from '@/components/products/ProductFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 import type { Product } from '@/types';
 
 export default function ProductosPage() {
   const { products, isLoading, error, refetch, createProduct, updateProduct, deleteProduct } = useProducts();
+  const { toast } = useToast();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [search, setSearch] = useState('');
   const [toggling, setToggling] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const filtered = products.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -32,12 +36,14 @@ export default function ProductosPage() {
         stock: data.stock,
         isActive: editing.isActive,
       });
+      toast({ type: 'success', message: 'Producto actualizado correctamente' });
     } else {
       await createProduct({
         name: data.name,
         price: data.price,
         stock: data.stock,
       });
+      toast({ type: 'success', message: 'Producto creado correctamente' });
     }
     setEditing(null);
   }
@@ -48,11 +54,17 @@ export default function ProductosPage() {
     setToggling(null);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este producto?')) return;
-    setDeleting(id);
-    await deleteProduct(id);
+  function handleDelete(id: string) {
+    setConfirmDelete(id);
+  }
+
+  async function executeDelete() {
+    if (!confirmDelete) return;
+    setDeleting(confirmDelete);
+    setConfirmDelete(null);
+    await deleteProduct(confirmDelete);
     setDeleting(null);
+    toast({ type: 'success', message: 'Producto eliminado correctamente' });
   }
 
   function handleEdit(product: Product) {
@@ -146,6 +158,17 @@ export default function ProductosPage() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDelete !== null}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={executeDelete}
+        title="Eliminar producto"
+        message="¿Eliminar este producto?"
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting !== null}
+      />
 
       <ProductFormModal
         isOpen={showModal}

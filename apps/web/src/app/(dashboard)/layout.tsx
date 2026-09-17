@@ -1,6 +1,7 @@
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { Header } from '@/components/dashboard/Header';
 import { WebChat } from '@/components/chat/WebChat';
+import { ToastProvider } from '@/components/common/Toast';
 
 export default function DashboardLayout({
   children,
@@ -8,15 +9,17 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-surface">
-      <Sidebar />
-      <main className="lg:ml-60">
-        <Header />
-        <div className="p-4 pt-16 lg:p-8 lg:pt-8">
-          {children}
-        </div>
-      </main>
-      <WebChat />
-    </div>
+    <ToastProvider>
+      <div className="min-h-screen bg-surface">
+        <Sidebar />
+        <main className="lg:ml-60">
+          <Header />
+          <div className="p-4 pt-16 lg:p-8 lg:pt-8">
+            {children}
+          </div>
+        </main>
+        <WebChat />
+      </div>
+    </ToastProvider>
   );
 }

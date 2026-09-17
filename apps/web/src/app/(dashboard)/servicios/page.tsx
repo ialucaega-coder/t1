@@ -7,15 +7,19 @@ import { ServiceFormModal } from '@/components/services/ServiceFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 import type { Service } from '@/types';
 
 export default function ServiciosPage() {
   const { services, isLoading, error, refetch, createService, updateService, deleteService } = useServices();
+  const { toast } = useToast();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Service | null>(null);
   const [search, setSearch] = useState('');
   const [toggling, setToggling] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const filtered = services.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -32,12 +36,14 @@ export default function ServiciosPage() {
         price: data.price,
         isActive: editing.isActive,
       });
+      toast({ type: 'success', message: 'Servicio actualizado correctamente' });
     } else {
       await createService({
         name: data.name,
         duration: data.duration,
         price: data.price,
       });
+      toast({ type: 'success', message: 'Servicio creado correctamente' });
     }
     setEditing(null);
   }
@@ -48,11 +54,17 @@ export default function ServiciosPage() {
     setToggling(null);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este servicio? Las reservas existentes no se verán afectadas.')) return;
-    setDeleting(id);
-    await deleteService(id);
+  function handleDelete(id: string) {
+    setConfirmDelete(id);
+  }
+
+  async function executeDelete() {
+    if (!confirmDelete) return;
+    setDeleting(confirmDelete);
+    setConfirmDelete(null);
+    await deleteService(confirmDelete);
     setDeleting(null);
+    toast({ type: 'success', message: 'Servicio eliminado correctamente' });
   }
 
   function handleEdit(service: Service) {
@@ -146,6 +158,17 @@ export default function ServiciosPage() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDelete !== null}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={executeDelete}
+        title="Eliminar servicio"
+        message="¿Eliminar este servicio? Las reservas existentes no se verán afectadas."
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting !== null}
+      />
 
       <ServiceFormModal
         isOpen={showModal}

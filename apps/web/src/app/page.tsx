@@ -97,9 +97,37 @@ const stats = [
 ];
 
 
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Local B',
+  applicationCategory: 'BusinessApplication',
+  operatingSystem: 'Web',
+  description:
+    'Plataforma SaaS para negocios locales: reservas, pedidos, cobros y atención por WhatsApp desde un solo panel.',
+  url: 'https://localb.app',
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD',
+    description: 'Plan gratuito disponible',
+  },
+  featureList: [
+    'Reservas inteligentes',
+    'Catálogo y pedidos',
+    'Cobros por WhatsApp',
+    'IA integrada',
+    'Reportes automáticos',
+  ],
+};
+
 export default function Home() {
   return (
     <div className="min-h-screen bg-surface text-slate-50">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       {/* Nav */}
       <header className="sticky top-0 z-50 border-b border-slate-800/60 bg-surface/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">

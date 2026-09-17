@@ -1,7 +1,26 @@
+import type { Metadata } from 'next';
 import { BookingFlow } from './BookingFlow';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const businessName = slug
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  return {
+    title: `Reservar en ${businessName}`,
+    description: `Reserva tu cita en ${businessName} de forma rápida y sencilla a través de Local B.`,
+    openGraph: {
+      title: `Reservar en ${businessName}`,
+      description: `Agenda tu cita en ${businessName} en línea. Sin llamadas, sin esperas.`,
+      type: 'website',
+      locale: 'es_AR',
+    },
+  };
 }
 
 export default async function PublicBookingPage({ params }: PageProps) {
