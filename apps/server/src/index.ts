@@ -1,3 +1,4 @@
+import './lib/sentry';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -52,6 +53,7 @@ import {
 } from './middleware/security';
 import { auditDataMutations, auditRateLimitViolations } from './middleware/audit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { Sentry } from './lib/sentry';
 
 if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === 'dev-secret') {
   if (process.env.NODE_ENV === 'production') {
@@ -107,6 +109,10 @@ app.use(cookieParser());
 app.use(extraSecurityHeaders);
 app.use(validateRequestSize({ maxBodyBytes: 5 * 1024 * 1024 })); // 5 MB
 
+// Stripe webhooks need the raw body for signature verification.
+// This must be registered BEFORE express.json() parses the body.
+app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json({ limit: '5mb' }));
 app.use(sanitizeRequest);
 app.use(issueCsrfToken);
@@ -159,6 +165,7 @@ app.use('/api/public', cors({ origin: true, credentials: false }), publicChatRou
 // Ruta no encontrada (404) y manejador de errores centralizado.
 // Deben registrarse al final, después de montar todas las rutas.
 app.use('/api', notFoundHandler);
+Sentry.setupExpressErrorHandler(app);
 app.use(errorHandler);
 
 io.on('connection', (socket) => {

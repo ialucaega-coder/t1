@@ -323,7 +323,7 @@ router.post('/book/:slug', asyncHandler(async (req, res) => {
     }
 
     try {
-      getIO().to(`business:${business.id}`).emit('booking:created', { booking });
+      getIO()?.to(`business:${business.id}`).emit('booking:created', { booking });
     } catch { /* socket not initialized in tests */ }
 
     res.status(201).json(booking);

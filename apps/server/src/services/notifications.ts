@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma';
 import type { NotificationType, NotificationChannel } from '@prisma/client';
+import { sendGenericNotification } from './email';
 
 // ─── Tipos ───────────────────────────────────────────────────────────
 
@@ -35,7 +36,7 @@ interface OrderPayload {
 
 /**
  * Crea y persiste una notificación en la base de datos.
- * Los canales externos (email, SMS, push) son stubs por ahora.
+ * Despacha al canal externo correspondiente (email vía Resend, otros pendientes).
  */
 export async function createNotification(data: CreateNotificationData) {
   const notification = await prisma.notification.create({ data });
@@ -149,16 +150,55 @@ function formatDate(date: Date): string {
 }
 
 /**
- * Stub para despachar la notificación al canal externo.
- * Se implementará cuando se integren los proveedores reales.
+ * Despacha la notificación al canal externo correspondiente.
+ * El envío es fire-and-forget: los errores se loguean pero no bloquean.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function dispatchToChannel(_notification: { channel: string }) {
-  // TODO: Implementar integraciones reales
-  // switch (notification.channel) {
-  //   case 'EMAIL': return sendEmail(notification);
-  //   case 'WHATSAPP': return sendWhatsApp(notification);
-  //   case 'SMS': return sendSms(notification);
-  //   case 'PUSH': return sendPush(notification);
-  // }
+async function dispatchToChannel(notification: {
+  channel: string;
+  title: string;
+  body: string;
+  userId: string;
+}) {
+  switch (notification.channel) {
+    case 'EMAIL': {
+      // Buscar email del usuario destinatario
+      const user = await prisma.user.findUnique({
+        where: { id: notification.userId },
+        select: { email: true },
+      });
+
+      if (!user?.email) {
+        console.warn(
+          `[Notifications] No se encontró email para el usuario ${notification.userId}`
+        );
+        return;
+      }
+
+      // Fire-and-forget: no awaiteamos para no bloquear el flujo principal
+      sendGenericNotification(user.email, notification.title, notification.body)
+        .catch((err) =>
+          console.error('[Notifications] Error despachando email:', err)
+        );
+      return;
+    }
+
+    case 'WHATSAPP':
+    case 'SMS':
+    case 'TELEGRAM':
+      // TODO: Integrar Twilio / WhatsApp Business API
+      console.log(
+        `[Notifications] Canal ${notification.channel} pendiente de implementación`
+      );
+      return;
+
+    case 'PUSH':
+      // TODO: Integrar Web Push / Firebase Cloud Messaging
+      console.log('[Notifications] Canal PUSH pendiente de implementación');
+      return;
+
+    default:
+      console.warn(
+        `[Notifications] Canal desconocido: ${notification.channel}`
+      );
+  }
 }

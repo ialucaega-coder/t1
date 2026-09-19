@@ -107,6 +107,7 @@ model Business {
   instagramUrl    String?
   facebookUrl     String?
   websiteUrl      String?
+  stripeCustomerId String?  @unique
   isActive        Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -769,6 +770,7 @@ model Plan {
 
 model Subscription {
   id              String             @id @default(cuid())
+  stripeSubscriptionId String?       @unique
   status          SubscriptionStatus @default(TRIALING)
   currentPeriodStart DateTime
   currentPeriodEnd   DateTime
@@ -795,6 +797,7 @@ model Invoice {
   amount      Decimal @db.Decimal(10, 2)
   currency    String        @default("USD")
   description String?
+  stripeInvoiceId String?   @unique
   dueDate     DateTime
   paidAt      DateTime?
   createdAt   DateTime      @default(now())

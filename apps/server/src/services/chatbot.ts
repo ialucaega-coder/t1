@@ -203,7 +203,7 @@ export async function processMessage(
 
   try {
     const { getIO } = require('../lib/socket');
-    getIO().to(`business:${businessId}`).emit('conversation:new-message', {
+    getIO()?.to(`business:${businessId}`).emit('conversation:new-message', {
       conversationId: conversation.id,
       message: userMessage,
     });
@@ -280,7 +280,7 @@ export async function processMessage(
 
   try {
     const { getIO } = require('../lib/socket');
-    getIO().to(`business:${businessId}`).emit('conversation:new-message', {
+    getIO()?.to(`business:${businessId}`).emit('conversation:new-message', {
       conversationId: conversation.id,
       message: botMessage,
     });

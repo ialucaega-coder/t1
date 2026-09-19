@@ -4,6 +4,13 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import {
+  createCheckoutSession,
+  createCustomerPortalSession,
+  cancelSubscription,
+  constructWebhookEvent,
+  handleWebhookEvent,
+} from '../services/stripe';
 
 const subscribeSchema = z.object({
   planId: z.string().min(1),
@@ -12,6 +19,28 @@ const subscribeSchema = z.object({
 
 const router = Router();
 
+// ─── Webhook (no auth, raw body — registered before JSON middleware in index.ts) ───
+router.post('/webhook', asyncHandler(async (req, res) => {
+  const signature = req.headers['stripe-signature'];
+  if (!signature || typeof signature !== 'string') {
+    res.status(400).json({ error: 'Missing stripe-signature header' });
+    return;
+  }
+
+  let event;
+  try {
+    event = constructWebhookEvent(req.body as Buffer, signature);
+  } catch (err) {
+    res.status(400).json({ error: 'Webhook signature verification failed' });
+    return;
+  }
+
+  await handleWebhookEvent(event);
+
+  res.json({ received: true });
+}));
+
+// ─── Authenticated routes ──────────────────────────────────────────────────────
 router.use(requireAuth, requireRole('ADMIN'));
 
 router.get('/plans', asyncHandler(async (_req, res) => {
@@ -41,80 +70,49 @@ router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, re
   const businessId = req.auth!.businessId;
 
   const plan = await prisma.plan.findUnique({ where: { id: planId } });
-  if (!plan) {
+  if (!plan || !plan.isActive) {
     res.status(404).json({ error: 'Plan no encontrado' });
     return;
   }
 
-  const existing = await prisma.subscription.findUnique({ where: { businessId } });
-
-  const now = new Date();
-  const periodEnd = new Date(now);
-  if (interval === 'yearly') {
-    periodEnd.setFullYear(periodEnd.getFullYear() + 1);
-  } else {
-    periodEnd.setMonth(periodEnd.getMonth() + 1);
-  }
-
-  const amount = interval === 'yearly' ? plan.priceYearly : plan.priceMonthly;
-
-  if (existing) {
-    const updated = await prisma.subscription.update({
-      where: { businessId },
-      data: {
-        planId,
-        status: 'ACTIVE',
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
-        cancelAtPeriodEnd: false,
-      },
-      include: { plan: true },
-    });
-
-    await prisma.invoice.create({
-      data: {
-        number: `INV-${Date.now()}`,
-        amount,
-        currency: plan.currency,
-        description: `${plan.name} - ${interval === 'yearly' ? 'Anual' : 'Mensual'}`,
-        status: 'PAID',
-        dueDate: now,
-        paidAt: now,
-        subscriptionId: updated.id,
-        businessId,
-      },
-    });
-
-    res.json(updated);
+  const existingSubscription = await prisma.subscription.findUnique({
+    where: { businessId },
+  });
+  if (existingSubscription && existingSubscription.status !== 'CANCELLED') {
+    res.status(409).json({ error: 'El negocio ya tiene una suscripción activa. Usá el portal de facturación para cambiar de plan.' });
     return;
   }
 
-  const subscription = await prisma.subscription.create({
-    data: {
-      planId,
-      businessId,
-      status: 'ACTIVE',
-      currentPeriodStart: now,
-      currentPeriodEnd: periodEnd,
-    },
-    include: { plan: true },
+  // Check if business already has a Stripe customer ID
+  const business = await prisma.business.findUniqueOrThrow({
+    where: { id: businessId },
   });
 
-  await prisma.invoice.create({
-    data: {
-      number: `INV-${Date.now()}`,
-      amount,
-      currency: plan.currency,
-      description: `${plan.name} - ${interval === 'yearly' ? 'Anual' : 'Mensual'}`,
-      status: 'PAID',
-      dueDate: now,
-      paidAt: now,
-      subscriptionId: subscription.id,
-      businessId,
-    },
+  const checkoutUrl = await createCheckoutSession(
+    businessId,
+    planId,
+    interval,
+    business.stripeCustomerId ?? undefined,
+  );
+
+  res.json({ url: checkoutUrl });
+}));
+
+router.post('/portal', asyncHandler(async (req, res) => {
+  const businessId = req.auth!.businessId;
+
+  const business = await prisma.business.findUniqueOrThrow({
+    where: { id: businessId },
   });
 
-  res.json(subscription);
+  if (!business.stripeCustomerId) {
+    res.status(400).json({ error: 'No hay cliente de Stripe asociado. Suscribite primero.' });
+    return;
+  }
+
+  const portalUrl = await createCustomerPortalSession(business.stripeCustomerId);
+
+  res.json({ url: portalUrl });
 }));
 
 router.post('/cancel', asyncHandler(async (req, res) => {
@@ -122,13 +120,25 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 
   const subscription = await prisma.subscription.findUnique({ where: { businessId } });
   if (!subscription) {
-    res.status(404).json({ error: 'No hay suscripción activa' });
+    res.status(404).json({ error: 'No hay suscripcion activa' });
     return;
   }
 
-  const updated = await prisma.subscription.update({
+  if (!subscription.stripeSubscriptionId) {
+    // Legacy subscription without Stripe — cancel locally only
+    const updated = await prisma.subscription.update({
+      where: { businessId },
+      data: { cancelAtPeriodEnd: true },
+      include: { plan: true },
+    });
+    res.json(updated);
+    return;
+  }
+
+  await cancelSubscription(subscription.stripeSubscriptionId);
+
+  const updated = await prisma.subscription.findUnique({
     where: { businessId },
-    data: { cancelAtPeriodEnd: true },
     include: { plan: true },
   });
 
