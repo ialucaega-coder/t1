@@ -27,7 +27,14 @@ router.post('/webhook', asyncHandler(async (req, res) => {
     return;
   }
 
-  const event = constructWebhookEvent(req.body as Buffer, signature);
+  let event;
+  try {
+    event = constructWebhookEvent(req.body as Buffer, signature);
+  } catch (err) {
+    res.status(400).json({ error: 'Webhook signature verification failed' });
+    return;
+  }
+
   await handleWebhookEvent(event);
 
   res.json({ received: true });
