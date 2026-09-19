@@ -72,5 +72,8 @@ export function useSocketEvent<T = unknown>(
 
     socket.on(eventName, handler);
     return () => { socket.off(eventName, handler); };
+    // `deps` is a caller-supplied dependency array (mirrors useEffect's own
+    // API), so ESLint cannot statically verify its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventName, ...deps]);
 }

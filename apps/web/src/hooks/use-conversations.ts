@@ -36,6 +36,10 @@ export function useConversations(params?: { status?: string; channel?: string })
 
     load();
     return () => { cancelled = true; };
+    // `params` is destructured intentionally (status/channel) instead of used
+    // as a whole object: callers often pass a new object literal on every
+    // render, which would otherwise retrigger this effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadToken, page, params?.status, params?.channel]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
