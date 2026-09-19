@@ -8,6 +8,16 @@ const LIGHT_BG = '#F8FAFC';
 const TEXT_COLOR = '#334155';
 const MUTED_COLOR = '#64748B';
 
+/** Escapa caracteres HTML para evitar inyección al interpolar datos de usuario en emails. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ─── Layout base ────────────────────────────────────────────────────
 
 function baseLayout(content: string, preheader: string = ''): string {
@@ -59,8 +69,8 @@ function baseLayout(content: string, preheader: string = ''): string {
 
 function infoRow(label: string, value: string): string {
   return `<tr>
-    <td style="padding:8px 12px;font-size:14px;color:${MUTED_COLOR};border-bottom:1px solid #F1F5F9;">${label}</td>
-    <td style="padding:8px 12px;font-size:14px;font-weight:600;color:${TEXT_COLOR};border-bottom:1px solid #F1F5F9;">${value}</td>
+    <td style="padding:8px 12px;font-size:14px;color:${MUTED_COLOR};border-bottom:1px solid #F1F5F9;">${escapeHtml(label)}</td>
+    <td style="padding:8px 12px;font-size:14px;font-weight:600;color:${TEXT_COLOR};border-bottom:1px solid #F1F5F9;">${escapeHtml(value)}</td>
   </tr>`;
 }
 
@@ -112,7 +122,7 @@ export function bookingConfirmationTemplate(data: BookingEmailData): string {
 
   const content = `
     <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">¡Reserva confirmada!</h2>
-    <p style="margin:0 0 16px;">Hola <strong>${data.clientName}</strong>, tu reserva ha sido confirmada con éxito.</p>
+    <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(data.clientName)}</strong>, tu reserva ha sido confirmada con éxito.</p>
     ${detailTable(rows)}
     <p style="margin:16px 0 0;font-size:14px;color:${MUTED_COLOR};">
       Si necesitás modificar o cancelar tu reserva, ingresá a tu cuenta en Local B.
@@ -133,7 +143,7 @@ export function bookingReminderTemplate(data: BookingEmailData): string {
 
   const content = `
     <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">Recordatorio de tu cita</h2>
-    <p style="margin:0 0 16px;">Hola <strong>${data.clientName}</strong>, te recordamos que tenés una cita programada.</p>
+    <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(data.clientName)}</strong>, te recordamos que tenés una cita programada.</p>
     ${detailTable(rows)}
     <p style="margin:16px 0 0;font-size:14px;color:${MUTED_COLOR};">
       ¡Te esperamos! Si no podés asistir, por favor cancelá con anticipación.
@@ -156,7 +166,7 @@ export function orderStatusTemplate(data: OrderEmailData): string {
 
   const content = `
     <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">Actualización de pedido</h2>
-    <p style="margin:0 0 16px;">Hola <strong>${data.clientName}</strong>, tu pedido cambió de estado.</p>
+    <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(data.clientName)}</strong>, tu pedido cambió de estado.</p>
     ${detailTable([
       { label: 'Pedido', value: `#${data.orderId.slice(-6).toUpperCase()}` },
       { label: 'Estado', value: `${emoji} ${data.status.charAt(0).toUpperCase() + data.status.slice(1)}` },
@@ -172,7 +182,7 @@ export function orderStatusTemplate(data: OrderEmailData): string {
 export function welcomeTemplate(userName: string, businessName: string): string {
   const content = `
     <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">¡Bienvenido/a a Local B!</h2>
-    <p style="margin:0 0 16px;">Hola <strong>${userName}</strong>, tu cuenta fue creada exitosamente${businessName ? ` en <strong>${businessName}</strong>` : ''}.</p>
+    <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(userName)}</strong>, tu cuenta fue creada exitosamente${businessName ? ` en <strong>${escapeHtml(businessName)}</strong>` : ''}.</p>
     <p style="margin:0 0 24px;">Ahora podés:</p>
     <ul style="margin:0 0 24px;padding-left:20px;color:${TEXT_COLOR};">
       <li style="margin-bottom:8px;">Reservar turnos y servicios</li>
@@ -204,7 +214,7 @@ export function invoiceTemplate(data: InvoiceEmailData): string {
 
   const content = `
     <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">Comprobante de pago</h2>
-    <p style="margin:0 0 16px;">Hola <strong>${data.clientName}</strong>, tu pago fue procesado correctamente.</p>
+    <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(data.clientName)}</strong>, tu pago fue procesado correctamente.</p>
     ${detailTable(rows)}
     <p style="margin:16px 0 0;font-size:14px;color:${MUTED_COLOR};">
       Conservá este email como comprobante. Podés ver el historial de pagos en tu cuenta.
@@ -215,7 +225,7 @@ export function invoiceTemplate(data: InvoiceEmailData): string {
 
 export function genericNotificationTemplate(title: string, htmlContent: string): string {
   const content = `
-    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">${title}</h2>
+    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">${escapeHtml(title)}</h2>
     <div style="margin:0;">${htmlContent}</div>`;
 
   return baseLayout(content, title);

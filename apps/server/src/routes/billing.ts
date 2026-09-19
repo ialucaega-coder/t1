@@ -63,8 +63,16 @@ router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, re
   const businessId = req.auth!.businessId;
 
   const plan = await prisma.plan.findUnique({ where: { id: planId } });
-  if (!plan) {
+  if (!plan || !plan.isActive) {
     res.status(404).json({ error: 'Plan no encontrado' });
+    return;
+  }
+
+  const existingSubscription = await prisma.subscription.findUnique({
+    where: { businessId },
+  });
+  if (existingSubscription && existingSubscription.status !== 'CANCELLED') {
+    res.status(409).json({ error: 'El negocio ya tiene una suscripción activa. Usá el portal de facturación para cambiar de plan.' });
     return;
   }
 

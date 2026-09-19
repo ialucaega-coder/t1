@@ -34,7 +34,9 @@ function mapStripeStatus(status: Stripe.Subscription.Status): SubscriptionStatus
     case 'trialing':
       return 'TRIALING';
     default:
-      return 'ACTIVE';
+      // 'incomplete' / 'paused' / cualquier estado futuro: nunca otorgar
+      // acceso pago sin confirmación real del pago.
+      return 'PAST_DUE';
   }
 }
 
@@ -363,5 +365,3 @@ export function constructWebhookEvent(
 
   return getStripe().webhooks.constructEvent(rawBody, signature, webhookSecret);
 }
-
-export { stripe };

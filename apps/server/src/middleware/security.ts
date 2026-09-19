@@ -152,6 +152,11 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
  * esquemas trabajen sobre datos ya limpios.
  */
 export function sanitizeRequest(req: Request, _res: Response, next: NextFunction) {
+  // El body crudo del webhook de Stripe llega como Buffer (para verificar
+  // la firma) y no debe pasar por el saneo recursivo, que lo destruiría.
+  if (Buffer.isBuffer(req.body)) {
+    return next();
+  }
   if (req.body && typeof req.body === 'object') {
     req.body = sanitizeValue(req.body);
   }
