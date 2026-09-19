@@ -7,7 +7,6 @@ import {
   Zap,
   Crown,
   Building2,
-  Loader2,
   FileText,
   XCircle,
   AlertTriangle,
@@ -16,6 +15,7 @@ import { httpClient } from '@/lib/api';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { CheckoutButton } from '@/components/billing/CheckoutButton';
 
 interface Plan {
   id: string;
@@ -77,7 +77,6 @@ export default function FacturacionPage() {
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
-  const [subscribing, setSubscribing] = useState<string | null>(null);
   const [interval, setInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,23 +100,6 @@ export default function FacturacionPage() {
       setError('No se pudieron cargar los datos de facturación. Intentá de nuevo.');
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleSubscribe(planId: string) {
-    setSubscribing(planId);
-    try {
-      const sub = await httpClient.post<Subscription>('/billing/subscribe', {
-        planId,
-        interval,
-      });
-      setSubscription(sub);
-      const inv = await httpClient.get<Invoice[]>('/billing/invoices');
-      setInvoices(inv);
-    } catch (err) {
-      console.error('Error subscribing:', err);
-    } finally {
-      setSubscribing(null);
     }
   }
 
@@ -284,25 +266,21 @@ export default function FacturacionPage() {
                   </li>
                 ))}
               </ul>
-              <button
-                onClick={() => handleSubscribe(plan.id)}
-                disabled={isCurrentPlan || subscribing !== null}
-                className={`mt-6 w-full py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  isCurrentPlan
-                    ? 'bg-slate-700 text-slate-400 cursor-default'
-                    : 'bg-sky-500 hover:bg-sky-600 text-white disabled:opacity-50'
-                }`}
-              >
-                {subscribing === plan.id ? (
-                  <Loader2 className="h-4 w-4 animate-spin mx-auto" />
-                ) : isCurrentPlan ? (
-                  'Plan actual'
-                ) : subscription ? (
-                  'Cambiar plan'
-                ) : (
-                  'Elegir plan'
-                )}
-              </button>
+              {isCurrentPlan ? (
+                <button
+                  disabled
+                  className="mt-6 w-full py-2.5 rounded-lg text-sm font-medium bg-slate-700 text-slate-400 cursor-default"
+                >
+                  Plan actual
+                </button>
+              ) : (
+                <CheckoutButton
+                  planId={plan.id}
+                  interval={interval}
+                  label={subscription ? 'Cambiar plan' : 'Elegir plan'}
+                  className="mt-6 w-full justify-center py-2.5"
+                />
+              )}
             </div>
           );
         })}
