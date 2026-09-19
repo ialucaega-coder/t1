@@ -147,7 +147,7 @@ router.post(
       },
     });
 
-    getIO().to(`business:${req.auth!.businessId}`).emit('campaign:sent', { campaign: updated });
+    getIO()?.to(`business:${req.auth!.businessId}`).emit('campaign:sent', { campaign: updated });
 
     res.json(updated);
   })

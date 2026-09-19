@@ -93,7 +93,7 @@ router.post(
       data: { updatedAt: new Date() },
     });
 
-    getIO().to(`business:${conversation.businessId}`).emit('conversation:new-message', {
+    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:new-message', {
       conversationId: conversation.id,
       message,
     });
@@ -112,7 +112,7 @@ router.patch(
     });
     if (result.count === 0) return res.status(404).json({ error: 'Conversation not found or already closed' });
 
-    getIO().to(`business:${req.auth!.businessId}`).emit('conversation:closed', {
+    getIO()?.to(`business:${req.auth!.businessId}`).emit('conversation:closed', {
       conversationId: req.params.id,
     });
 

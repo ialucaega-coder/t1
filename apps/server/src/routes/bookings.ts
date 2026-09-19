@@ -79,7 +79,7 @@ router.post(
       },
     });
 
-    getIO().to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
+    getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
     res.status(201).json(booking);
   })
 );
@@ -126,7 +126,7 @@ router.patch(
       where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { status },
     });
-    getIO().to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
+    getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
     res.json(booking);
   })
 );
