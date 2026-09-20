@@ -53,6 +53,11 @@ export interface ProcessMessageOptions {
   botId?: string;
   contactName?: string;
   contactPhone?: string;
+  /**
+   * Instrucciones extra que se agregan al prompt de sistema (por ejemplo la
+   * personalidad/tono configurada para el asistente de voz de un negocio).
+   */
+  systemPromptExtra?: string;
 }
 
 /**
@@ -242,7 +247,10 @@ export async function processMessage(
     responseText = result.text;
     actions = result.actions;
   } else {
-    const systemPrompt = await buildSystemPrompt(businessId);
+    let systemPrompt = await buildSystemPrompt(businessId);
+    if (options.systemPromptExtra?.trim()) {
+      systemPrompt += '\n\n' + options.systemPromptExtra.trim();
+    }
     const catalog = await getActiveCatalog(businessId);
     const catalogText = formatCatalogText(catalog);
     const enrichedPrompt = systemPrompt + '\n\n' + catalogText;

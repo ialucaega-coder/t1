@@ -9,24 +9,33 @@
  *      VOICE), respondemos con <Say> y otro <Gather> para seguir la charla.
  *   3. Se repite hasta que el cliente cuelga o pide un humano.
  *
- * Estas rutas son webhooks externos (sin auth, sin CSRF: Twilio no envía la
- * cookie de sesión, por lo que csrfProtection las deja pasar). Twilio postea
- * en application/x-www-form-urlencoded, así que el router monta su propio
- * express.urlencoded.
+ * Todos los textos, idioma y voz salen de la config por negocio
+ * (services/voice/config.ts), por lo que cada negocio suena distinto.
+ *
+ * Los webhooks son externos (sin auth, sin CSRF: Twilio no envía la cookie de
+ * sesión). Las rutas /config y /status sí requieren auth. Twilio postea en
+ * application/x-www-form-urlencoded, así que el router monta su propio parser.
  */
 import { Router, type Request, type Response } from 'express';
 import express from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler';
+import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import {
   isVoiceConfigured,
-  getVoiceConfig,
   validateVoiceSignature,
   resolveBusinessByNumber,
   VoiceResponse,
 } from '../services/voice/client';
-import { requireAuth } from '../middleware/auth';
+import {
+  loadVoiceSettings,
+  saveVoiceSettings,
+  interpolate,
+  type VoiceSettings,
+} from '../services/voice/config';
+import { requireAuth, requireRole } from '../middleware/auth';
 
 const router = Router();
 
@@ -58,51 +67,96 @@ function sendTwiml(res: Response, twiml: InstanceType<typeof VoiceResponse>): vo
 }
 
 /**
- * Agrega al TwiML un <Gather> de voz que reenvía la transcripción a /respond.
- * `prompt` es lo que dice el asistente antes de escuchar.
+ * Agrega al TwiML un <Gather> de voz que reenvía la transcripción a /respond,
+ * usando la voz e idioma configurados por el negocio.
  */
-function gatherSpeech(twiml: InstanceType<typeof VoiceResponse>, prompt: string): void {
-  const { language, voice } = getVoiceConfig();
+function gatherSpeech(
+  twiml: InstanceType<typeof VoiceResponse>,
+  prompt: string,
+  cfg: VoiceSettings
+): void {
   const gather = twiml.gather({
     input: ['speech'],
     action: RESPOND_PATH,
     method: 'POST',
-    language,
+    language: cfg.language,
     speechTimeout: 'auto',
     actionOnEmptyResult: true,
   } as any);
-  gather.say({ voice, language } as any, prompt);
+  gather.say({ voice: cfg.voice, language: cfg.language } as any, prompt);
 }
 
-/** GET /api/voice/status — diagnóstico de configuración (requiere auth). */
-router.get('/status', requireAuth, (_req: Request, res: Response) => {
-  const { language, voice } = getVoiceConfig();
+// ─── Rutas autenticadas del panel ──────────────────────────────────────────
+
+/** GET /api/voice/status — diagnóstico de configuración de Twilio. */
+router.get('/status', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const cfg = await loadVoiceSettings(req.auth!.businessId);
   res.json({
     configured: isVoiceConfigured(),
-    language,
-    voice,
+    language: cfg.language,
+    voice: cfg.voice,
+    enabled: cfg.enabled,
     hint: isVoiceConfigured()
       ? 'Configurá el webhook de voz de tu número Twilio a POST /api/voice/incoming'
       : 'Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN en las variables de entorno',
   });
+}));
+
+/** GET /api/voice/config — config de voz del negocio. */
+router.get('/config', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const cfg = await loadVoiceSettings(req.auth!.businessId);
+  res.json(cfg);
+}));
+
+const configSchema = z.object({
+  enabled: z.boolean().optional(),
+  assistantName: z.string().trim().min(1).max(60).optional(),
+  language: z.string().trim().min(2).max(10).optional(),
+  voice: z.string().trim().min(1).max(60).optional(),
+  rate: z.number().min(0.5).max(1.5).optional(),
+  greeting: z.string().trim().min(1).max(600).optional(),
+  closing: z.string().trim().min(1).max(600).optional(),
+  reprompt: z.string().trim().min(1).max(600).optional(),
+  persona: z.string().trim().max(1500).optional(),
 });
+
+/** PUT /api/voice/config — actualiza la config de voz (solo ADMIN). */
+router.put(
+  '/config',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(configSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const cfg = await saveVoiceSettings(req.auth!.businessId, req.body);
+    res.json(cfg);
+  })
+);
+
+// ─── Webhooks de Twilio (sin auth) ──────────────────────────────────────────
 
 /**
  * POST /api/voice/incoming — Twilio invoca esto cuando entra una llamada.
- * Saluda con el nombre del negocio y abre el primer <Gather>.
+ * Saluda con el saludo configurado y abre el primer <Gather>.
  */
 router.post(
   '/incoming',
   asyncHandler(async (req: Request, res: Response) => {
     if (!verifiedTwilio(req, res)) return;
 
-    const { language, voice } = getVoiceConfig();
     const to = req.body.To || '';
     const twiml = new VoiceResponse();
 
     const businessId = await resolveBusinessByNumber(to);
     if (!businessId) {
-      twiml.say({ voice, language } as any, 'Lo sentimos, este número no está disponible en este momento. Adiós.');
+      twiml.say('Lo sentimos, este número no está disponible en este momento. Adiós.');
+      twiml.hangup();
+      sendTwiml(res, twiml);
+      return;
+    }
+
+    const cfg = await loadVoiceSettings(businessId);
+    if (!cfg.enabled) {
+      twiml.say({ voice: cfg.voice, language: cfg.language } as any, cfg.closing);
       twiml.hangup();
       sendTwiml(res, twiml);
       return;
@@ -112,12 +166,9 @@ router.post(
       where: { id: businessId },
       select: { name: true },
     });
-    const name = business?.name || 'nuestro negocio';
+    const greeting = interpolate(cfg.greeting, business?.name || 'nuestro negocio', cfg.assistantName);
 
-    gatherSpeech(
-      twiml,
-      `Hola, gracias por comunicarte con ${name}. Soy el asistente virtual. ¿En qué puedo ayudarte?`
-    );
+    gatherSpeech(twiml, greeting, cfg);
     // Si no dice nada, reintenta una vez y luego cierra.
     twiml.redirect({ method: 'POST' }, RESPOND_PATH);
 
@@ -134,7 +185,6 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     if (!verifiedTwilio(req, res)) return;
 
-    const { language, voice } = getVoiceConfig();
     const to = req.body.To || '';
     const from = req.body.From || '';
     const speech: string = (req.body.SpeechResult || '').trim();
@@ -142,16 +192,18 @@ router.post(
 
     const businessId = await resolveBusinessByNumber(to);
     if (!businessId) {
-      twiml.say({ voice, language } as any, 'Lo sentimos, ocurrió un problema. Adiós.');
+      twiml.say('Lo sentimos, ocurrió un problema. Adiós.');
       twiml.hangup();
       sendTwiml(res, twiml);
       return;
     }
 
+    const cfg = await loadVoiceSettings(businessId);
+
     // El cliente no dijo nada inteligible: repreguntamos.
     if (!speech) {
-      gatherSpeech(twiml, 'Perdón, no te escuché bien. ¿Me repetís, por favor?');
-      twiml.say({ voice, language } as any, 'No recibí respuesta. Podés volver a llamar cuando quieras. ¡Hasta luego!');
+      gatherSpeech(twiml, cfg.reprompt, cfg);
+      twiml.say({ voice: cfg.voice, language: cfg.language } as any, cfg.closing);
       twiml.hangup();
       sendTwiml(res, twiml);
       return;
@@ -171,6 +223,7 @@ router.post(
       const result = await processMessage(businessId, speech, 'VOICE', {
         conversationId: existing?.id,
         contactPhone: from,
+        systemPromptExtra: cfg.persona,
       });
       responseText = result.text;
       escalate = result.actions.some((a) => a.type === 'escalateToHuman');
@@ -179,19 +232,15 @@ router.post(
     }
 
     if (escalate) {
-      // Pedido de humano: avisamos y cerramos (el equipo recibe la notificación
-      // que genera processMessage al detectar la intención HUMAN).
-      twiml.say({ voice, language } as any, responseText);
+      twiml.say({ voice: cfg.voice, language: cfg.language } as any, responseText);
       twiml.hangup();
       sendTwiml(res, twiml);
       return;
     }
 
-    // Respondemos y seguimos escuchando.
-    const { voice: v, language: l } = getVoiceConfig();
-    twiml.say({ voice: v, language: l } as any, responseText);
-    gatherSpeech(twiml, '¿Necesitás algo más?');
-    twiml.say({ voice: v, language: l } as any, 'Gracias por llamar. ¡Que tengas un buen día!');
+    twiml.say({ voice: cfg.voice, language: cfg.language } as any, responseText);
+    gatherSpeech(twiml, '¿Necesitás algo más?', cfg);
+    twiml.say({ voice: cfg.voice, language: cfg.language } as any, cfg.closing);
     twiml.hangup();
 
     sendTwiml(res, twiml);
