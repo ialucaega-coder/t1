@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Phone, PhoneCall, PhoneOff, Mic, Bot, User, Wrench, CheckCircle2,
-  Play, Settings2, Globe, Volume2, AlertTriangle, Sparkles, Copy, Check,
+  Play, Settings2, Globe, Volume2, VolumeX, AlertTriangle, Sparkles, Copy, Check,
 } from 'lucide-react';
 import * as voiceApi from '@/lib/api/voice';
 import type { VoiceStatus } from '@/lib/api/voice';
@@ -64,8 +64,38 @@ export default function AsistenteVozPage() {
   const [speaking, setSpeaking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
+  const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const lang = status?.language || 'es-MX';
+
+  // Elige la mejor voz en español disponible en el navegador. Las voces
+  // cargan de forma asíncrona, así que escuchamos 'voiceschanged'.
+  const pickVoice = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    const voices = window.speechSynthesis.getVoices();
+    const es = voices.filter((v) => v.lang?.toLowerCase().startsWith('es'));
+    voiceRef.current =
+      es.find((v) => v.lang.toLowerCase() === lang.toLowerCase()) ||
+      es.find((v) => /google|microsoft/i.test(v.name)) ||
+      es[0] ||
+      null;
+  };
+
+  // Reproduce un texto con la voz del navegador (TTS). Es la misma idea que
+  // hace Twilio en la llamada real con Amazon Polly, pero acá suena en local.
+  const speak = (text: string) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis || mutedRef.current) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    if (voiceRef.current) u.voice = voiceRef.current;
+    u.rate = 1.02;
+    u.pitch = 1.0;
+    window.speechSynthesis.speak(u);
+  };
 
   useEffect(() => {
     // Se calcula tras montar para evitar mismatch de hidratación: el valor de
@@ -76,7 +106,17 @@ export default function AsistenteVozPage() {
       .then(setStatus)
       .catch(() => setStatus(null))
       .finally(() => setLoadingStatus(false));
-    return () => { timers.current.forEach(clearTimeout); };
+
+    pickVoice();
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = pickVoice;
+    }
+
+    return () => {
+      timers.current.forEach(clearTimeout);
+      if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -85,6 +125,8 @@ export default function AsistenteVozPage() {
 
   const runSimulation = () => {
     timers.current.forEach(clearTimeout);
+    if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+    pickVoice();
     setTranscript([]);
     setRunning(true);
     let acc = 400;
@@ -94,9 +136,19 @@ export default function AsistenteVozPage() {
       timers.current.push(setTimeout(() => {
         setSpeaking(turn.who === 'ai');
         setTranscript((prev) => [...prev, turn]);
+        if (turn.who === 'ai') speak(turn.text);
       }, at - turn.delay + 200));
     });
     timers.current.push(setTimeout(() => { setRunning(false); setSpeaking(false); }, acc + 400));
+  };
+
+  const toggleMute = () => {
+    setMuted((m) => {
+      const next = !m;
+      mutedRef.current = next;
+      if (next && typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+      return next;
+    });
   };
 
   const copyUrl = () => {
@@ -142,14 +194,24 @@ export default function AsistenteVozPage() {
               <PhoneCall className={`w-4 h-4 ${running ? 'text-emerald-400' : 'text-slate-400'}`} />
               Llamada en vivo (demo)
             </div>
-            <button
-              onClick={runSimulation}
-              disabled={running}
-              className="inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 disabled:opacity-50 disabled:cursor-not-allowed text-white transition"
-            >
-              <Play className="w-4 h-4" />
-              {running ? 'Simulando…' : 'Simular llamada'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toggleMute}
+                title={muted ? 'Activar voz' : 'Silenciar voz'}
+                aria-label={muted ? 'Activar voz' : 'Silenciar voz'}
+                className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border transition ${muted ? 'border-slate-700 text-slate-500 hover:text-slate-300' : 'border-brand-500/40 text-brand-400 bg-brand-500/10'}`}
+              >
+                {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={runSimulation}
+                disabled={running}
+                className="inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 disabled:opacity-50 disabled:cursor-not-allowed text-white transition"
+              >
+                <Play className="w-4 h-4" />
+                {running ? 'Simulando…' : 'Simular llamada'}
+              </button>
+            </div>
           </div>
 
           {/* Estado / waveform */}
