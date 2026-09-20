@@ -32,6 +32,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Plantillas WhatsApp', href: '/plantillas', icon: MessageCircle },
       { name: 'IA', href: '/ia', icon: Bot },
       { name: 'Asistente de Voz', href: '/asistente-voz', icon: Phone, badge: 'new' },
+      { name: 'Voz de Marca', href: '/voz-de-marca', icon: Megaphone, badge: 'new' },
       { name: 'Conversaciones', href: '/conversaciones', icon: MessageCircle },
     ],
   },
@@ -40,7 +41,7 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { name: 'Superpoderes', href: '/superpoderes', icon: Shield, badge: 'active' },
       { name: 'Análisis', href: '/analisis', icon: BarChart3, badge: 'active' },
-      { name: 'Plantillas', href: '/plantillas-negocio', icon: Store, badge: 'active' },
+      { name: 'Bots por giro', href: '/plantillas-negocio', icon: Store, badge: 'active' },
       { name: 'Equipo', href: '/equipo', icon: Users, badge: 'new' },
       { name: 'White-label', href: '/whitelabel', icon: PaintBucket, badge: 'active' },
       { name: 'Estadísticas', href: '/estadisticas', icon: TrendingUp, badge: 'active' },
