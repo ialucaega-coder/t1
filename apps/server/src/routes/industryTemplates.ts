@@ -5,6 +5,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { INDUSTRY_TEMPLATES, getIndustryTemplate } from '../constants/industryTemplates';
 import { DEFAULT_SUPERPOWERS } from '../constants/defaultCatalog';
+import { ensureDefaultFeatures, readFeatureConfig as readConfig } from '../services/catalog';
 
 const router = Router();
 
@@ -14,29 +15,6 @@ const SUPERPOWER_KIND = 'superpower';
 // --- Helpers de prompt (formato compatible con routes/prompts.ts) ---
 function writePromptCategory(category: string, isActive: boolean) {
   return `${category.trim() || 'General'} [${isActive ? 'active' : 'inactive'}]`;
-}
-
-// --- Helpers de superpoderes (formato compatible con routes/catalogFeatures.ts) ---
-function readConfig(config: Prisma.JsonValue | null) {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) return {};
-  return config as { kind?: string; subtitle?: string; iconName?: string };
-}
-
-async function ensureDefaultSuperpowers(businessId: string) {
-  const existing = await prisma.skill.findMany({ where: { businessId } });
-  const existingForKind = existing.filter((row) => readConfig(row.config).kind === SUPERPOWER_KIND);
-  if (existingForKind.length > 0) return;
-
-  await prisma.skill.createMany({
-    data: DEFAULT_SUPERPOWERS.map((feature) => ({
-      businessId,
-      name: feature.name,
-      description: feature.description,
-      icon: feature.iconName,
-      isActive: feature.isActive,
-      config: { kind: SUPERPOWER_KIND, subtitle: feature.subtitle, iconName: feature.iconName },
-    })),
-  });
 }
 
 // GET /api/plantillas-negocio -> lista las 14 plantillas por giro
@@ -107,7 +85,7 @@ router.post(
     }
 
     // 3) Superpoderes recomendados: asegurar defaults y activarlos
-    await ensureDefaultSuperpowers(businessId);
+    await ensureDefaultFeatures(businessId, 'superpower', DEFAULT_SUPERPOWERS);
     const skills = await prisma.skill.findMany({ where: { businessId } });
     const superpowerByName = new Map(
       skills

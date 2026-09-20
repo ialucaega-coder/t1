@@ -7,29 +7,7 @@ import { prisma } from '../lib/prisma';
 import { DEFAULT_SKILLS, DEFAULT_SUPERPOWERS } from '../constants/defaultCatalog';
 import { updateCatalogItemSchema, UpdateCatalogItemInput } from '../validators/catalog';
 import { generateDailyReport, generateReminders } from '../services/superpowers/report';
-
-type FeatureKind = 'skill' | 'superpower';
-
-interface DefaultFeature {
-  name: string;
-  subtitle: string;
-  description: string;
-  iconName: string;
-  isActive: boolean;
-}
-
-function configFor(kind: FeatureKind, feature: Omit<DefaultFeature, 'name' | 'isActive'>) {
-  return {
-    kind,
-    subtitle: feature.subtitle,
-    iconName: feature.iconName,
-  };
-}
-
-function readConfig(config: Prisma.JsonValue | null) {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) return {};
-  return config as { kind?: string; subtitle?: string; iconName?: string };
-}
+import { ensureDefaultFeatures, readFeatureConfig as readConfig, type FeatureKind } from '../services/catalog';
 
 function mapFeature(row: {
   name: string;
@@ -46,23 +24,6 @@ function mapFeature(row: {
     iconName: config.iconName ?? row.icon ?? 'Zap',
     isActive: row.isActive,
   };
-}
-
-async function ensureDefaultFeatures(businessId: string, kind: FeatureKind, defaults: readonly DefaultFeature[]) {
-  const existing = await prisma.skill.findMany({ where: { businessId } });
-  const existingForKind = existing.filter((row) => readConfig(row.config).kind === kind);
-  if (existingForKind.length > 0) return;
-
-  await prisma.skill.createMany({
-    data: defaults.map((feature) => ({
-      businessId,
-      name: feature.name,
-      description: feature.description,
-      icon: feature.iconName,
-      isActive: feature.isActive,
-      config: configFor(kind, feature),
-    })),
-  });
 }
 
 export function createCatalogFeaturesRouter(kind: FeatureKind) {

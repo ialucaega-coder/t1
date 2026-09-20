@@ -46,6 +46,7 @@ import { posRouter } from './routes/pos';
 import { voiceRouter } from './routes/voice';
 import { brandRouter } from './routes/brand';
 import { restoreActiveBots } from './services/telegram/bot';
+import { startScheduler } from './services/scheduler';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
   extraSecurityHeaders,
@@ -196,6 +197,9 @@ httpServer.listen(PORT, () => {
   restoreActiveBots().catch((err) => {
     console.error('Error al restaurar bots de Telegram:', err);
   });
+
+  // Programar jobs diarios de superpoderes (reportes / recordatorios)
+  startScheduler();
 });
 
 export { io };
