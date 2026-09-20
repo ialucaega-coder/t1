@@ -153,6 +153,20 @@ export const DEFAULT_SKILLS = [
 
 export const DEFAULT_SUPERPOWERS = [
   {
+    name: 'Voz de marca',
+    subtitle: 'TU BOT HABLA COMO TU NEGOCIO.',
+    description: 'Refuerza el tono, el público y las reglas de tu Voz de Marca en todos los canales. Configurala en la sección Voz de Marca.',
+    iconName: 'Sparkles',
+    isActive: true,
+  },
+  {
+    name: 'Multi-idioma',
+    subtitle: 'RESPONDE EN EL IDIOMA DEL CLIENTE.',
+    description: 'Detecta el idioma de cada mensaje y responde en ese mismo idioma, adaptando expresiones y formalidad.',
+    iconName: 'Languages',
+    isActive: true,
+  },
+  {
     name: 'Blindaje anti-invento',
     subtitle: 'NO DEJA QUE EL BOT INVENTE.',
     description: 'Si el bot no sabe, dice que no sabe. Cero respuestas inventadas que pueden costar un cliente.',

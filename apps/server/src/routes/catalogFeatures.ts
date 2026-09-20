@@ -6,6 +6,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { DEFAULT_SKILLS, DEFAULT_SUPERPOWERS } from '../constants/defaultCatalog';
 import { updateCatalogItemSchema, UpdateCatalogItemInput } from '../validators/catalog';
+import { generateDailyReport, generateReminders } from '../services/superpowers/report';
 
 type FeatureKind = 'skill' | 'superpower';
 
@@ -68,6 +69,30 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
   const router = Router();
   const defaults = kind === 'skill' ? DEFAULT_SKILLS : DEFAULT_SUPERPOWERS;
   const missingMessage = kind === 'skill' ? 'Habilidad no encontrada' : 'Superpoder no encontrado';
+
+  // Ganchos de superpoderes que producen contenido leyendo la DB. Solo se
+  // montan en el router de superpoderes (no en el de habilidades).
+  if (kind === 'superpower') {
+    // GET /api/superpowers/report — Superpoder "Reportes automaticos".
+    router.get(
+      '/report',
+      requireAuth,
+      asyncHandler(async (req, res) => {
+        const report = await generateDailyReport(req.auth!.businessId);
+        res.json(report);
+      })
+    );
+
+    // GET /api/superpowers/reminders — Superpoder "Recordatorios inteligentes".
+    router.get(
+      '/reminders',
+      requireAuth,
+      asyncHandler(async (req, res) => {
+        const reminders = await generateReminders(req.auth!.businessId);
+        res.json(reminders);
+      })
+    );
+  }
 
   router.get(
     '/',

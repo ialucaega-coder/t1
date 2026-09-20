@@ -1,6 +1,6 @@
 import {
   Shield, Eye, Siren, Target, Receipt, FileBarChart,
-  BellRing, Lock, Brain, Zap, Gauge, Sword,
+  BellRing, Lock, Brain, Zap, Gauge, Sword, Sparkles, Languages,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -13,6 +13,8 @@ export interface Superpower {
 }
 
 export const SUPERPOWERS: Superpower[] = [
+  { name: 'Voz de marca', subtitle: 'TU BOT HABLA COMO TU NEGOCIO.', description: 'Refuerza el tono, el público y las reglas de tu Voz de Marca en todos los canales. Configurala en la sección Voz de Marca.', icon: Sparkles, isActive: true },
+  { name: 'Multi-idioma', subtitle: 'RESPONDE EN EL IDIOMA DEL CLIENTE.', description: 'Detecta el idioma de cada mensaje y responde en ese mismo idioma, adaptando expresiones y formalidad.', icon: Languages, isActive: true },
   { name: 'Blindaje anti-invento', subtitle: 'NO DEJA QUE EL BOT INVENTE.', description: 'Si el bot no sabe, dice que no sabe. Cero alucinaciones, cero respuestas inventadas que pueden costar un cliente.', icon: Shield, isActive: true },
   { name: 'Vigilante', subtitle: 'DETECTA PROBLEMAS EN TIEMPO REAL.', description: 'Monitorea las conversaciones y te avisa cuando un cliente está molesto, confundido, o a punto de irse.', icon: Eye, isActive: true },
   { name: 'Cazador de ventas', subtitle: 'DETECTA OPORTUNIDADES DE VENTA.', description: 'Lee entre líneas y te avisa cuando un cliente muestra interés de compra — para que tú cierres.', icon: Target, isActive: true },
