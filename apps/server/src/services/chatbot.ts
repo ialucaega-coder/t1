@@ -10,6 +10,7 @@
 import { prisma } from '../lib/prisma';
 import { getDefaultAIProvider } from './ai';
 import type { ConversationTurn } from './ai';
+import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
 
 async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
   const skills = await prisma.skill.findMany({
@@ -54,8 +55,9 @@ export interface ProcessMessageOptions {
   contactName?: string;
   contactPhone?: string;
   /**
-   * Instrucciones extra que se agregan al prompt de sistema (por ejemplo la
-   * personalidad/tono configurada para el asistente de voz de un negocio).
+   * Texto extra que se agrega al final del prompt de sistema. Lo usan canales
+   * específicos (ej: voz) para inyectar instrucciones propias (personalidad/tono)
+   * sin duplicar la lógica de buildSystemPrompt.
    */
   systemPromptExtra?: string;
 }
@@ -99,6 +101,15 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     'Tu trabajo es ayudar a los clientes a: reservar turnos, consultar el catálogo de servicios/productos, responder preguntas frecuentes, o derivarlos a un humano si lo piden.',
   ];
 
+  // --- Voz de Marca (identidad global del negocio, aplica a TODOS los canales) ---
+  // Se inyecta siempre que esté configurada. El superpoder "Voz de marca"
+  // simplemente refuerza que el bot la priorice por encima de otros estilos.
+  const brandVoice = await loadBrandVoice(businessId);
+  const brandPrompt = buildBrandVoicePrompt(brandVoice, superpowers.has('Voz de marca'));
+  if (brandPrompt) {
+    lines.push(brandPrompt);
+  }
+
   if (superpowers.has('Blindaje anti-invento')) {
     lines.push(
       'REGLA CRITICA — BLINDAJE ANTI-INVENTO: Si no tenés información exacta sobre algo (precios, horarios, disponibilidad, stock), decí explícitamente "No tengo esa información" y ofrecé derivar a un humano. NUNCA inventes, supongas ni aproximes datos. Si no estás 100% seguro, no lo digas.',
@@ -113,7 +124,21 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     );
   }
 
-  lines.push('Detectá el idioma del mensaje del cliente y respondé en ese mismo idioma.');
+  // --- Cazador de ventas: cierre proactivo ---
+  if (superpowers.has('Cazador de ventas')) {
+    lines.push(
+      'CAZADOR DE VENTAS: Si el cliente muestra interés en un servicio/producto pero no concreta, ofrecé proactivamente el siguiente paso concreto (agendar un turno o cerrar la compra) con una pregunta clara. No seas insistente ni agresivo: un solo empujón cálido por respuesta.',
+    );
+  }
+
+  // --- Multi-idioma (mejora de la línea genérica de idioma) ---
+  if (superpowers.has('Multi-idioma')) {
+    lines.push(
+      'MULTI-IDIOMA: Detectá automáticamente el idioma de cada mensaje del cliente y respondé SIEMPRE en ese mismo idioma, adaptando expresiones y formalidad a esa cultura. Si el cliente cambia de idioma a mitad de la charla, seguilo.',
+    );
+  } else {
+    lines.push('Detectá el idioma del mensaje del cliente y respondé en ese mismo idioma.');
+  }
 
   return lines.join('\n');
 }
@@ -253,7 +278,10 @@ export async function processMessage(
     }
     const catalog = await getActiveCatalog(businessId);
     const catalogText = formatCatalogText(catalog);
-    const enrichedPrompt = systemPrompt + '\n\n' + catalogText;
+    let enrichedPrompt = systemPrompt + '\n\n' + catalogText;
+    if (options.systemPromptExtra?.trim()) {
+      enrichedPrompt += '\n\n' + options.systemPromptExtra.trim();
+    }
 
     let clientName = options.contactName;
     if (!clientName && options.clientId) {
