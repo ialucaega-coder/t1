@@ -11,6 +11,47 @@ const replySchema = z.object({
   text: z.string().min(1).max(5000).transform((v) => v.trim()),
 });
 
+const assignSchema = z.object({
+  // null / '' => desasignar
+  assignedTo: z.string().max(60).nullable().optional(),
+});
+
+const tagsSchema = z.object({
+  tags: z.array(z.string().min(1).max(40)).max(20),
+});
+
+const noteSchema = z.object({
+  text: z.string().min(1).max(2000).transform((v) => v.trim()),
+});
+
+// Nota interna del equipo guardada dentro de Conversation.metadata
+interface ConversationNote {
+  text: string;
+  at: string;
+  by: string;
+  byName?: string;
+}
+
+// Forma de los datos extra que guardamos en Conversation.metadata (campo Json).
+// No tocamos el schema de Prisma: todo vive acá dentro.
+interface ConversationMeta {
+  assignedTo?: string | null;
+  assignedToName?: string | null;
+  tags?: string[];
+  notes?: ConversationNote[];
+  lastReadAt?: string | null;
+  [key: string]: unknown;
+}
+
+// Lee de forma segura el metadata (Json) como objeto tipado, preservando
+// cualquier clave existente que no manejemos explícitamente.
+function readMeta(value: Prisma.JsonValue | null | undefined): ConversationMeta {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return { ...(value as Record<string, unknown>) } as ConversationMeta;
+  }
+  return {};
+}
+
 const router = Router();
 
 router.get(
@@ -117,6 +158,151 @@ router.patch(
     });
 
     res.json({ success: true });
+  })
+);
+
+// Asignar (o desasignar) la conversación a un miembro del equipo.
+// Guardamos el id y el nombre dentro de metadata.assignedTo / assignedToName.
+router.patch(
+  '/:id/assign',
+  requireAuth,
+  validate(assignSchema),
+  asyncHandler(async (req, res) => {
+    const { assignedTo } = req.body as { assignedTo?: string | null };
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const meta = readMeta(conversation.metadata);
+
+    if (assignedTo) {
+      const member = await prisma.teamMember.findFirst({
+        where: { id: assignedTo, businessId: req.auth!.businessId },
+        select: { id: true, name: true },
+      });
+      if (!member) return res.status(404).json({ error: 'Team member not found' });
+      meta.assignedTo = member.id;
+      meta.assignedToName = member.name;
+    } else {
+      meta.assignedTo = null;
+      meta.assignedToName = null;
+    }
+
+    const updated = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { metadata: meta as Prisma.InputJsonValue },
+    });
+
+    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
+      conversationId: conversation.id,
+    });
+
+    res.json({ metadata: updated.metadata });
+  })
+);
+
+// Reemplaza el conjunto de etiquetas (tags) de la conversación.
+router.patch(
+  '/:id/tags',
+  requireAuth,
+  validate(tagsSchema),
+  asyncHandler(async (req, res) => {
+    const { tags } = req.body as { tags: string[] };
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    // Normaliza: trim, elimina vacíos y duplicados (case-insensitive)
+    const seen = new Set<string>();
+    const clean: string[] = [];
+    for (const raw of tags) {
+      const t = raw.trim();
+      if (!t) continue;
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      clean.push(t);
+    }
+
+    const meta = readMeta(conversation.metadata);
+    meta.tags = clean;
+
+    const updated = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { metadata: meta as Prisma.InputJsonValue },
+    });
+
+    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
+      conversationId: conversation.id,
+    });
+
+    res.json({ metadata: updated.metadata });
+  })
+);
+
+// Agrega una nota interna (privada del equipo) a la conversación.
+router.post(
+  '/:id/notes',
+  requireAuth,
+  validate(noteSchema),
+  asyncHandler(async (req, res) => {
+    const { text } = req.body as { text: string };
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const author = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { name: true },
+    });
+
+    const meta = readMeta(conversation.metadata);
+    const note: ConversationNote = {
+      text,
+      at: new Date().toISOString(),
+      by: req.auth!.userId,
+      byName: author?.name ?? undefined,
+    };
+    meta.notes = [...(meta.notes ?? []), note];
+
+    const updated = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { metadata: meta as Prisma.InputJsonValue },
+    });
+
+    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
+      conversationId: conversation.id,
+    });
+
+    res.json({ note, metadata: updated.metadata });
+  })
+);
+
+// Marca la conversación como leída (guarda metadata.lastReadAt).
+router.patch(
+  '/:id/read',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const meta = readMeta(conversation.metadata);
+    meta.lastReadAt = new Date().toISOString();
+
+    const updated = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { metadata: meta as Prisma.InputJsonValue },
+    });
+
+    res.json({ metadata: updated.metadata });
   })
 );
 

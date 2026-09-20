@@ -1,5 +1,21 @@
 import { httpClient } from './http-client';
 
+export interface ConversationNote {
+  text: string;
+  at: string;
+  by: string;
+  byName?: string;
+}
+
+// Datos extra guardados dentro de Conversation.metadata (campo Json del schema).
+export interface ConversationMeta {
+  assignedTo?: string | null;
+  assignedToName?: string | null;
+  tags?: string[];
+  notes?: ConversationNote[];
+  lastReadAt?: string | null;
+}
+
 export interface Conversation {
   id: string;
   status: 'OPEN' | 'CLOSED' | 'HANDOFF';
@@ -7,6 +23,7 @@ export interface Conversation {
   contactName: string | null;
   contactPhone: string | null;
   contactEmail: string | null;
+  metadata?: ConversationMeta | null;
   createdAt: string;
   updatedAt: string;
   bot?: { name: string; channel: string };
@@ -40,4 +57,24 @@ export function close(id: string) {
 
 export function reply(id: string, text: string) {
   return httpClient.post<{ id: string; role: string; text: string; createdAt: string }>(`/conversations/${id}/reply`, { text });
+}
+
+// Asigna la conversación a un miembro del equipo (o desasigna con null).
+export function assign(id: string, assignedTo: string | null) {
+  return httpClient.patch<{ metadata: ConversationMeta }>(`/conversations/${id}/assign`, { assignedTo });
+}
+
+// Reemplaza el conjunto de etiquetas de la conversación.
+export function setTags(id: string, tags: string[]) {
+  return httpClient.patch<{ metadata: ConversationMeta }>(`/conversations/${id}/tags`, { tags });
+}
+
+// Agrega una nota interna a la conversación.
+export function addNote(id: string, text: string) {
+  return httpClient.post<{ note: ConversationNote; metadata: ConversationMeta }>(`/conversations/${id}/notes`, { text });
+}
+
+// Marca la conversación como leída.
+export function markRead(id: string) {
+  return httpClient.patch<{ metadata: ConversationMeta }>(`/conversations/${id}/read`, {});
 }
