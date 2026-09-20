@@ -13,6 +13,8 @@ export interface ConversationMeta {
   assignedToName?: string | null;
   tags?: string[];
   notes?: ConversationNote[];
+  /** Lectura por usuario: userId -> ISO timestamp. */
+  readBy?: Record<string, string>;
   lastReadAt?: string | null;
 }
 

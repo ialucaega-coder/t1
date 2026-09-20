@@ -54,14 +54,15 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' });
 }
 
-// Una conversación está "no leída" si su último mensaje es del cliente (USER)
-// y llegó después de la última vez que el equipo la abrió (metadata.lastReadAt).
-function isUnread(conv: conversationsApi.Conversation): boolean {
+// Una conversación está "no leída" (para EL usuario actual) si su último mensaje
+// es del cliente (USER) y llegó después de la última vez que ESE usuario la abrió
+// (metadata.readBy[userId]). Así el "no leído" es por agente, no global.
+function isUnread(conv: conversationsApi.Conversation, userId?: string): boolean {
   const last = conv.messages?.[0];
   if (!last || last.role !== 'USER') return false;
-  const lastReadAt = conv.metadata?.lastReadAt;
-  if (!lastReadAt) return true;
-  return new Date(last.createdAt).getTime() > new Date(lastReadAt).getTime();
+  const readAt = (userId && conv.metadata?.readBy?.[userId]) || conv.metadata?.lastReadAt;
+  if (!readAt) return true;
+  return new Date(last.createdAt).getTime() > new Date(readAt).getTime();
 }
 
 export default function ConversacionesPage() {
@@ -88,7 +89,7 @@ export default function ConversacionesPage() {
   const [savingTag, setSavingTag] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { business } = useAuth();
+  const { business, user } = useAuth();
   const { toast } = useToast();
   const { connected } = useSocket(business?.id ?? null);
 
@@ -248,7 +249,7 @@ export default function ConversacionesPage() {
 
   const openCount = conversations.filter((c) => c.status === 'OPEN').length;
   const handoffCount = conversations.filter((c) => c.status === 'HANDOFF').length;
-  const unreadCount = conversations.filter(isUnread).length;
+  const unreadCount = conversations.filter((c) => isUnread(c, user?.id)).length;
 
   // Contadores por canal sobre las conversaciones cargadas.
   const channelCounts = conversations.reduce<Record<string, number>>((acc, c) => {
@@ -419,7 +420,7 @@ export default function ConversacionesPage() {
             const status = STATUS_COLORS[conv.status] || STATUS_COLORS.OPEN;
             const lastMsg = conv.messages?.[0];
             const isSelected = selectedId === conv.id;
-            const unread = isUnread(conv);
+            const unread = isUnread(conv, user?.id);
             const assignedName = conv.metadata?.assignedToName;
             const tags = conv.metadata?.tags ?? [];
             return (

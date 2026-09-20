@@ -39,9 +39,15 @@ interface ConversationMeta {
   assignedToName?: string | null;
   tags?: string[];
   notes?: ConversationNote[];
+  /** Lectura por usuario: userId -> ISO timestamp de la última vez que la abrió. */
+  readBy?: Record<string, string>;
+  /** Compat: lectura global previa (se mantiene como fallback). */
   lastReadAt?: string | null;
   [key: string]: unknown;
 }
+
+/** Máximo de notas internas que guardamos por conversación (evita JSON gigante). */
+const MAX_NOTES = 200;
 
 // Lee de forma segura el metadata (Json) como objeto tipado, preservando
 // cualquier clave existente que no manejemos explícitamente.
@@ -269,7 +275,7 @@ router.post(
       by: req.auth!.userId,
       byName: author?.name ?? undefined,
     };
-    meta.notes = [...(meta.notes ?? []), note];
+    meta.notes = [...(meta.notes ?? []), note].slice(-MAX_NOTES);
 
     const updated = await prisma.conversation.update({
       where: { id: conversation.id },
@@ -295,7 +301,11 @@ router.patch(
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
 
     const meta = readMeta(conversation.metadata);
-    meta.lastReadAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    // Lectura POR usuario: cada agente marca su propia lectura, así el "no leído"
+    // de un miembro no desaparece porque otro haya abierto la conversación.
+    meta.readBy = { ...(meta.readBy ?? {}), [req.auth!.userId]: now };
+    meta.lastReadAt = now; // compat con lectura global previa
 
     const updated = await prisma.conversation.update({
       where: { id: conversation.id },
