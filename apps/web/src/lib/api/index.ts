@@ -29,4 +29,5 @@ export * as botsApi from './bots';
 export * as conversationsApi from './conversations';
 export * as campaignsApi from './campaigns';
 export * as templatesApi from './templates';
+export * as industryTemplatesApi from './industryTemplates';
 export * as webhooksApi from './webhooks';
