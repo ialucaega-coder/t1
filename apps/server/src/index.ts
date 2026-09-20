@@ -75,15 +75,17 @@ const allowedOrigins = Array.from(
     process.env.FRONTEND_URL,
   ].filter(Boolean) as string[])
 );
+const isLocalDevOrigin = (origin: string) =>
+  process.env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 const corsOrigin: cors.CorsOptions['origin'] = (origin, callback) => {
-  if (!origin || allowedOrigins.includes(origin)) {
+  if (!origin || allowedOrigins.includes(origin) || isLocalDevOrigin(origin)) {
     callback(null, true);
     return;
   }
   callback(new Error(`CORS origin not allowed: ${origin}`));
 };
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins, credentials: true },
+  cors: { origin: corsOrigin, credentials: true },
 });
 initSocket(io);
 
