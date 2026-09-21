@@ -346,7 +346,92 @@ export async function processMessage(
     analyzeConversationSentiment(businessId, conversation.id, clientMessage).catch(() => {});
   }
 
+  if (superpowers.has('Alerta de emergencia')) {
+    detectEmergencyAlert(businessId, conversation.id, clientMessage, options.contactName).catch(() => {});
+  }
+
   return { text: responseText, intent, actions, conversationId: conversation.id };
+}
+
+/**
+ * Superpoder "Alerta de emergencia": detecta situaciones urgentes en el mensaje
+ * del cliente (queja grave, amenaza de irse/denunciar, cliente VIP o pedido
+ * grande) con reglas de keywords baratas y, si dispara, crea una notificación
+ * PUSH inmediata al ADMIN. Fire-and-forget: nunca frena el flujo del chat.
+ */
+async function detectEmergencyAlert(
+  businessId: string,
+  conversationId: string,
+  lastMessage: string,
+  contactName?: string,
+) {
+  const normalized = lastMessage.toLowerCase();
+
+  // Categorías de urgencia con sus disparadores.
+  const rules: { categoria: string; keywords: string[] }[] = [
+    {
+      categoria: 'Queja grave / amenaza',
+      keywords: [
+        'denunciar', 'denuncia', 'abogado', 'demanda', 'demandar', 'estafa', 'estafador',
+        'fraude', 'defensa del consumidor', 'inaceptable', 'vergüenza', 'verguenza',
+      ],
+    },
+    {
+      categoria: 'Amenaza de irse',
+      keywords: [
+        'nunca más', 'nunca mas', 'me voy a la competencia', 'dar de baja', 'darme de baja',
+        'cancelar todo', 'cerrar mi cuenta', 'no vuelvo', 'perdieron un cliente',
+      ],
+    },
+    {
+      categoria: 'Cliente VIP',
+      keywords: [
+        'soy cliente hace', 'cliente frecuente', 'siempre compro', 'vengo hace años',
+        'vengo hace anos', 'cliente de siempre', 'cliente vip',
+      ],
+    },
+    {
+      categoria: 'Pedido grande',
+      keywords: [
+        'por mayor', 'al por mayor', 'mayorista', 'catering', 'evento', 'gran pedido',
+        'pedido grande', 'compra grande', 'presupuesto para', 'para la empresa',
+      ],
+    },
+  ];
+
+  const matched = rules
+    .filter((r) => r.keywords.some((kw) => normalized.includes(kw)))
+    .map((r) => r.categoria);
+
+  // Señal barata extra: un pedido de muchas unidades ("50 unidades", "x100").
+  const bulkMatch = normalized.match(/(\d{2,})\s*(unidad|unidades|personas|docenas|cajas|productos|invitad)/);
+  if (bulkMatch && Number(bulkMatch[1]) >= 20 && !matched.includes('Pedido grande')) {
+    matched.push('Pedido grande');
+  }
+
+  if (matched.length === 0) return;
+
+  const admin = await prisma.user.findFirst({
+    where: { businessId, role: 'ADMIN' },
+    select: { id: true },
+  });
+  if (!admin) return;
+
+  const quien = contactName ? ` de ${contactName}` : '';
+  const excerpt = lastMessage.length > 160 ? `${lastMessage.slice(0, 157)}...` : lastMessage;
+
+  await prisma.notification.create({
+    data: {
+      userId: admin.id,
+      type: 'GENERAL',
+      channel: 'PUSH',
+      title: `🚨 Emergencia: ${matched.join(' + ')}`,
+      body:
+        `Situación urgente detectada en el chat${quien} (conversación ${conversationId}).\n` +
+        `Mensaje: "${excerpt}"\nEntrá a la conversación para intervenir cuanto antes.`,
+      businessId,
+    },
+  });
 }
 
 async function analyzeConversationSentiment(

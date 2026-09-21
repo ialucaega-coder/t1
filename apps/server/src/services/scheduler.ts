@@ -13,11 +13,17 @@
  */
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma';
-import { generateDailyReport, generateReminders, generateNoShowRecovery } from './superpowers/report';
+import {
+  generateDailyReport,
+  generateReminders,
+  generateNoShowRecovery,
+  generatePostSaleFollowUps,
+} from './superpowers/report';
 
 const REPORT_SUPERPOWER = 'Reportes automaticos';
 const REMINDER_SUPERPOWER = 'Recordatorios inteligentes';
 const NOSHOW_SUPERPOWER = 'Recupera no-shows';
+const POSTSALE_SUPERPOWER = 'Seguimiento post-venta';
 
 /** Negocios activos que tienen un superpoder (por nombre) activo. */
 async function businessesWithSuperpower(name: string): Promise<string[]> {
@@ -129,6 +135,35 @@ export async function runNoShowRecovery(): Promise<void> {
   }
 }
 
+/** Seguimiento post-venta de los turnos completados ayer, por negocio con el superpoder activo. */
+export async function runPostSaleFollowUps(): Promise<void> {
+  const businessIds = await businessesWithSuperpower(POSTSALE_SUPERPOWER);
+  for (const businessId of businessIds) {
+    try {
+      const userId = await adminUserId(businessId);
+      if (!userId) continue;
+      const items = await generatePostSaleFollowUps(businessId);
+      if (items.length === 0) continue;
+      const body = [
+        `${items.length} cliente(s) completaron su turno ayer. Mensajes de seguimiento listos para enviar:`,
+        ...items.map((i) => `• ${i.clientName} (${i.service})`),
+      ].join('\n');
+      await prisma.notification.create({
+        data: {
+          businessId,
+          userId,
+          type: 'GENERAL',
+          channel: 'PUSH',
+          title: `Seguimiento post-venta: ${items.length} cliente(s)`,
+          body,
+        },
+      });
+    } catch (err) {
+      console.error(`[scheduler] Error en seguimiento post-venta de ${businessId}:`, err);
+    }
+  }
+}
+
 let started = false;
 
 /** Programa los jobs diarios. Idempotente (no duplica los cron). */
@@ -151,5 +186,10 @@ export function startScheduler(): void {
     runNoShowRecovery().catch((err) => console.error('[scheduler] runNoShowRecovery:', err));
   });
 
-  console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00)');
+  // Seguimiento post-venta de los turnos completados ayer, a las 11:00.
+  cron.schedule('0 11 * * *', () => {
+    runPostSaleFollowUps().catch((err) => console.error('[scheduler] runPostSaleFollowUps:', err));
+  });
+
+  console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00, post-venta 11:00)');
 }
