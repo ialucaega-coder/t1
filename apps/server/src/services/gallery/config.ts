@@ -76,22 +76,56 @@ export function assertHttpUrl(url: string): void {
   }
 }
 
-/** Devuelve la Connection de galería del negocio, creándola si no existe. */
-async function getOrCreateConnection(businessId: string) {
-  const existing = await prisma.connection.findFirst({
-    where: { businessId, type: GALLERY_TYPE },
-  });
-  if (existing) return existing;
+/**
+ * Aplica una mutación a la lista de items de forma atómica.
+ *
+ * Corre dentro de una transacción y bloquea la fila de la Connection con
+ * `SELECT ... FOR UPDATE`, de modo que dos escrituras concurrentes (dos tabs,
+ * doble click, reintentos) se serialicen y no se pisen (evita lost-update).
+ * Nota: para una Connection que aún no existe, el create no puede bloquearse;
+ * lo ideal a futuro es un @@unique([businessId, type]) en el schema para un
+ * upsert 100% a prueba de carreras (hoy el schema está congelado).
+ */
+async function mutateGallery<T>(
+  businessId: string,
+  mutate: (items: GalleryItem[]) => { items: GalleryItem[]; result: T }
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    let conn = await tx.connection.findFirst({
+      where: { businessId, type: GALLERY_TYPE },
+      select: { id: true },
+    });
 
-  return prisma.connection.create({
-    data: {
-      name: 'Galería',
-      type: GALLERY_TYPE,
-      icon: 'Images',
-      config: toConfig([]),
-      isActive: false,
-      businessId,
-    },
+    if (!conn) {
+      conn = await tx.connection.create({
+        data: {
+          name: 'Galería',
+          type: GALLERY_TYPE,
+          icon: 'Images',
+          config: toConfig([]),
+          isActive: false,
+          businessId,
+        },
+        select: { id: true },
+      });
+    } else {
+      // Bloquea la fila hasta el fin de la transacción.
+      await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${conn.id} FOR UPDATE`;
+    }
+
+    const fresh = await tx.connection.findUnique({
+      where: { id: conn.id },
+      select: { config: true },
+    });
+    const items = parseItems(fresh?.config);
+    const { items: nextItems, result } = mutate(items);
+
+    await tx.connection.update({
+      where: { id: conn.id },
+      data: { config: toConfig(nextItems) },
+    });
+
+    return result;
   });
 }
 
@@ -111,9 +145,6 @@ export async function addItem(
   input: AddGalleryItemInput
 ): Promise<GalleryItem> {
   assertHttpUrl(input.url);
-  const connection = await getOrCreateConnection(businessId);
-  const items = parseItems(connection.config);
-
   const item: GalleryItem = {
     id: randomUUID(),
     url: input.url,
@@ -123,12 +154,10 @@ export async function addItem(
     createdAt: new Date().toISOString(),
   };
 
-  await prisma.connection.update({
-    where: { id: connection.id },
-    data: { config: toConfig([...items, item]) },
-  });
-
-  return item;
+  return mutateGallery(businessId, (items) => ({
+    items: [...items, item],
+    result: item,
+  }));
 }
 
 /** Actualiza un item existente y devuelve el item actualizado. */
@@ -139,45 +168,28 @@ export async function updateItem(
 ): Promise<GalleryItem> {
   if (input.url !== undefined) assertHttpUrl(input.url);
 
-  const connection = await prisma.connection.findFirst({
-    where: { businessId, type: GALLERY_TYPE },
+  return mutateGallery(businessId, (items) => {
+    const index = items.findIndex((i) => i.id === itemId);
+    if (index === -1) throw new AppError(404, 'Item de galería no encontrado');
+
+    const updated: GalleryItem = {
+      ...items[index],
+      ...(input.url !== undefined ? { url: input.url } : {}),
+      ...(input.tipo !== undefined ? { tipo: input.tipo } : {}),
+      ...(input.titulo !== undefined ? { titulo: input.titulo.trim() } : {}),
+      ...(input.descripcion !== undefined ? { descripcion: input.descripcion.trim() } : {}),
+    };
+    const next = [...items];
+    next[index] = updated;
+    return { items: next, result: updated };
   });
-  if (!connection) throw new AppError(404, 'Item de galería no encontrado');
-
-  const items = parseItems(connection.config);
-  const index = items.findIndex((i) => i.id === itemId);
-  if (index === -1) throw new AppError(404, 'Item de galería no encontrado');
-
-  const updated: GalleryItem = {
-    ...items[index],
-    ...(input.url !== undefined ? { url: input.url } : {}),
-    ...(input.tipo !== undefined ? { tipo: input.tipo } : {}),
-    ...(input.titulo !== undefined ? { titulo: input.titulo.trim() } : {}),
-    ...(input.descripcion !== undefined ? { descripcion: input.descripcion.trim() } : {}),
-  };
-  items[index] = updated;
-
-  await prisma.connection.update({
-    where: { id: connection.id },
-    data: { config: toConfig(items) },
-  });
-
-  return updated;
 }
 
 /** Elimina un item de la galería. */
 export async function removeItem(businessId: string, itemId: string): Promise<void> {
-  const connection = await prisma.connection.findFirst({
-    where: { businessId, type: GALLERY_TYPE },
-  });
-  if (!connection) throw new AppError(404, 'Item de galería no encontrado');
-
-  const items = parseItems(connection.config);
-  const next = items.filter((i) => i.id !== itemId);
-  if (next.length === items.length) throw new AppError(404, 'Item de galería no encontrado');
-
-  await prisma.connection.update({
-    where: { id: connection.id },
-    data: { config: toConfig(next) },
+  await mutateGallery(businessId, (items) => {
+    const next = items.filter((i) => i.id !== itemId);
+    if (next.length === items.length) throw new AppError(404, 'Item de galería no encontrado');
+    return { items: next, result: undefined };
   });
 }

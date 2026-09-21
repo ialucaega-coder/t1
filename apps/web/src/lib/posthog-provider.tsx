@@ -29,8 +29,12 @@ function initPostHog() {
     api_host: POSTHOG_HOST,
     // Capturamos pageviews manualmente (App Router no dispara navegacion full-page).
     capture_pageview: false,
-    // Captura automatica de clicks/inputs; se puede desactivar si se prefiere.
-    autocapture: true,
+    // Desactivado a proposito: el panel muestra PII de clientes (nombres,
+    // telefonos, mensajes). Con autocapture PostHog podria capturar ese
+    // contenido del DOM. Capturamos solo eventos explicitos.
+    autocapture: false,
+    // Enmascara todo el texto en session recordings por si se habilitan.
+    mask_all_text: true,
     // Respeta la configuracion "Do Not Track" del navegador.
     respect_dnt: true,
   });

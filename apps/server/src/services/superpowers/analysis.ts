@@ -41,10 +41,14 @@ function formatTranscript(messages: TranscriptMessage[]): string {
 function extractJson(text: string): Record<string, unknown> | null {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
+  if (start === -1 || end === -1 || end <= start) {
+    console.warn('[analisis] La respuesta del modelo no contenía un bloque JSON; se usa fallback.');
+    return null;
+  }
   try {
     return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
   } catch {
+    console.warn('[analisis] No se pudo parsear el JSON del modelo; se usa fallback.');
     return null;
   }
 }

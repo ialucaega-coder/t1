@@ -270,16 +270,19 @@ export async function processMessage(
       data: { status: 'HANDOFF' },
     });
 
-    await prisma.notification.create({
-      data: {
-        userId: (await prisma.user.findFirst({ where: { businessId, role: 'ADMIN' } }))?.id || '',
-        type: 'GENERAL',
-        channel: 'PUSH',
-        title: 'Handoff solicitado',
-        body: `Un cliente pidió hablar con un humano en el chat (${channel}).`,
-        businessId,
-      },
-    }).catch(() => {});
+    const adminId = (await prisma.user.findFirst({ where: { businessId, role: 'ADMIN' }, select: { id: true } }))?.id;
+    if (adminId) {
+      await prisma.notification.create({
+        data: {
+          userId: adminId,
+          type: 'GENERAL',
+          channel: 'PUSH',
+          title: 'Handoff solicitado',
+          body: `Un cliente pidió hablar con un humano en el chat (${channel}).`,
+          businessId,
+        },
+      }).catch(() => {});
+    }
   } else if (intent === 'BOOKING') {
     const result = await handleBookingIntent(businessId);
     responseText = result.text;
