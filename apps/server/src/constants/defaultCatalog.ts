@@ -223,6 +223,27 @@ export const DEFAULT_SUPERPOWERS = [
     isActive: true,
   },
   {
+    name: 'Alerta de emergencia',
+    subtitle: 'AVISA CUANDO ES URGENTE.',
+    description: 'Detecta situaciones urgentes (queja grave, cliente VIP, pedido grande o amenaza de irse) y notifica al instante al dueno.',
+    iconName: 'Siren',
+    isActive: false,
+  },
+  {
+    name: 'Seguimiento post-venta',
+    subtitle: 'NO PIERDAS AL CLIENTE DESPUES.',
+    description: 'Arma mensajes de seguimiento para los turnos completados y te avisa para agradecer e invitar a la proxima cita.',
+    iconName: 'Sword',
+    isActive: false,
+  },
+  {
+    name: 'Auto-mejora',
+    subtitle: 'EL BOT SE CORRIGE SOLO.',
+    description: 'Detecta los huecos de conocimiento del bot (derivaciones y respuestas sin datos) y sugiere que agregar al Prompt/FAQ.',
+    iconName: 'Zap',
+    isActive: false,
+  },
+  {
     name: 'Encuestas de satisfaccion',
     subtitle: 'MIDE LA ATENCION EN CADA CHARLA.',
     description: 'Al resolver una consulta, el bot pide una calificacion del 1 al 5 para medir la satisfaccion del cliente.',

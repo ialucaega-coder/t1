@@ -160,3 +160,47 @@ export async function generateNoShowRecovery(businessId: string, reference = new
     };
   });
 }
+
+export interface PostSaleFollowUp {
+  bookingId: string;
+  clientName: string;
+  service: string;
+  /** Mensaje de seguimiento listo para enviar: agradece e invita a volver. */
+  text: string;
+}
+
+/**
+ * Superpoder "Seguimiento post-venta": busca los turnos COMPLETED del día
+ * anterior y arma un mensaje cálido que agradece la visita e invita a agendar
+ * la próxima cita. No envía nada; devuelve los textos listos para despachar.
+ */
+export async function generatePostSaleFollowUps(
+  businessId: string,
+  reference = new Date(),
+): Promise<PostSaleFollowUp[]> {
+  const yesterday = new Date(reference);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const { start, end } = dayRange(yesterday);
+
+  const business = await prisma.business.findUnique({ where: { id: businessId }, select: { name: true } });
+  const businessName = business?.name || 'el negocio';
+
+  const bookings = await prisma.booking.findMany({
+    where: { businessId, status: 'COMPLETED', date: { gte: start, lt: end } },
+    select: { id: true, client: { select: { name: true } }, service: { select: { name: true } } },
+    orderBy: { date: 'asc' },
+  });
+
+  return bookings.map((b) => {
+    const clientName = b.client?.name || 'Hola';
+    const service = b.service?.name || 'tu visita';
+    return {
+      bookingId: b.id,
+      clientName,
+      service,
+      text:
+        `${clientName}, ¡gracias por elegir ${businessName}! Esperamos que hayas quedado conforme con ${service}. ` +
+        `Cuando quieras coordinamos tu próxima cita — respondé este mensaje y la agendamos. 😊`,
+    };
+  });
+}

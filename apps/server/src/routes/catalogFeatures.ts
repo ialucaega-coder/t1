@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma';
 import { DEFAULT_SKILLS, DEFAULT_SUPERPOWERS } from '../constants/defaultCatalog';
 import { updateCatalogItemSchema, UpdateCatalogItemInput } from '../validators/catalog';
 import { generateDailyReport, generateReminders } from '../services/superpowers/report';
+import { analyzeConversation, detectKnowledgeGaps } from '../services/superpowers/analysis';
 import { ensureDefaultFeatures, readFeatureConfig as readConfig, type FeatureKind } from '../services/catalog';
 
 function mapFeature(row: {
@@ -51,6 +52,50 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
       asyncHandler(async (req, res) => {
         const reminders = await generateReminders(req.auth!.businessId);
         res.json(reminders);
+      })
+    );
+
+    // GET /api/superpowers/analisis/:conversationId — Superpoder "Analista IA".
+    // Devuelve { intencion, satisfaccion, objeciones, siguientePaso, resumen }.
+    router.get(
+      '/analisis/:conversationId',
+      requireAuth,
+      asyncHandler(async (req, res) => {
+        const businessId = req.auth!.businessId;
+        const conversationId = decodeURIComponent(String(req.params.conversationId));
+
+        const conversation = await prisma.conversation.findFirst({
+          where: { id: conversationId, businessId },
+          select: { id: true },
+        });
+        if (!conversation) throw new AppError(404, 'Conversación no encontrada');
+
+        const messages = await prisma.message.findMany({
+          where: { conversationId },
+          orderBy: { createdAt: 'asc' },
+          take: 100,
+          select: { role: true, text: true },
+        });
+        if (messages.length === 0) throw new AppError(400, 'La conversación no tiene mensajes para analizar');
+
+        try {
+          const analysis = await analyzeConversation(businessId, messages);
+          res.json(analysis);
+        } catch (err) {
+          throw new AppError(503, 'No se pudo analizar la conversación: el proveedor de IA no está disponible');
+        }
+      })
+    );
+
+    // GET /api/superpowers/gaps — Superpoder "Auto-mejora".
+    // Detecta huecos de conocimiento (handoffs / respuestas sin datos) y sugiere
+    // qué agregar al Prompt/FAQ, agrupado por tema.
+    router.get(
+      '/gaps',
+      requireAuth,
+      asyncHandler(async (req, res) => {
+        const result = await detectKnowledgeGaps(req.auth!.businessId);
+        res.json(result);
       })
     );
   }
