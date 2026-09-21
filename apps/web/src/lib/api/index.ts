@@ -32,3 +32,4 @@ export * as templatesApi from './templates';
 export * as industryTemplatesApi from './industryTemplates';
 export * as webhooksApi from './webhooks';
 export * as brandApi from './brand';
+export * as galleryApi from './gallery';

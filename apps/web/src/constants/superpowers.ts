@@ -1,7 +1,7 @@
 import {
   Shield, Eye, Siren, Target, Receipt, FileBarChart,
   BellRing, Lock, Brain, Zap, Gauge, Sword, Sparkles, Languages,
-  Star, ThumbsUp, CalendarClock,
+  Star, ThumbsUp, CalendarClock, Images,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -31,4 +31,5 @@ export const SUPERPOWERS: Superpower[] = [
   { name: 'Encuestas de satisfaccion', subtitle: 'MIDE LA ATENCIÓN EN CADA CHARLA.', description: 'Al resolver una consulta, el bot pide una calificación del 1 al 5 para medir la satisfacción del cliente.', icon: Star, isActive: false },
   { name: 'Pide resenas Google', subtitle: 'MÁS RESEÑAS, MEJOR REPUTACIÓN.', description: 'Cuando el cliente queda conforme, el bot lo invita amablemente a dejar una reseña en Google.', icon: ThumbsUp, isActive: false },
   { name: 'Recupera no-shows', subtitle: 'RECUPERA A LOS QUE NO VINIERON.', description: 'Detecta turnos marcados como no-show y arma un mensaje para reprogramarlos automáticamente.', icon: CalendarClock, isActive: false },
+  { name: 'Galería', subtitle: 'FOTOS, VIDEOS Y AUDIOS REALES.', description: 'Carga material real por URL para que el bot lo comparta en el chat y se vea en el panel.', icon: Images, isActive: false },
 ];

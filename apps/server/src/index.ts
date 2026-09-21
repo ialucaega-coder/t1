@@ -45,6 +45,7 @@ import { webhooksRouter } from './routes/webhooks';
 import { posRouter } from './routes/pos';
 import { voiceRouter } from './routes/voice';
 import { brandRouter } from './routes/brand';
+import { galeriaRouter } from './routes/galeria';
 import { restoreActiveBots } from './services/telegram/bot';
 import { startScheduler } from './services/scheduler';
 import { apiRateLimit } from './middleware/rateLimit';
@@ -169,6 +170,7 @@ app.use('/api/webhooks', webhooksRouter);
 app.use('/api/pos', posRouter);
 app.use('/api/voice', voiceRouter);
 app.use('/api/brand', brandRouter);
+app.use('/api/galeria', galeriaRouter);
 app.use('/api/public', cors({ origin: true, credentials: false }), publicChatRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
