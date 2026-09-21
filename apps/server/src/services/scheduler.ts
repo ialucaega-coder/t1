@@ -13,10 +13,11 @@
  */
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma';
-import { generateDailyReport, generateReminders } from './superpowers/report';
+import { generateDailyReport, generateReminders, generateNoShowRecovery } from './superpowers/report';
 
 const REPORT_SUPERPOWER = 'Reportes automaticos';
 const REMINDER_SUPERPOWER = 'Recordatorios inteligentes';
+const NOSHOW_SUPERPOWER = 'Recupera no-shows';
 
 /** Negocios activos que tienen un superpoder (por nombre) activo. */
 async function businessesWithSuperpower(name: string): Promise<string[]> {
@@ -99,6 +100,35 @@ export async function runReminders(): Promise<void> {
   }
 }
 
+/** Recupera los no-shows del día de cada negocio con el superpoder activo. */
+export async function runNoShowRecovery(): Promise<void> {
+  const businessIds = await businessesWithSuperpower(NOSHOW_SUPERPOWER);
+  for (const businessId of businessIds) {
+    try {
+      const userId = await adminUserId(businessId);
+      if (!userId) continue;
+      const items = await generateNoShowRecovery(businessId);
+      if (items.length === 0) continue;
+      const body = [
+        `${items.length} turno(s) marcados como no-show hoy. Mensajes de recuperación listos:`,
+        ...items.map((i) => `• ${i.clientName} (${i.service})`),
+      ].join('\n');
+      await prisma.notification.create({
+        data: {
+          businessId,
+          userId,
+          type: 'GENERAL',
+          channel: 'PUSH',
+          title: `Recuperá ${items.length} no-show(s) de hoy`,
+          body,
+        },
+      });
+    } catch (err) {
+      console.error(`[scheduler] Error en recuperación de no-shows de ${businessId}:`, err);
+    }
+  }
+}
+
 let started = false;
 
 /** Programa los jobs diarios. Idempotente (no duplica los cron). */
@@ -116,5 +146,10 @@ export function startScheduler(): void {
     runReminders().catch((err) => console.error('[scheduler] runReminders:', err));
   });
 
-  console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00)');
+  // Recuperación de no-shows, a las 21:00 (cierre del día).
+  cron.schedule('0 21 * * *', () => {
+    runNoShowRecovery().catch((err) => console.error('[scheduler] runNoShowRecovery:', err));
+  });
+
+  console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00)');
 }

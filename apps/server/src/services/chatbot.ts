@@ -131,6 +131,23 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     );
   }
 
+  // --- Encuestas de satisfacción ---
+  if (superpowers.has('Encuestas de satisfaccion')) {
+    lines.push(
+      'ENCUESTAS DE SATISFACCION: Cuando resolviste la consulta del cliente o antes de despedirte, pedile amablemente que califique la atención del 1 al 5 (1 = muy mala, 5 = excelente). Agradecé la respuesta sin importar el puntaje.',
+    );
+  }
+
+  // --- Pide reseñas en Google ---
+  if (superpowers.has('Pide resenas Google')) {
+    const reviewHint = business?.websiteUrl
+      ? ` Podés orientarlos con este enlace del negocio: ${business.websiteUrl}.`
+      : '';
+    lines.push(
+      `PIDE RESEÑAS GOOGLE: Si el cliente quedó conforme o te agradece, invitalo con calidez a dejar una reseña en Google para ayudar al negocio.${reviewHint} Hacelo una sola vez y sin insistir.`,
+    );
+  }
+
   // --- Multi-idioma (mejora de la línea genérica de idioma) ---
   if (superpowers.has('Multi-idioma')) {
     lines.push(

@@ -39,10 +39,16 @@ export async function ensureDefaultFeatures(
 ): Promise<void> {
   const existing = await prisma.skill.findMany({ where: { businessId } });
   const existingForKind = existing.filter((row) => readFeatureConfig(row.config).kind === kind);
-  if (existingForKind.length > 0) return;
+  const existingNames = new Set(existingForKind.map((row) => row.name.trim().toLowerCase()));
+
+  // Sembramos solo los que faltan. Así, cuando se agregan features nuevas al
+  // catálogo, aparecen también en los negocios que ya tenían las anteriores
+  // (antes solo se sembraba si el negocio no tenía ninguna).
+  const missing = defaults.filter((f) => !existingNames.has(f.name.trim().toLowerCase()));
+  if (missing.length === 0) return;
 
   await prisma.skill.createMany({
-    data: defaults.map((feature) => ({
+    data: missing.map((feature) => ({
       businessId,
       name: feature.name,
       description: feature.description,

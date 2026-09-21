@@ -222,4 +222,25 @@ export const DEFAULT_SUPERPOWERS = [
     iconName: 'Brain',
     isActive: true,
   },
+  {
+    name: 'Encuestas de satisfaccion',
+    subtitle: 'MIDE LA ATENCION EN CADA CHARLA.',
+    description: 'Al resolver una consulta, el bot pide una calificacion del 1 al 5 para medir la satisfaccion del cliente.',
+    iconName: 'Star',
+    isActive: false,
+  },
+  {
+    name: 'Pide resenas Google',
+    subtitle: 'MAS RESENAS, MEJOR REPUTACION.',
+    description: 'Cuando el cliente queda conforme, el bot lo invita amablemente a dejar una resena en Google.',
+    iconName: 'ThumbsUp',
+    isActive: false,
+  },
+  {
+    name: 'Recupera no-shows',
+    subtitle: 'RECUPERA A LOS QUE NO VINIERON.',
+    description: 'Detecta turnos marcados como no-show y arma un mensaje para reprogramarlos automaticamente.',
+    iconName: 'CalendarClock',
+    isActive: false,
+  },
 ] as const;

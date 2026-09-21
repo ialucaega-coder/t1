@@ -122,3 +122,41 @@ export async function generateReminders(businessId: string, reference = new Date
     };
   });
 }
+
+export interface NoShowRecovery {
+  bookingId: string;
+  clientName: string;
+  service: string;
+  /** Mensaje listo para reprogramar el turno perdido. */
+  text: string;
+}
+
+/**
+ * Superpoder "Recupera no-shows": busca los turnos marcados como NO_SHOW en el
+ * día dado (por defecto hoy) y arma un mensaje cálido para reprogramarlos.
+ * No envía nada; devuelve los textos listos para despachar.
+ */
+export async function generateNoShowRecovery(businessId: string, reference = new Date()): Promise<NoShowRecovery[]> {
+  const { start, end } = dayRange(reference);
+  const business = await prisma.business.findUnique({ where: { id: businessId }, select: { name: true } });
+  const businessName = business?.name || 'el negocio';
+
+  const bookings = await prisma.booking.findMany({
+    where: { businessId, status: 'NO_SHOW', updatedAt: { gte: start, lt: end } },
+    select: { id: true, client: { select: { name: true } }, service: { select: { name: true } } },
+    orderBy: { updatedAt: 'asc' },
+  });
+
+  return bookings.map((b) => {
+    const clientName = b.client?.name || 'Hola';
+    const service = b.service?.name || 'tu turno';
+    return {
+      bookingId: b.id,
+      clientName,
+      service,
+      text:
+        `${clientName}, te esperábamos hoy en ${businessName} para ${service} y no pudiste venir. ` +
+        `¿Querés que te reprogramemos? Respondé y coordinamos un nuevo horario que te quede cómodo. 😊`,
+    };
+  });
+}
