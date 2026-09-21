@@ -59,6 +59,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Órdenes', href: '/ordenes', icon: ShoppingBag },
       { name: 'Movimientos', href: '/movimientos', icon: DollarSign },
       { name: 'POS / Caja', href: '/pos', icon: CreditCard, badge: 'new' },
+      { name: 'Cobros', href: '/cobros', icon: DollarSign, badge: 'new' },
       { name: 'Clientes', href: '/clientes', icon: UserCheck },
     ],
   },

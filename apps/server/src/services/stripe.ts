@@ -158,6 +158,53 @@ export async function createCheckoutSession(
 }
 
 /**
+ * Crea un link de cobro de una sola vez ("Cobros por WhatsApp"): una URL de
+ * Stripe Checkout en modo pago que el negocio le manda al cliente por chat.
+ * Soporta montos e importes arbitrarios sin necesidad de crear productos.
+ */
+export async function createPaymentLink(
+  businessId: string,
+  params: { amount: number; description: string; currency?: string },
+): Promise<string> {
+  const business = await prisma.business.findUnique({ where: { id: businessId } });
+  if (!business) {
+    throw new AppError(404, 'Negocio no encontrado');
+  }
+
+  const currency = (params.currency || business.currency || 'usd').toLowerCase();
+  const unitAmount = Math.round(params.amount * 100);
+  if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
+    throw new AppError(400, 'El monto del cobro debe ser mayor a 0');
+  }
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+  const session = await getStripe().checkout.sessions.create({
+    mode: 'payment',
+    payment_method_types: ['card'],
+    line_items: [
+      {
+        price_data: {
+          currency,
+          product_data: { name: params.description || `Cobro de ${business.name}` },
+          unit_amount: unitAmount,
+        },
+        quantity: 1,
+      },
+    ],
+    metadata: { businessId, kind: 'payment_link' },
+    success_url: `${frontendUrl}/cobros?paid=true`,
+    cancel_url: `${frontendUrl}/cobros?cancelled=true`,
+  });
+
+  if (!session.url) {
+    throw new AppError(502, 'No se pudo crear el link de cobro');
+  }
+
+  return session.url;
+}
+
+/**
  * Creates a Stripe Customer Portal session so the user can manage
  * their subscription, payment methods, and invoices directly.
  */

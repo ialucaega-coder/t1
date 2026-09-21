@@ -10,11 +10,18 @@ import {
   cancelSubscription,
   constructWebhookEvent,
   handleWebhookEvent,
+  createPaymentLink,
 } from '../services/stripe';
 
 const subscribeSchema = z.object({
   planId: z.string().min(1),
   interval: z.enum(['monthly', 'yearly']).default('monthly'),
+});
+
+const paymentLinkSchema = z.object({
+  amount: z.number().positive().max(1_000_000),
+  description: z.string().trim().min(1).max(200),
+  currency: z.string().trim().length(3).optional(),
 });
 
 const router = Router();
@@ -97,6 +104,20 @@ router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, re
 
   res.json({ url: checkoutUrl });
 }));
+
+// Cobros: genera un link de pago de una sola vez para mandarle al cliente.
+router.post(
+  '/payment-link',
+  requireRole('ADMIN'),
+  validate(paymentLinkSchema),
+  asyncHandler(async (req, res) => {
+    const { amount, description, currency } = req.body as {
+      amount: number; description: string; currency?: string;
+    };
+    const url = await createPaymentLink(req.auth!.businessId, { amount, description, currency });
+    res.json({ url });
+  })
+);
 
 router.post('/portal', asyncHandler(async (req, res) => {
   const businessId = req.auth!.businessId;

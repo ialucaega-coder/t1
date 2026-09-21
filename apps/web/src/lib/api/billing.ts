@@ -59,3 +59,7 @@ export function createPortalSession() {
 export function cancelSubscription() {
   return httpClient.post<Subscription>('/billing/cancel', {});
 }
+
+export function createPaymentLink(amount: number, description: string, currency?: string) {
+  return httpClient.post<{ url: string }>('/billing/payment-link', { amount, description, currency });
+}
