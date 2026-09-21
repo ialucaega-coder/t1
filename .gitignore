@@ -12,3 +12,4 @@ coverage/
 .vscode/
 Obsidian/
 *.tsbuildinfo
+apps/web/tsconfig.tsbuildinfo

@@ -1,0 +1,64 @@
+# .github/workflows/deploy-web.yml
+# Deploy de apps/web (Next.js 14) a Vercel en cada push a main.
+#
+# Secrets de GitHub necesarios (Settings > Secrets and variables > Actions):
+#   - VERCEL_TOKEN       Token personal de Vercel (Account Settings > Tokens).
+#   - VERCEL_ORG_ID      ID de la organizacion/team de Vercel.
+#   - VERCEL_PROJECT_ID  ID del proyecto de Vercel para apps/web.
+#
+# NUNCA se hardcodean valores reales: todo viene de ${{ secrets.* }}.
+
+name: Deploy Web (Vercel)
+
+on:
+  push:
+    branches: [main]
+    # Solo dispara si cambian archivos relevantes al frontend o config compartida.
+    paths:
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'prisma/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vercel.json'
+      - '.github/workflows/deploy-web.yml'
+  # Permite lanzar el deploy manualmente desde la pestana Actions.
+  workflow_dispatch:
+
+# Evita despliegues concurrentes pisandose entre si.
+concurrency:
+  group: deploy-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy a Vercel (produccion)
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Instalar Vercel CLI
+        run: npm install --global vercel@latest
+
+      # Descarga la configuracion del proyecto (env vars, settings) desde Vercel.
+      - name: Vercel pull (entorno production)
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      # Build de produccion usando la toolchain de Vercel (respeta vercel.json).
+      - name: Vercel build (produccion)
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      # Sube el artefacto ya compilado y promueve a produccion.
+      - name: Vercel deploy (produccion)
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
