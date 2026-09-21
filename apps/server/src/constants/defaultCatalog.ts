@@ -208,4 +208,11 @@ export const DEFAULT_SUPERPOWERS = [
     iconName: 'Brain',
     isActive: true,
   },
+  {
+    name: 'Galería',
+    subtitle: 'FOTOS, VIDEOS Y AUDIOS REALES.',
+    description: 'Carga material real por URL para que el bot lo comparta en el chat y se vea en el panel.',
+    iconName: 'Images',
+    isActive: false,
+  },
 ] as const;

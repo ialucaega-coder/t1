@@ -1,6 +1,6 @@
 import {
   Shield, Eye, Siren, Target, Receipt, FileBarChart,
-  BellRing, Lock, Brain, Zap, Gauge, Sword,
+  BellRing, Lock, Brain, Zap, Gauge, Sword, Images,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -25,4 +25,5 @@ export const SUPERPOWERS: Superpower[] = [
   { name: 'Turbo respuesta', subtitle: 'RESPONDE EN MENOS DE 2 SEGUNDOS.', description: 'Optimiza la velocidad de respuesta del bot usando cache inteligente y priorización de mensajes.', icon: Gauge, isActive: true },
   { name: 'Seguimiento post-venta', subtitle: 'NO PIERDAS AL CLIENTE DESPUÉS.', description: 'Envía seguimiento automático después de la compra: satisfacción, reseña, próxima cita.', icon: Sword, isActive: true },
   { name: 'Alerta de emergencia', subtitle: 'AVISA CUANDO ES URGENTE.', description: 'Detecta situaciones urgentes (cliente VIP, queja grave, pedido grande) y te notifica al instante.', icon: Siren, isActive: true },
+  { name: 'Galería', subtitle: 'FOTOS, VIDEOS Y AUDIOS REALES.', description: 'Carga material real por URL para que el bot lo comparta en el chat y se vea en el panel.', icon: Images, isActive: false },
 ];
