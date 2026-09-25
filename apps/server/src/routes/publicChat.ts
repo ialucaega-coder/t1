@@ -5,8 +5,32 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { getIO } from '../lib/socket';
+import { cache, cacheKey } from '../lib/cache';
 
 const router = Router();
+
+// Tope diario de mensajes CON imágenes por negocio (superpoder "Oído y vista").
+// Las llamadas de visión a la IA son bastante más caras que un mensaje de texto,
+// y el chat público es anónimo. El rate limit global de la API ya frena el abuso
+// masivo; esto agrega un límite de costo específico para visión, por negocio y
+// por día. Es una caché en memoria (best-effort): si el proceso reinicia, se
+// reinicia el contador — suficiente como guarda de costo.
+const MAX_VISION_MSGS_PER_DAY = 300;
+
+/**
+ * Incrementa y controla el contador diario de mensajes con imágenes del negocio.
+ * Devuelve `true` si ya se superó el tope (hay que rechazar). Node es de un solo
+ * hilo, así que el get+set no tiene carrera dentro del proceso.
+ */
+function overVisionDailyLimit(businessId: string): boolean {
+  const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  const key = cacheKey(businessId, 'vision-msgs', day);
+  const count = cache.get<number>(key) ?? 0;
+  if (count >= MAX_VISION_MSGS_PER_DAY) return true;
+  // TTL de 24h: la clave del día vive lo suficiente y luego se descarta sola.
+  cache.set(key, count + 1, 24 * 60 * 60 * 1000);
+  return false;
+}
 
 // URL de imagen válida: debe ser http(s). Se usa para el superpoder "Oído y
 // vista" (visión) — el widget puede pegar una URL de imagen para preguntar sobre ella.
@@ -105,6 +129,19 @@ router.post('/chat', asyncHandler(async (req, res) => {
     ...(data.imageUrls ?? []),
   ];
   const images = imageUrls.length ? imageUrls.map((url) => ({ url })) : undefined;
+
+  // Guarda de costo: si el mensaje trae imágenes, controlamos el tope diario de
+  // visión del negocio antes de reenviar a la IA. Al superarlo, respondemos de
+  // forma amable sin llamar al proveedor (evita el gasto).
+  if (images && overVisionDailyLimit(bot.businessId)) {
+    res.json({
+      text: 'Recibimos muchas imágenes hoy. Escribinos tu consulta por texto y con gusto te ayudamos.',
+      intent: 'FAQ',
+      actions: [],
+      conversationId: data.conversationId || '',
+    });
+    return;
+  }
 
   const response = await processMessage(bot.businessId, data.message, 'WEB', {
     conversationId: data.conversationId,
