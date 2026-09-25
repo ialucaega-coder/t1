@@ -9,7 +9,7 @@
  */
 import { prisma } from '../lib/prisma';
 import { getDefaultAIProvider } from './ai';
-import type { ConversationTurn } from './ai';
+import type { ConversationTurn, ImageInput } from './ai';
 import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
 
 async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
@@ -60,6 +60,12 @@ export interface ProcessMessageOptions {
    * sin duplicar la lógica de buildSystemPrompt.
    */
   systemPromptExtra?: string;
+  /**
+   * Imágenes adjuntas al mensaje (superpoder "Oído y vista" — visión).
+   * Solo se envían al proveedor de IA si el superpoder está activo para el
+   * negocio; en caso contrario se ignoran.
+   */
+  images?: ImageInput[];
 }
 
 /**
@@ -309,6 +315,15 @@ export async function processMessage(
       clientName = client?.name;
     }
 
+    // Superpoder "Oído y vista": solo pasamos imágenes al proveedor si está
+    // activo para el negocio. Si no, se ignoran (aunque hayan venido en options).
+    // Evitamos la consulta extra a la DB cuando el mensaje no trae imágenes.
+    let images: ImageInput[] | undefined;
+    if (options.images?.length) {
+      const activeSuperpowers = await getActiveSuperpowers(businessId);
+      if (activeSuperpowers.has('Oído y vista')) images = options.images;
+    }
+
     try {
       const provider = getDefaultAIProvider();
       responseText = await provider.generateResponse(clientMessage, {
@@ -316,6 +331,7 @@ export async function processMessage(
         clientName,
         history: dbHistory,
         systemPrompt: enrichedPrompt,
+        ...(images ? { images } : {}),
       });
     } catch (error) {
       console.error('Error generando respuesta de IA:', error);

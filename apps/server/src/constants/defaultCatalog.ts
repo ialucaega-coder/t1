@@ -271,4 +271,11 @@ export const DEFAULT_SUPERPOWERS = [
     iconName: 'Images',
     isActive: false,
   },
+  {
+    name: 'Oído y vista',
+    subtitle: 'ENTIENDE LAS FOTOS QUE LE MANDAN.',
+    description: 'El bot analiza las imagenes que el cliente adjunta (por URL) y responde sobre lo que ve. El audio (transcripcion) queda para una proxima version.',
+    iconName: 'Eye',
+    isActive: false,
+  },
 ] as const;

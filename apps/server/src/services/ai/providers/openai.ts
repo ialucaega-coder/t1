@@ -30,6 +30,10 @@ export class OpenAIProvider implements AIProvider {
   /**
    * Genera una respuesta usando la API de Chat Completions de OpenAI.
    * El prompt de sistema se manda como primer mensaje con role "system".
+   *
+   * NOTA: este proveedor todavía NO soporta el superpoder "Oído y vista"
+   * (visión). Si el contexto trae `images`, se ignoran de forma segura y solo
+   * se procesa el texto. La visión con OpenAI queda como mejora futura.
    */
   async generateResponse(prompt: string, context: ConversationContext): Promise<string> {
     const messages = [

@@ -13,6 +13,18 @@ export interface ConversationTurn {
 }
 
 /**
+ * Imagen adjunta a un mensaje del usuario (superpoder "Oído y vista" — visión).
+ * Se puede pasar por URL pública (http/https) o por base64 embebido.
+ * `mediaType` es opcional para base64 (ej: "image/jpeg"); si no se pasa, se
+ * asume "image/jpeg". Para URLs no hace falta.
+ */
+export interface ImageInput {
+  url?: string;
+  base64?: string;
+  mediaType?: string;
+}
+
+/**
  * Contexto que se le pasa al proveedor de IA para generar una respuesta.
  * Incluye todo lo que el modelo necesita saber sobre el negocio y la charla.
  */
@@ -25,6 +37,12 @@ export interface ConversationContext {
   history: ConversationTurn[];
   /** Prompt de sistema que define la personalidad y reglas del bot. */
   systemPrompt: string;
+  /**
+   * Imágenes adjuntas al último mensaje del usuario (superpoder "Oído y vista").
+   * Solo los proveedores con soporte de visión (ej: Anthropic) las usan; los
+   * demás las ignoran de forma segura.
+   */
+  images?: ImageInput[];
 }
 
 /**

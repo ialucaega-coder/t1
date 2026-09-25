@@ -8,12 +8,22 @@ import { getIO } from '../lib/socket';
 
 const router = Router();
 
+// URL de imagen válida: debe ser http(s). Se usa para el superpoder "Oído y
+// vista" (visión) — el widget puede pegar una URL de imagen para preguntar sobre ella.
+const httpImageUrl = z
+  .string()
+  .url()
+  .refine((u) => /^https?:\/\//i.test(u), 'La URL de imagen debe empezar con http:// o https://');
+
 const chatSchema = z.object({
   message: z.string().min(1).max(2000),
   botId: z.string(),
   conversationId: z.string().optional(),
   contactName: z.string().max(100).optional(),
   contactPhone: z.string().max(30).optional(),
+  // Una sola URL de imagen o un arreglo (máximo 4). Ambos campos son opcionales.
+  imageUrl: httpImageUrl.optional(),
+  imageUrls: z.array(httpImageUrl).max(4).optional(),
 });
 
 router.get('/bot/demo', asyncHandler(async (_req, res) => {
@@ -88,11 +98,20 @@ router.post('/chat', asyncHandler(async (req, res) => {
     return;
   }
 
+  // Normalizamos las imágenes (URL única o arreglo) a la forma que espera el
+  // chatbot. El gate por superpoder "Oído y vista" se hace en processMessage.
+  const imageUrls = [
+    ...(data.imageUrl ? [data.imageUrl] : []),
+    ...(data.imageUrls ?? []),
+  ];
+  const images = imageUrls.length ? imageUrls.map((url) => ({ url })) : undefined;
+
   const response = await processMessage(bot.businessId, data.message, 'WEB', {
     conversationId: data.conversationId,
     botId: data.botId,
     contactName: data.contactName,
     contactPhone: data.contactPhone,
+    ...(images ? { images } : {}),
   });
 
   res.json(response);
