@@ -163,6 +163,34 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     lines.push('Detectá el idioma del mensaje del cliente y respondé en ese mismo idioma.');
   }
 
+  // --- Turbo respuesta: respuestas cortas y directas (estilo de redacción) ---
+  if (superpowers.has('Turbo respuesta')) {
+    lines.push(
+      'TURBO RESPUESTA: Priorizá respuestas cortas y directas, de 2 o 3 oraciones como máximo, sin rodeos ni saludos largos. Andá directo a lo que el cliente necesita. Si hace falta explicar varios pasos, usá una lista breve. Evitá texto de relleno y repeticiones.',
+    );
+  }
+
+  // --- Cobros por WhatsApp: guía el cierre del cobro sin pedir datos sensibles ---
+  if (superpowers.has('Cobros por WhatsApp')) {
+    lines.push(
+      'COBROS POR WHATSAPP: Cuando el cliente confirme que quiere pagar, resolvelo por el chat: resumí el detalle de la compra y el monto total, confirmá el medio de pago y avisale que le vas a enviar un link de pago para completar la operación sin salir de la conversación. NUNCA pidas datos de tarjeta, CVV ni claves por el chat.',
+    );
+  }
+
+  // --- Seguimiento post-venta: cierre fidelizando tras una compra/reserva ---
+  if (superpowers.has('Seguimiento post-venta')) {
+    lines.push(
+      'SEGUIMIENTO POST-VENTA: Cuando una compra o reserva quede confirmada, cerrá la conversación fidelizando: confirmá que quedó todo claro, invitá a dejar una reseña si la experiencia fue buena y sugerí agendar la próxima visita o un producto complementario. Hacelo de forma natural y sin presionar.',
+    );
+  }
+
+  // --- Alerta de emergencia: prioriza y deriva situaciones urgentes o sensibles ---
+  if (superpowers.has('Alerta de emergencia')) {
+    lines.push(
+      'ALERTA DE EMERGENCIA: Si detectás una situación urgente o sensible (una queja grave, un cliente muy molesto, un pedido de gran volumen o un cliente VIP), tratala como prioridad absoluta: respondé con empatía, evitá respuestas automáticas frías y ofrecé derivar de inmediato a una persona del equipo. No minimices el problema.',
+    );
+  }
+
   return lines.join('\n');
 }
 

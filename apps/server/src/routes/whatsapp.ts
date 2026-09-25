@@ -4,7 +4,13 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
-import { sendMessage, validateWebhookSignature, isConfigured } from '../services/whatsapp/client';
+import {
+  sendMessage,
+  validateWebhookSignature,
+  isConfigured,
+  resolveBusinessByNumber,
+  parseTwilioImages,
+} from '../services/whatsapp/client';
 import { requireAuth } from '../middleware/auth';
 
 const sendMessageSchema = z.object({
@@ -38,34 +44,39 @@ router.post(
     }
 
     const from = (req.body.From || '').replace('whatsapp:', '');
-    const body = req.body.Body || '';
+    const to = req.body.To || '';
     const profileName = req.body.ProfileName || '';
+
+    // Parseamos las imágenes adjuntas (Twilio manda NumMedia + MediaUrl0..N con
+    // sus MediaContentType0..N). El gate por superpoder "Oído y vista" está en
+    // processMessage: si el negocio no lo tiene activo, se ignoran.
+    const images = parseTwilioImages(req.body);
+
+    // Si el mensaje viene solo con imagen y sin texto, usamos un texto por
+    // defecto para no romper la validación de processMessage.
+    const rawBody = req.body.Body || '';
+    const body = rawBody || (images.length ? '(imagen adjunta)' : '');
 
     if (!from || !body) {
       res.status(200).send('OK');
       return;
     }
 
-    const bot = await prisma.bot.findFirst({
-      where: {
-        channel: 'WHATSAPP',
-        status: 'ACTIVE',
-        business: { phone: { not: null } },
-      },
-      include: { business: { select: { id: true, phone: true } } },
-    });
-
-    if (!bot) {
+    // Resolución multi-tenant: buscamos el bot de WhatsApp del negocio dueño del
+    // número de DESTINO (To), replicando el patrón del canal de voz. Si no se
+    // resuelve, respondemos 200 OK sin procesar (igual que antes).
+    const target = await resolveBusinessByNumber(to);
+    if (!target) {
       res.status(200).send('OK');
       return;
     }
 
-    const businessId = bot.businessId;
+    const { businessId, botId } = target;
 
     const existingConversation = await prisma.conversation.findFirst({
       where: {
         businessId,
-        botId: bot.id,
+        botId,
         channel: 'WHATSAPP',
         contactPhone: from,
         status: 'OPEN',
@@ -76,9 +87,10 @@ router.post(
     try {
       const result = await processMessage(businessId, body, 'WHATSAPP', {
         conversationId: existingConversation?.id,
-        botId: bot.id,
+        botId,
         contactName: profileName,
         contactPhone: from,
+        ...(images.length ? { images } : {}),
       });
 
       await sendMessage(from, result.text);

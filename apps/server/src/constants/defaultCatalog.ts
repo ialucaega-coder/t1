@@ -209,6 +209,13 @@ export const DEFAULT_SUPERPOWERS = [
     isActive: true,
   },
   {
+    name: 'Turbo respuesta',
+    subtitle: 'RESPUESTAS CORTAS Y AL GRANO.',
+    description: 'El bot responde en 2-3 oraciones, directo a lo que el cliente necesita, sin relleno.',
+    iconName: 'Gauge',
+    isActive: false,
+  },
+  {
     name: 'Modo seguro',
     subtitle: 'FILTRA CONTENIDO INAPROPIADO.',
     description: 'Detecta y bloquea mensajes ofensivos, spam o intentos de manipular al bot.',
