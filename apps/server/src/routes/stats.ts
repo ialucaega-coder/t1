@@ -2,14 +2,34 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { cache, cacheKey } from '../lib/cache';
 
 const router = Router();
+
+/**
+ * TTL corto para las estadísticas del dashboard (30s).
+ *
+ * Decisión: NO invalidamos la caché en escrituras. El TTL es tan corto que la
+ * ventana de datos "viejos" es mínima y aceptable para métricas de dashboard,
+ * mientras que absorbe ráfagas de requests (varias tarjetas del panel pegan a
+ * /api/stats/* casi al mismo tiempo). Esto simplifica el código y evita acoplar
+ * cada endpoint de escritura con la invalidación de stats.
+ *
+ * La clave siempre incluye el `businessId` (multi-tenant) para no filtrar datos
+ * entre negocios.
+ */
+const STATS_TTL_MS = 30_000;
 
 router.get(
   '/overview',
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+
+    const key = cacheKey(businessId, 'stats', 'overview');
+    const cached = cache.get(key);
+    if (cached) return res.json(cached);
+
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -46,7 +66,7 @@ router.get(
     const noShowRate = monthBookings > 0 ? ((noShows / monthBookings) * 100).toFixed(1) : '0';
     const lastNoShowRate = lastMonthBookings > 0 ? ((lastMonthNoShows / lastMonthBookings) * 100).toFixed(1) : '0';
 
-    res.json({
+    const payload = {
       todayBookings,
       monthBookings,
       bookingChange: `${Number(bookingChange) >= 0 ? '+' : ''}${bookingChange}%`,
@@ -57,7 +77,10 @@ router.get(
       totalProducts,
       noShowRate: `${noShowRate}%`,
       noShowChange: `${Number(noShowRate) <= Number(lastNoShowRate) ? '-' : '+'}${Math.abs(Number(noShowRate) - Number(lastNoShowRate)).toFixed(1)}%`,
-    });
+    };
+
+    cache.set(key, payload, STATS_TTL_MS);
+    res.json(payload);
   })
 );
 
@@ -66,6 +89,11 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+
+    const key = cacheKey(businessId, 'stats', 'weekly');
+    const cached = cache.get(key);
+    if (cached) return res.json(cached);
+
     const now = new Date();
     const days = [];
 
@@ -89,6 +117,7 @@ router.get(
       });
     }
 
+    cache.set(key, days, STATS_TTL_MS);
     res.json(days);
   })
 );
@@ -98,6 +127,11 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+
+    const key = cacheKey(businessId, 'stats', 'top-services');
+    const cached = cache.get(key);
+    if (cached) return res.json(cached);
+
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
     const services = await prisma.booking.groupBy({
@@ -118,6 +152,7 @@ router.get(
       bookingCount: s._count.id,
     }));
 
+    cache.set(key, result, STATS_TTL_MS);
     res.json(result);
   })
 );
@@ -127,6 +162,11 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+
+    const key = cacheKey(businessId, 'stats', 'dashboard');
+    const cached = cache.get(key);
+    if (cached) return res.json(cached);
+
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -178,7 +218,7 @@ router.get(
       },
     });
 
-    res.json({
+    const payload = {
       conversations: {
         open: openConversations,
         total: totalConversations,
@@ -202,7 +242,10 @@ router.get(
           }
         : null,
       recentActivity,
-    });
+    };
+
+    cache.set(key, payload, STATS_TTL_MS);
+    res.json(payload);
   })
 );
 
@@ -211,6 +254,11 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+
+    const key = cacheKey(businessId, 'stats', 'health');
+    const cached = cache.get(key);
+    if (cached) return res.json(cached);
+
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -278,7 +326,7 @@ router.get(
     const allLastClients = lastMonthClients + lastMonthReturning;
     const lastRetentionRate = allLastClients > 0 ? (lastMonthReturning / allLastClients * 100) : 0;
 
-    res.json({
+    const payload = {
       indicators: [
         {
           key: 'confirmation_rate',
@@ -321,7 +369,10 @@ router.get(
           change: totalClients - lastMonthClients,
         },
       ],
-    });
+    };
+
+    cache.set(key, payload, STATS_TTL_MS);
+    res.json(payload);
   })
 );
 

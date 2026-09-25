@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 
 const router = Router();
 
@@ -14,20 +15,39 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const { date, status, professionalId, page, pageSize } = req.query;
-    const pagination = paginationSchema.parse({ page, pageSize });
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
     if (date) where.date = new Date(date as string);
     if (status) where.status = status;
     if (professionalId) where.professionalId = professionalId;
 
+    // Evita N+1: cliente, profesional (con su user) y servicio en una sola query vía include.
+    const include = {
+      client: { select: { id: true, name: true, phone: true, email: true } },
+      professional: { include: { user: { select: { name: true } } } },
+      service: { select: { id: true, name: true, duration: true, price: true } },
+    };
+
+    // Nueva paginación (?limit / ?offset): forma estándar { ...limit... }.
+    if (req.query.limit !== undefined || req.query.offset !== undefined) {
+      const pagination = parsePagination(req.query);
+      const [bookings, total] = await Promise.all([
+        prisma.booking.findMany({
+          where,
+          include,
+          orderBy: { startTime: 'asc' },
+          skip: pagination.skip,
+          take: pagination.take,
+        }),
+        prisma.booking.count({ where }),
+      ]);
+      return res.json(buildPaginatedResponse(bookings, total, pagination));
+    }
+
+    const pagination = paginationSchema.parse({ page, pageSize });
     const [bookings, total] = await Promise.all([
       prisma.booking.findMany({
         where,
-        include: {
-          client: { select: { id: true, name: true, phone: true, email: true } },
-          professional: { include: { user: { select: { name: true } } } },
-          service: { select: { id: true, name: true, duration: true, price: true } },
-        },
+        include,
         orderBy: { startTime: 'asc' },
         ...toSkipTake(pagination),
       }),

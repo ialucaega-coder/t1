@@ -5,6 +5,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { createTransactionSchema, CreateTransactionInput } from '../validators/transactions';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 
 const router = Router();
 
@@ -13,7 +14,6 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const { from, to, type, page, pageSize } = req.query;
-    const pagination = paginationSchema.parse({ page, pageSize });
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
 
     if (type) where.type = type;
@@ -23,6 +23,22 @@ router.get(
       if (to) (where.createdAt as Record<string, unknown>).lte = new Date(to as string);
     }
 
+    // Nueva paginación (?limit / ?offset): forma estándar { ...limit... }.
+    if (req.query.limit !== undefined || req.query.offset !== undefined) {
+      const pagination = parsePagination(req.query);
+      const [transactions, total] = await Promise.all([
+        prisma.transaction.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: pagination.skip,
+          take: pagination.take,
+        }),
+        prisma.transaction.count({ where }),
+      ]);
+      return res.json(buildPaginatedResponse(transactions, total, pagination));
+    }
+
+    const pagination = paginationSchema.parse({ page, pageSize });
     const [transactions, total] = await Promise.all([
       prisma.transaction.findMany({
         where,

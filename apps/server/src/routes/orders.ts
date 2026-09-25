@@ -5,6 +5,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrderStatusInput } from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 
 const router = Router();
 
@@ -13,17 +14,36 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const { status, page, pageSize } = req.query;
-    const pagination = paginationSchema.parse({ page, pageSize });
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
     if (status) where.status = status;
 
+    // Evita N+1: cliente e items (con su producto) vienen en una sola query vía include.
+    const include = {
+      client: { select: { id: true, name: true, phone: true } },
+      items: { include: { product: { select: { name: true, price: true } } } },
+    };
+
+    // Nueva paginación (?limit / ?offset): forma estándar { ...limit... }.
+    if (req.query.limit !== undefined || req.query.offset !== undefined) {
+      const pagination = parsePagination(req.query);
+      const [orders, total] = await Promise.all([
+        prisma.order.findMany({
+          where,
+          include,
+          orderBy: { createdAt: 'desc' },
+          skip: pagination.skip,
+          take: pagination.take,
+        }),
+        prisma.order.count({ where }),
+      ]);
+      return res.json(buildPaginatedResponse(orders, total, pagination));
+    }
+
+    const pagination = paginationSchema.parse({ page, pageSize });
     const [orders, total] = await Promise.all([
       prisma.order.findMany({
         where,
-        include: {
-          client: { select: { id: true, name: true, phone: true } },
-          items: { include: { product: { select: { name: true, price: true } } } },
-        },
+        include,
         orderBy: { createdAt: 'desc' },
         ...toSkipTake(pagination),
       }),

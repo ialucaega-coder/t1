@@ -4,6 +4,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { listClientsQuerySchema, updateClientSchema } from '../validators/clients';
 import { toSkipTake } from '../validators/common';
+import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
@@ -44,6 +45,24 @@ router.get(
         { email: { contains: query.search, mode: 'insensitive' } },
         { phone: { contains: query.search } },
       ];
+    }
+
+    // Nueva paginación (?limit / ?offset): devuelve la forma estándar { ...limit... }.
+    // No usamos ?page como disparador para no cambiar la respuesta actual, que ya
+    // usa ?page + ?pageSize y expone `pageSize`.
+    if (req.query.limit !== undefined || req.query.offset !== undefined) {
+      const pagination = parsePagination(req.query);
+      const [clients, total] = await Promise.all([
+        prisma.user.findMany({
+          where,
+          select: clientSelect,
+          orderBy: { createdAt: 'desc' },
+          skip: pagination.skip,
+          take: pagination.take,
+        }),
+        prisma.user.count({ where }),
+      ]);
+      return res.json(buildPaginatedResponse(clients, total, pagination));
     }
 
     const [clients, total] = await Promise.all([

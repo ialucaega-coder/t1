@@ -4,6 +4,7 @@ import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { createProductSchema, updateProductSchema, CreateProductInput, UpdateProductInput } from '../validators/products';
+import { isPaginationRequested, parsePagination, buildPaginatedResponse } from '../lib/pagination';
 
 const router = Router();
 
@@ -11,12 +12,26 @@ router.get(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const products = await prisma.product.findMany({
-      where: { businessId: req.auth!.businessId },
+    const where = { businessId: req.auth!.businessId };
+    const baseQuery = {
+      where,
       include: { category: true },
-      orderBy: { sortOrder: 'asc' },
-    });
-    res.json(products);
+      orderBy: { sortOrder: 'asc' as const },
+    };
+
+    // Retrocompatible: sin ?page/?limit/?offset devolvemos el array plano de siempre.
+    if (!isPaginationRequested(req.query)) {
+      const products = await prisma.product.findMany(baseQuery);
+      return res.json(products);
+    }
+
+    // Con parámetros de paginación devolvemos la respuesta paginada estándar.
+    const pagination = parsePagination(req.query);
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({ ...baseQuery, skip: pagination.skip, take: pagination.take }),
+      prisma.product.count({ where }),
+    ]);
+    res.json(buildPaginatedResponse(products, total, pagination));
   })
 );
 
