@@ -31,6 +31,7 @@ vi.mock('../../services/stripe', () => ({
   cancelSubscription: vi.fn(),
   constructWebhookEvent: vi.fn(),
   handleWebhookEvent: vi.fn(),
+  createPaymentLink: vi.fn(),
 }));
 
 import { prisma } from '../../lib/prisma';
@@ -39,6 +40,7 @@ import {
   createCustomerPortalSession,
   constructWebhookEvent,
   handleWebhookEvent,
+  createPaymentLink,
 } from '../../services/stripe';
 import { billingRouter } from '../../routes/billing';
 import { errorHandler } from '../../middleware/errorHandler';
@@ -252,6 +254,66 @@ describe('routes/billing', () => {
 
       expect(res.status).toBe(401);
       expect(createCustomerPortalSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/billing/payment-link', () => {
+    it('genera un link de pago con datos válidos (ADMIN)', async () => {
+      (createPaymentLink as ReturnType<typeof vi.fn>).mockResolvedValue('https://checkout.stripe.com/pay_123');
+
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ amount: 1500, description: 'Seña de turno' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ url: 'https://checkout.stripe.com/pay_123' });
+      expect(createPaymentLink).toHaveBeenCalledWith('biz_1', {
+        amount: 1500,
+        description: 'Seña de turno',
+        currency: undefined,
+      });
+    });
+
+    it('usa el businessId del token, no uno enviado en el body', async () => {
+      (createPaymentLink as ReturnType<typeof vi.fn>).mockResolvedValue('https://checkout.stripe.com/pay_456');
+
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${otherBusinessAdminToken}`)
+        .send({ amount: 2000, description: 'Producto', businessId: 'biz_1' });
+
+      expect(res.status).toBe(200);
+      expect(createPaymentLink).toHaveBeenCalledWith('biz_2', expect.objectContaining({ amount: 2000 }));
+    });
+
+    it('devuelve 400 si el monto no es positivo', async () => {
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ amount: 0, description: 'Algo' });
+
+      expect(res.status).toBe(400);
+      expect(createPaymentLink).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si falta la descripción', async () => {
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ amount: 1500 });
+
+      expect(res.status).toBe(400);
+      expect(createPaymentLink).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 401 sin token de autenticación', async () => {
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .send({ amount: 1500, description: 'Seña' });
+
+      expect(res.status).toBe(401);
+      expect(createPaymentLink).not.toHaveBeenCalled();
     });
   });
 
