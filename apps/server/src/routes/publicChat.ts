@@ -362,38 +362,51 @@ router.post('/book/:slug', asyncHandler(async (req, res) => {
       return;
     }
 
-    const sameDayBookings = await prisma.booking.findMany({
-      where: {
-        businessId: business.id,
-        date: new Date(date),
-        status: { notIn: ['CANCELLED'] },
-        ...(profId ? { professionalId: profId } : {}),
-      },
-      select: { startTime: true, endTime: true },
+    // Reserva atómica: tomamos un advisory lock transaccional por
+    // (negocio, profesional, día) y re-chequeamos el solape DENTRO de la
+    // transacción, con el lock tomado. Serializa las reservas concurrentes del
+    // mismo recurso y cierra la ventana TOCTOU sin necesitar un @@unique en el
+    // schema (bloqueado). pg_advisory_xact_lock se libera solo al commit/rollback
+    // (compatible con el pooler transaccional de Supabase).
+    const lockKey = `booking:${business.id}:${profId}:${date}`;
+    const booking = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+      const sameDayBookings = await tx.booking.findMany({
+        where: {
+          businessId: business.id,
+          date: new Date(date),
+          status: { notIn: ['CANCELLED'] },
+          ...(profId ? { professionalId: profId } : {}),
+        },
+        select: { startTime: true, endTime: true },
+      });
+      const overlaps = sameDayBookings.some((b) => time < b.endTime && endTime > b.startTime);
+      if (overlaps) return null;
+
+      return tx.booking.create({
+        data: {
+          businessId: business.id,
+          clientId: client.id,
+          serviceId: service.id,
+          professionalId: profId,
+          date: new Date(date),
+          startTime: time,
+          endTime,
+          status: 'PENDING',
+          source: 'WEB',
+          totalPrice: service.price,
+        },
+        include: {
+          service: { select: { name: true, duration: true, price: true } },
+        },
+      });
     });
-    const overlaps = sameDayBookings.some((b) => time < b.endTime && endTime > b.startTime);
-    if (overlaps) {
+
+    if (!booking) {
       res.status(409).json({ error: 'Ese horario ya fue reservado. Por favor, elegí otro.' });
       return;
     }
-
-    const booking = await prisma.booking.create({
-      data: {
-        businessId: business.id,
-        clientId: client.id,
-        serviceId: service.id,
-        professionalId: profId,
-        date: new Date(date),
-        startTime: time,
-        endTime,
-        status: 'PENDING',
-        source: 'WEB',
-        totalPrice: service.price,
-      },
-      include: {
-        service: { select: { name: true, duration: true, price: true } },
-      },
-    });
 
     const admin = await prisma.user.findFirst({
       where: { businessId: business.id, role: 'ADMIN' },

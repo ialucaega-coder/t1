@@ -16,6 +16,8 @@ vi.mock('../../lib/prisma', () => ({
     schedule: { findMany: vi.fn() },
     booking: { findMany: vi.fn(), create: vi.fn() },
     notification: { create: vi.fn() },
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
   },
 }));
 vi.mock('../../services/chatbot', () => ({ processMessage: vi.fn() }));
@@ -56,6 +58,10 @@ describe('routes/publicChat — POST /book/:slug', () => {
     mock(prisma.notification.create).mockResolvedValue({ id: 'n1' });
     // Horario activo 09:00–18:00 ese día.
     mock(prisma.schedule.findMany).mockResolvedValue([{ startTime: '09:00', endTime: '18:00' }]);
+    // $transaction ejecuta el callback con el propio mock como `tx`; el advisory
+    // lock es un no-op en tests.
+    mock(prisma.$executeRaw).mockResolvedValue(undefined);
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
   });
 
   it('crea la reserva cuando el turno está dentro de horario y libre', async () => {
@@ -66,6 +72,9 @@ describe('routes/publicChat — POST /book/:slug', () => {
 
     expect(res.status).toBe(201);
     expect(prisma.booking.create).toHaveBeenCalled();
+    // La creación pasa por la transacción con advisory lock (anti-race).
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
   it('rechaza (409) si el turno se solapa con una reserva existente', async () => {
