@@ -13,8 +13,19 @@ import {
 
 // ─── Configuración ──────────────────────────────────────────────────
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const EMAIL_FROM = process.env.EMAIL_FROM ?? 'Local B <noreply@localb.app>';
+
+// Cliente Resend perezoso: no lo construimos en la carga del módulo para que
+// la ausencia de RESEND_API_KEY no rompa el arranque del server (ni los tests
+// que importan servicios que dependen de email). Si no hay key, `send` degrada
+// devolviendo false sin lanzar.
+let cachedResend: Resend | null = null;
+
+function getResend(): Resend | null {
+  if (!process.env.RESEND_API_KEY) return null;
+  if (!cachedResend) cachedResend = new Resend(process.env.RESEND_API_KEY);
+  return cachedResend;
+}
 
 // ─── Helper interno ─────────────────────────────────────────────────
 
@@ -25,6 +36,11 @@ interface SendEmailParams {
 }
 
 async function send(params: SendEmailParams): Promise<boolean> {
+  const resend = getResend();
+  if (!resend) {
+    console.warn('[Email] RESEND_API_KEY no configurada; se omite el envío de email.');
+    return false;
+  }
   try {
     const { error } = await resend.emails.send({
       from: EMAIL_FROM,

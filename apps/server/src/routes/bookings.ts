@@ -7,6 +7,7 @@ import { getIO } from '../lib/socket';
 import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
+import { sendBookingCreated, sendBookingConfirmed, sendBookingCancelled } from '../services/notifications';
 
 const router = Router();
 
@@ -100,6 +101,12 @@ router.post(
     });
 
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
+
+    // Notifica al admin (in-app). Fire-and-forget: no debe romper la respuesta.
+    void sendBookingCreated(booking).catch((err) =>
+      console.error('[Bookings] Error notificando alta de reserva:', err)
+    );
+
     res.status(201).json(booking);
   })
 );
@@ -145,8 +152,24 @@ router.patch(
     const booking = await prisma.booking.update({
       where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { status },
+      include: {
+        client: { select: { name: true } },
+        service: { select: { name: true } },
+      },
     });
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
+
+    // Notifica al cliente por su mejor canal (WhatsApp/email). Fire-and-forget.
+    if (status === 'CONFIRMED') {
+      void sendBookingConfirmed(booking).catch((err) =>
+        console.error('[Bookings] Error notificando confirmación:', err)
+      );
+    } else if (status === 'CANCELLED') {
+      void sendBookingCancelled(booking).catch((err) =>
+        console.error('[Bookings] Error notificando cancelación:', err)
+      );
+    }
+
     res.json(booking);
   })
 );

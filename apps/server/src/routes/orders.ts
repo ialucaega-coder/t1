@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma';
 import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrderStatusInput } from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
+import { sendOrderStatusUpdate } from '../services/notifications';
 
 const router = Router();
 
@@ -134,8 +135,17 @@ router.patch(
     const order = await prisma.order.update({
       where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data: { status },
-      include: { items: { include: { product: true } } },
+      include: {
+        items: { include: { product: true } },
+        client: { select: { name: true } },
+      },
     });
+
+    // Notifica al cliente el nuevo estado por su mejor canal. Fire-and-forget.
+    void sendOrderStatusUpdate(order).catch((err) =>
+      console.error('[Orders] Error notificando estado de pedido:', err)
+    );
+
     res.json(order);
   })
 );
