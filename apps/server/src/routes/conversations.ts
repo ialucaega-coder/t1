@@ -43,6 +43,12 @@ interface ConversationMeta {
   readBy?: Record<string, string>;
   /** Compat: lectura global previa (se mantiene como fallback). */
   lastReadAt?: string | null;
+  /**
+   * Canal real cuando no tiene enum propio en BotChannel (ej: 'MESSENGER' o
+   * 'VOICE', que se persisten como WEBCHAT). Lo escribe el chatbot al crear la
+   * conversación; el Inbox lo usa para mostrar/filtrar el canal correcto.
+   */
+  realChannel?: string;
   [key: string]: unknown;
 }
 
@@ -56,6 +62,14 @@ function readMeta(value: Prisma.JsonValue | null | undefined): ConversationMeta 
     return { ...(value as Record<string, unknown>) } as ConversationMeta;
   }
   return {};
+}
+
+// Canal efectivo a mostrar en el Inbox: si la conversación guarda un canal real
+// en metadata (MESSENGER/VOICE que se persisten como WEBCHAT), se prioriza ese;
+// si no, se usa el enum `channel` tal cual. No rompe conversaciones sin metadata.
+function displayChannelFor(channel: string, metadata: Prisma.JsonValue | null | undefined): string {
+  const meta = readMeta(metadata);
+  return typeof meta.realChannel === 'string' && meta.realChannel ? meta.realChannel : channel;
 }
 
 const router = Router();
@@ -88,7 +102,14 @@ router.get(
       prisma.conversation.count({ where }),
     ]);
 
-    res.json({ data: conversations, total, page, pageSize });
+    // Exponemos `displayChannel` (canal efectivo) sin tocar `channel`, para no
+    // romper a los consumidores actuales que leen el enum directamente.
+    const data = conversations.map((c) => ({
+      ...c,
+      displayChannel: displayChannelFor(c.channel, c.metadata),
+    }));
+
+    res.json({ data, total, page, pageSize });
   })
 );
 
@@ -104,7 +125,10 @@ router.get(
       },
     });
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-    res.json(conversation);
+    res.json({
+      ...conversation,
+      displayChannel: displayChannelFor(conversation.channel, conversation.metadata),
+    });
   })
 );
 

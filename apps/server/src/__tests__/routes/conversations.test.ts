@@ -14,7 +14,7 @@ import jwt from 'jsonwebtoken';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    conversation: { findFirst: vi.fn(), update: vi.fn() },
+    conversation: { findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     teamMember: { findFirst: vi.fn() },
     user: { findUnique: vi.fn() },
   },
@@ -54,6 +54,41 @@ describe('routes/conversations (inbox)', () => {
     (prisma.conversation.update as ReturnType<typeof vi.fn>).mockImplementation(
       async ({ data }: { data: { metadata: unknown } }) => ({ metadata: data.metadata })
     );
+  });
+
+  describe('GET /api/conversations (displayChannel)', () => {
+    it('expone displayChannel = realChannel cuando el canal real vive en metadata', async () => {
+      (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+        // Messenger se persiste como WEBCHAT + metadata.realChannel.
+        { id: 'c1', channel: 'WEBCHAT', metadata: { realChannel: 'MESSENGER' } },
+        // WhatsApp tiene enum propio: displayChannel debe caer al channel.
+        { id: 'c2', channel: 'WHATSAPP', metadata: null },
+      ]);
+      (prisma.conversation.count as ReturnType<typeof vi.fn>).mockResolvedValue(2);
+
+      const res = await request(app)
+        .get('/api/conversations')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0]).toMatchObject({ id: 'c1', channel: 'WEBCHAT', displayChannel: 'MESSENGER' });
+      expect(res.body.data[1]).toMatchObject({ id: 'c2', channel: 'WHATSAPP', displayChannel: 'WHATSAPP' });
+    });
+  });
+
+  describe('GET /api/conversations/:id (displayChannel)', () => {
+    it('expone displayChannel = realChannel (VOICE) sin pisar el enum channel', async () => {
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'c9', channel: 'WEBCHAT', metadata: { realChannel: 'VOICE' }, messages: [],
+      });
+
+      const res = await request(app)
+        .get('/api/conversations/c9')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: 'c9', channel: 'WEBCHAT', displayChannel: 'VOICE' });
+    });
   });
 
   describe('PATCH /api/conversations/:id/assign', () => {

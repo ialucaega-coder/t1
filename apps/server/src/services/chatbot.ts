@@ -540,6 +540,16 @@ async function getOrCreateConversation(
     MESSENGER: 'WEBCHAT',
   };
 
+  // Canales sin enum propio en BotChannel: MESSENGER y VOICE se persisten como
+  // WEBCHAT, así que guardamos el canal real en metadata.realChannel para poder
+  // distinguirlos en el Inbox sin tocar el schema. Los canales que ya tienen
+  // enum propio no necesitan metadata (channel alcanza).
+  const realChannelMap: Partial<Record<ChatChannel, string>> = {
+    MESSENGER: 'MESSENGER',
+    VOICE: 'VOICE',
+  };
+  const realChannel = realChannelMap[channel];
+
   return prisma.conversation.create({
     data: {
       businessId,
@@ -548,6 +558,7 @@ async function getOrCreateConversation(
       contactName: options.contactName,
       contactPhone: options.contactPhone,
       status: 'OPEN',
+      ...(realChannel ? { metadata: { realChannel } } : {}),
     },
   });
 }

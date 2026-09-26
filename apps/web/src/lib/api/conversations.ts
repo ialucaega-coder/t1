@@ -16,12 +16,20 @@ export interface ConversationMeta {
   /** Lectura por usuario: userId -> ISO timestamp. */
   readBy?: Record<string, string>;
   lastReadAt?: string | null;
+  /** Canal real cuando no tiene enum propio (ej: 'MESSENGER'/'VOICE' sobre WEBCHAT). */
+  realChannel?: string;
 }
 
 export interface Conversation {
   id: string;
   status: 'OPEN' | 'CLOSED' | 'HANDOFF';
   channel: string;
+  /**
+   * Canal efectivo a mostrar/filtrar. Puede diferir de `channel` cuando el canal
+   * real no tiene enum propio (ej: Messenger/Voz se persisten como WEBCHAT). Si
+   * no viene, usar `channel`.
+   */
+  displayChannel?: string;
   contactName: string | null;
   contactPhone: string | null;
   contactEmail: string | null;

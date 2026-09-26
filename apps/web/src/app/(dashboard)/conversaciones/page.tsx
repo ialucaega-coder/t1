@@ -26,16 +26,35 @@ const CHANNEL_LABELS: Record<string, string> = {
   WHATSAPP: 'WhatsApp',
   WEBCHAT: 'Web',
   INSTAGRAM: 'Instagram',
+  // Messenger y Voz se persisten como WEBCHAT en el enum; se distinguen por
+  // `displayChannel` (metadata.realChannel) que expone la API.
+  MESSENGER: 'Messenger',
+  VOICE: 'Voz',
 };
 
-// Canales disponibles para filtrar. Las llamadas por voz se persisten como
-// WEBCHAT en el schema, por eso el canal "Voz" no tiene enum propio.
+// Canal del enum BotChannel al que hay que pedirle al server cada filtro:
+// Messenger y Voz viajan como WEBCHAT, así que server-side se filtra por WEBCHAT
+// y luego el cliente refina por displayChannel (ver `listParams` y `filtered`).
+const SERVER_CHANNEL_FOR: Record<string, string> = {
+  MESSENGER: 'WEBCHAT',
+  VOICE: 'WEBCHAT',
+};
+
+// Canales disponibles para filtrar. Messenger y Voz no tienen enum propio: se
+// distinguen por `displayChannel` (metadata.realChannel) y se filtran en cliente.
 const CHANNEL_FILTERS: { value: string; label: string }[] = [
   { value: 'TELEGRAM', label: 'Telegram' },
   { value: 'WHATSAPP', label: 'WhatsApp' },
   { value: 'WEBCHAT', label: 'Web' },
+  { value: 'MESSENGER', label: 'Messenger' },
   { value: 'INSTAGRAM', label: 'Instagram' },
+  { value: 'VOICE', label: 'Voz' },
 ];
+
+// Canal efectivo de una conversación: displayChannel si vino, si no el enum.
+function channelOf(conv: conversationsApi.Conversation): string {
+  return conv.displayChannel || conv.channel;
+}
 
 interface TeamOption {
   id: string;
@@ -73,7 +92,8 @@ export default function ConversacionesPage() {
   const listParams = useMemo(() => {
     const p: { status?: string; channel?: string } = {};
     if (statusFilter) p.status = statusFilter;
-    if (channelFilter) p.channel = channelFilter;
+    // Messenger/Voz se piden como WEBCHAT (su enum real) y se refinan en cliente.
+    if (channelFilter) p.channel = SERVER_CHANNEL_FOR[channelFilter] || channelFilter;
     return Object.keys(p).length ? p : undefined;
   }, [statusFilter, channelFilter]);
   const { conversations, total, isLoading, error, refetch, closeConversation } = useConversations(listParams);
@@ -130,6 +150,11 @@ export default function ConversacionesPage() {
 
   const filtered = useMemo(() => {
     let list = conversations;
+    // Refinamos el canal por displayChannel: distingue Messenger/Voz (que en el
+    // enum viajan como WEBCHAT) del Web real. Los enum propios también coinciden.
+    if (channelFilter) {
+      list = list.filter((c) => channelOf(c) === channelFilter);
+    }
     if (tagFilter) {
       list = list.filter((c) => c.metadata?.tags?.includes(tagFilter));
     }
@@ -143,7 +168,7 @@ export default function ConversacionesPage() {
       ));
     }
     return list;
-  }, [conversations, tagFilter, searchQuery]);
+  }, [conversations, channelFilter, tagFilter, searchQuery]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -251,9 +276,11 @@ export default function ConversacionesPage() {
   const handoffCount = conversations.filter((c) => c.status === 'HANDOFF').length;
   const unreadCount = conversations.filter((c) => isUnread(c, user?.id)).length;
 
-  // Contadores por canal sobre las conversaciones cargadas.
+  // Contadores por canal efectivo (displayChannel) sobre las conversaciones
+  // cargadas, para que Messenger/Voz cuenten aparte del Web real.
   const channelCounts = conversations.reduce<Record<string, number>>((acc, c) => {
-    acc[c.channel] = (acc[c.channel] ?? 0) + 1;
+    const ch = channelOf(c);
+    acc[ch] = (acc[ch] ?? 0) + 1;
     return acc;
   }, {});
 
@@ -463,7 +490,7 @@ export default function ConversacionesPage() {
                     </div>
                   )}
                   <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-600 flex-wrap">
-                    <span>{CHANNEL_LABELS[conv.channel] || conv.channel}</span>
+                    <span>{CHANNEL_LABELS[channelOf(conv)] || channelOf(conv)}</span>
                     <span>·</span>
                     <span>{conv._count?.messages ?? 0} msgs</span>
                     {assignedName && (
@@ -521,7 +548,7 @@ export default function ConversacionesPage() {
                         <Bot className="h-2.5 w-2.5" /> {detail.bot?.name || 'Bot'}
                       </span>
                       <span>·</span>
-                      <span>{CHANNEL_LABELS[detail.channel] || detail.channel}</span>
+                      <span>{CHANNEL_LABELS[detail.displayChannel || detail.channel] || detail.displayChannel || detail.channel}</span>
                       <span>·</span>
                       <span>{detail.messages.length} mensajes</span>
                       {detail.contactPhone && (
