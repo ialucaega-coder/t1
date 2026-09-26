@@ -70,6 +70,13 @@ export function BookingFlow({ slug }: BookingFlowProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
+  // Verificación de teléfono por OTP (activada por el negocio/plataforma).
+  const [requiresPhoneVerification, setRequiresPhoneVerification] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpError, setOtpError] = useState('');
+
   const [business, setBusiness] = useState<BusinessInfo | null>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -90,6 +97,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
         setServices(data.services);
         setSchedules(data.schedules);
         setProfessionals(data.professionals || []);
+        setRequiresPhoneVerification(Boolean(data.requiresPhoneVerification));
       } catch {
         setBizError('No se pudo cargar la información del negocio');
       } finally {
@@ -133,8 +141,34 @@ export function BookingFlow({ slug }: BookingFlowProps) {
       case 'service': return !!serviceId;
       case 'professional': return !!professionalId;
       case 'datetime': return !!date && !!time;
-      case 'info': return !!name.trim() && !!phone.trim();
+      case 'info':
+        if (!name.trim() || !phone.trim()) return false;
+        // Con verificación activa, exigimos el código de 6 dígitos.
+        if (requiresPhoneVerification) return otpSent && otp.trim().length === 6;
+        return true;
       default: return true;
+    }
+  };
+
+  const requestOtp = async () => {
+    if (!phone.trim()) return;
+    setOtpSending(true);
+    setOtpError('');
+    try {
+      const res = await fetch(`${API_URL}/public/book/${slug}/request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'No se pudo enviar el código');
+      }
+      setOtpSent(true);
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'No se pudo enviar el código');
+    } finally {
+      setOtpSending(false);
     }
   };
 
@@ -146,7 +180,7 @@ export function BookingFlow({ slug }: BookingFlowProps) {
         const res = await fetch(`${API_URL}/public/book/${slug}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceId, professionalId: professionalId || undefined, date, time, name, phone, email }),
+          body: JSON.stringify({ serviceId, professionalId: professionalId || undefined, date, time, name, phone, email, otp: otp || undefined }),
         });
         if (!res.ok) {
           const data = await res.json();
@@ -360,6 +394,45 @@ export function BookingFlow({ slug }: BookingFlowProps) {
             <label className="text-xs text-slate-500 mb-1 block">Email (opcional)</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="input" placeholder="tu@email.com" />
           </div>
+
+          {requiresPhoneVerification && (
+            <div className="card-accent space-y-3">
+              <p className="text-xs text-slate-400">
+                Para confirmar que el teléfono es tuyo, te enviamos un código por WhatsApp.
+              </p>
+              {!otpSent ? (
+                <button
+                  type="button"
+                  onClick={requestOtp}
+                  disabled={!phone.trim() || otpSending}
+                  className="btn-secondary text-xs w-full justify-center"
+                >
+                  {otpSending ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enviando...</>) : 'Enviar código por WhatsApp'}
+                </button>
+              ) : (
+                <>
+                  <label className="text-xs text-slate-500 block">Código de verificación</label>
+                  <input
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="input tracking-[0.4em] text-center text-lg font-mono"
+                    placeholder="______"
+                  />
+                  <button
+                    type="button"
+                    onClick={requestOtp}
+                    disabled={otpSending}
+                    className="text-xs text-brand-400 hover:underline disabled:opacity-50"
+                  >
+                    {otpSending ? 'Reenviando...' : 'Reenviar código'}
+                  </button>
+                </>
+              )}
+              {otpError && <p className="text-xs text-red-400">{otpError}</p>}
+            </div>
+          )}
         </div>
       )}
 
