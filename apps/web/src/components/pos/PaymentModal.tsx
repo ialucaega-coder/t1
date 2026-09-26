@@ -28,6 +28,14 @@ export function PaymentModal({ total, items, clientName, discount, onClose, onCo
   const [processing, setProcessing] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [receiptId, setReceiptId] = useState('');
+  // Clave de idempotencia estable para ESTA venta: si el cobro se reintenta
+  // (doble click, corte de red), el backend no duplica el movimiento. Se genera
+  // una vez por montaje del modal (una por venta).
+  const [idempotencyKey] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 
   const cashAmount = Number(cashReceived) || 0;
   const change = method === 'CASH' ? cashAmount - total : 0;
@@ -41,7 +49,7 @@ export function PaymentModal({ total, items, clientName, discount, onClose, onCo
         paymentMethod: method,
         notes: clientName ? `Cliente: ${clientName}` : undefined,
         reference: discount > 0 ? `Descuento ${discount}%` : undefined,
-      });
+      }, { 'Idempotency-Key': idempotencyKey });
       setReceiptId(res.id?.slice(-8)?.toUpperCase() || 'OK');
       setCompleted(true);
     } catch {

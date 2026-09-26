@@ -6,6 +6,13 @@ import { prisma } from '../lib/prisma';
 import { createTransactionSchema, CreateTransactionInput } from '../validators/transactions';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
+import {
+  IDEMP_TYPE_TRANSACTION,
+  readIdempotencyKey,
+  idempotencyLockKey,
+  findIdempotentEntityId,
+  recordIdempotentKey,
+} from '../lib/idempotency';
 
 const router = Router();
 
@@ -65,10 +72,41 @@ router.post(
   validate(createTransactionSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateTransactionInput;
-    const transaction = await prisma.transaction.create({
-      data: { ...data, businessId: req.auth!.businessId },
+    const businessId = req.auth!.businessId;
+    const idempotencyKey = readIdempotencyKey(req.header('Idempotency-Key'));
+
+    // Idempotencia: un doble-submit del cobro (doble click / reintento) no debe
+    // duplicar el movimiento contable. Es el path real del POS (PaymentModal).
+    if (idempotencyKey) {
+      const priorId = await findIdempotentEntityId(prisma, businessId, IDEMP_TYPE_TRANSACTION, idempotencyKey);
+      if (priorId) {
+        const prior = await prisma.transaction.findFirst({ where: { id: priorId, businessId } });
+        if (prior) {
+          res.status(200).json(prior);
+          return;
+        }
+      }
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (idempotencyKey) {
+        const lockKey = idempotencyLockKey(IDEMP_TYPE_TRANSACTION, businessId, idempotencyKey);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const dupId = await findIdempotentEntityId(tx, businessId, IDEMP_TYPE_TRANSACTION, idempotencyKey);
+        if (dupId) {
+          const dup = await tx.transaction.findFirst({ where: { id: dupId, businessId } });
+          if (dup) return { txn: dup, duplicated: true };
+        }
+      }
+
+      const created = await tx.transaction.create({ data: { ...data, businessId } });
+      if (idempotencyKey) {
+        await recordIdempotentKey(tx, businessId, IDEMP_TYPE_TRANSACTION, idempotencyKey, created.id);
+      }
+      return { txn: created, duplicated: false };
     });
-    res.status(201).json(transaction);
+
+    res.status(result.duplicated ? 200 : 201).json(result.txn);
   })
 );
 

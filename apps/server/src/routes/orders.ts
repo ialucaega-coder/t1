@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
@@ -8,27 +8,25 @@ import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrd
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendOrderStatusUpdate, sendOrderCreated } from '../services/notifications';
+import {
+  IDEMP_TYPE_ORDER,
+  readIdempotencyKey,
+  idempotencyLockKey,
+  findIdempotentEntityId,
+  recordIdempotentKey,
+} from '../lib/idempotency';
 
 const router = Router();
 
-// Persistencia sin schema de las idempotency-keys: una Connection oculta
-// (type 'ORDER_IDEMPOTENCY', config {key, orderId}) por cada pedido creado con
-// una Idempotency-Key. No contamina campos visibles de Order/Transaction.
-const IDEMP_TYPE = 'ORDER_IDEMPOTENCY';
-
 const ORDER_INCLUDE = { items: { include: { product: true } }, client: true } as const;
 
-/** Busca el pedido ya creado para una idempotency-key (o null). */
-async function findOrderByIdempotencyKey(
-  db: Pick<typeof prisma, 'connection' | 'order'>,
+/** Carga el pedido de una idempotency-key ya vista (o null). */
+async function loadIdempotentOrder(
+  db: Prisma.TransactionClient,
   businessId: string,
   key: string,
 ) {
-  const conn = await db.connection.findFirst({
-    where: { businessId, type: IDEMP_TYPE, config: { path: ['key'], equals: key } },
-    select: { config: true },
-  });
-  const orderId = (conn?.config as { orderId?: string } | null)?.orderId;
+  const orderId = await findIdempotentEntityId(db, businessId, IDEMP_TYPE_ORDER, key);
   if (!orderId) return null;
   return db.order.findFirst({ where: { id: orderId, businessId }, include: ORDER_INCLUDE });
 }
@@ -91,12 +89,12 @@ router.post(
   asyncHandler(async (req, res) => {
     const data = req.body as CreateOrderInput;
     const businessId = req.auth!.businessId;
-    const idempotencyKey = (req.header('Idempotency-Key') || '').trim().slice(0, 200) || null;
+    const idempotencyKey = readIdempotencyKey(req.header('Idempotency-Key'));
 
     // Fast path: si ya procesamos esta clave, devolvemos el pedido existente sin
     // crear nada (idempotencia ante doble-submit o reintento de red).
     if (idempotencyKey) {
-      const prior = await findOrderByIdempotencyKey(prisma, businessId, idempotencyKey);
+      const prior = await loadIdempotentOrder(prisma, businessId, idempotencyKey);
       if (prior) {
         res.status(200).json(prior);
         return;
@@ -131,9 +129,9 @@ router.post(
       // clave con un advisory lock y re-chequeamos dentro de la transacción
       // (cierra la ventana entre el fast path y el create).
       if (idempotencyKey) {
-        const lockKey = `order-idemp:${businessId}:${idempotencyKey}`;
+        const lockKey = idempotencyLockKey(IDEMP_TYPE_ORDER, businessId, idempotencyKey);
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-        const dup = await findOrderByIdempotencyKey(tx, businessId, idempotencyKey);
+        const dup = await loadIdempotentOrder(tx, businessId, idempotencyKey);
         if (dup) return { order: dup, duplicated: true };
       }
 
@@ -177,16 +175,7 @@ router.post(
 
       // Registra la clave para deduplicar futuros reintentos.
       if (idempotencyKey) {
-        await tx.connection.create({
-          data: {
-            name: 'Idempotencia de pedido',
-            type: IDEMP_TYPE,
-            icon: 'Key',
-            isActive: false,
-            config: { key: idempotencyKey, orderId: newOrder.id } as Prisma.InputJsonObject,
-            businessId,
-          },
-        });
+        await recordIdempotentKey(tx, businessId, IDEMP_TYPE_ORDER, idempotencyKey, newOrder.id);
       }
 
       return { order: newOrder, duplicated: false };

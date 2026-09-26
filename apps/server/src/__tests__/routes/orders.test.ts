@@ -83,14 +83,14 @@ describe('routes/orders — POST / (idempotencia)', () => {
     expect(prisma.order.create).toHaveBeenCalledTimes(1);
     expect(prisma.connection.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ type: 'ORDER_IDEMPOTENCY', config: { key: 'abc-123', orderId: 'order_1' } }),
+        data: expect.objectContaining({ type: 'ORDER_IDEMPOTENCY', config: { key: 'abc-123', entityId: 'order_1' } }),
       })
     );
   });
 
   it('replay con la misma clave devuelve el pedido existente sin recrear (fast path)', async () => {
     // Ya existe una Connection para esa clave apuntando a order_1.
-    mock(prisma.connection.findFirst).mockResolvedValue({ config: { key: 'abc-123', orderId: 'order_1' } });
+    mock(prisma.connection.findFirst).mockResolvedValue({ config: { key: 'abc-123', entityId: 'order_1' } });
     mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_1', totalPrice: 2000 });
 
     const res = await request(app)
@@ -113,7 +113,7 @@ describe('routes/orders — POST / (idempotencia)', () => {
     // (otra request concurrente la creó): se devuelve ese pedido, no se recrea.
     mock(prisma.connection.findFirst)
       .mockResolvedValueOnce(null) // fast path
-      .mockResolvedValueOnce({ config: { key: 'race-1', orderId: 'order_existing' } }); // dentro de la tx
+      .mockResolvedValueOnce({ config: { key: 'race-1', entityId: 'order_existing' } }); // dentro de la tx
     mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_existing', totalPrice: 2000 });
 
     const res = await request(app)
