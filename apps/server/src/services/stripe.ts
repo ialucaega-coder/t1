@@ -1,6 +1,6 @@
 ﻿import Stripe from 'stripe';
 import { prisma } from '../lib/prisma';
-import { SubscriptionStatus } from '@prisma/client';
+import { Prisma, SubscriptionStatus } from '@prisma/client';
 import { AppError } from '../middleware/errorHandler';
 
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -361,7 +361,9 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<void> {
         await prisma.invoice.create({
           data: {
             number: invoice.number || `INV-${Date.now()}`,
-            amount: (invoice.amount_paid ?? 0) / 100,
+            // Dividimos los centavos con Decimal (no float) para no arrastrar
+            // imprecisión de punto flotante al pipeline de facturación.
+            amount: new Prisma.Decimal(invoice.amount_paid ?? 0).div(100),
             currency: (invoice.currency ?? 'usd').toUpperCase(),
             description: `${subscription.plan.name} - Pago`,
             status: 'PAID',
