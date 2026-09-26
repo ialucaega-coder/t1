@@ -94,25 +94,53 @@ router.post(
     const endMinutes = hours * 60 + minutes + service.duration;
     const endTime = `${Math.floor(endMinutes / 60).toString().padStart(2, '0')}:${(endMinutes % 60).toString().padStart(2, '0')}`;
 
-    const booking = await prisma.booking.create({
-      data: {
-        date: new Date(data.date),
-        startTime: data.startTime,
-        endTime,
-        totalPrice: service.price,
-        source: data.source,
-        notes: data.notes,
-        clientId: data.clientId || req.auth!.userId,
-        professionalId: data.professionalId,
-        serviceId: data.serviceId,
-        businessId: req.auth!.businessId,
-      },
-      include: {
-        client: { select: { name: true, phone: true } },
-        professional: { include: { user: { select: { name: true } } } },
-        service: { select: { name: true, duration: true } },
-      },
+    // Reserva atómica también en el panel: mismo advisory lock por
+    // (negocio, profesional, día) + re-chequeo de solape dentro de la
+    // transacción. Evita agendar dos turnos del mismo profesional a la misma
+    // hora (físicamente imposible). Sin profesional asignado no hay recurso que
+    // colisione, así que se omite el chequeo.
+    const lockKey = `booking:${req.auth!.businessId}:${data.professionalId ?? ''}:${data.date}`;
+    const booking = await prisma.$transaction(async (tx) => {
+      if (data.professionalId) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const sameDay = await tx.booking.findMany({
+          where: {
+            businessId: req.auth!.businessId,
+            professionalId: data.professionalId,
+            date: new Date(data.date),
+            status: { notIn: ['CANCELLED'] },
+          },
+          select: { startTime: true, endTime: true },
+        });
+        if (sameDay.some((b) => data.startTime < b.endTime && endTime > b.startTime)) {
+          return null;
+        }
+      }
+
+      return tx.booking.create({
+        data: {
+          date: new Date(data.date),
+          startTime: data.startTime,
+          endTime,
+          totalPrice: service.price,
+          source: data.source,
+          notes: data.notes,
+          clientId: data.clientId || req.auth!.userId,
+          professionalId: data.professionalId,
+          serviceId: data.serviceId,
+          businessId: req.auth!.businessId,
+        },
+        include: {
+          client: { select: { name: true, phone: true } },
+          professional: { include: { user: { select: { name: true } } } },
+          service: { select: { name: true, duration: true } },
+        },
+      });
     });
+
+    if (!booking) {
+      throw new AppError(409, 'Ese horario ya está reservado para el profesional.');
+    }
 
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
 

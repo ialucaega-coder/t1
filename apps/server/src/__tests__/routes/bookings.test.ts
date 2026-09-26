@@ -26,6 +26,8 @@ vi.mock('../../lib/prisma', () => ({
     user: {
       findFirst: vi.fn(),
     },
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
   },
 }));
 
@@ -62,6 +64,11 @@ describe('routes/bookings', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // $transaction ejecuta el callback con el propio mock como `tx`; el advisory
+    // lock es un no-op en tests. Sin solape por defecto.
+    (prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (prisma.$transaction as ReturnType<typeof vi.fn>).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    (prisma.booking.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
   describe('GET /api/bookings', () => {
@@ -178,6 +185,23 @@ describe('routes/bookings', () => {
       expect(prisma.user.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'user_de_otro_negocio', businessId: 'biz_1' } })
       );
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (409) si el turno se solapa con otro del mismo profesional', async () => {
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'svc_1',
+        duration: 30,
+        price: 1000,
+      });
+      // Ya hay un turno 10:00–10:30 del profesional; el nuevo (10:00) se solapa.
+      (prisma.booking.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { startTime: '10:00', endTime: '10:30' },
+      ]);
+
+      const res = await request(app).post('/api/bookings').send(validPayload);
+
+      expect(res.status).toBe(409);
       expect(prisma.booking.create).not.toHaveBeenCalled();
     });
 
