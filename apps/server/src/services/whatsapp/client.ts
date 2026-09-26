@@ -126,3 +126,57 @@ export function parseTwilioImages(body: Record<string, unknown>): ImageInput[] {
 
   return images;
 }
+
+/** Tope de bytes por imagen que descargamos de Twilio (5 MB, guarda de memoria/costo). */
+const MAX_TWILIO_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Descarga las imágenes de Twilio (MediaUrl) usando Basic auth y las devuelve
+ * como base64 embebido, listas para pasarle a Anthropic.
+ *
+ * ¿Por qué hace falta? Las `MediaUrl` de Twilio están protegidas con Basic auth
+ * (`AccountSid:AuthToken`). Anthropic NO puede descargarlas por URL directa (le
+ * daría 401), así que la visión por WhatsApp no funcionaba end-to-end. Acá las
+ * bajamos nosotros con las credenciales y las mandamos como base64
+ * (`ImageInput.base64`, que el proveedor ya soporta).
+ *
+ * Robustez: si falta configuración o una descarga falla / se pasa del tope de
+ * tamaño, esa imagen se descarta en silencio (no rompe el webhook). Devuelve
+ * solo las que se pudieron convertir. El redirect de Twilio apunta a un enlace
+ * pre-firmado de S3, y `fetch` de Node quita el header Authorization en
+ * redirecciones cross-origin, así que no se filtran credenciales al CDN.
+ */
+export async function downloadTwilioImagesAsBase64(images: ImageInput[]): Promise<ImageInput[]> {
+  if (!images.length) return [];
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken) return [];
+
+  const authHeader = `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`;
+
+  const results = await Promise.all(
+    images.map(async (img): Promise<ImageInput | null> => {
+      // Si ya viene como base64 (otro canal), la dejamos pasar tal cual.
+      if (img.base64) return img;
+      if (!img.url) return null;
+
+      try {
+        const res = await fetch(img.url, { headers: { Authorization: authHeader } });
+        if (!res.ok) return null;
+
+        const contentType = res.headers.get('content-type') || img.mediaType || 'image/jpeg';
+        if (!contentType.startsWith('image/')) return null;
+
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length === 0 || buf.length > MAX_TWILIO_IMAGE_BYTES) return null;
+
+        return { base64: buf.toString('base64'), mediaType: contentType };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return results.filter((img): img is ImageInput => img !== null);
+}

@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler';
 import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
-import { processMessage } from '../services/chatbot';
+import { processMessage, getActiveSuperpowers } from '../services/chatbot';
 import {
   sendMessage,
   validateWebhookSignature,
   isConfigured,
   resolveBusinessByNumber,
   parseTwilioImages,
+  downloadTwilioImagesAsBase64,
 } from '../services/whatsapp/client';
 import { requireAuth } from '../middleware/auth';
 
@@ -73,6 +74,18 @@ router.post(
 
     const { businessId, botId } = target;
 
+    // Visión por WhatsApp: las MediaUrl de Twilio están tras Basic auth, así que
+    // Anthropic no puede bajarlas por URL. Solo si el negocio tiene activo "Oído
+    // y vista" las descargamos con nuestras credenciales y las convertimos a
+    // base64 (evita el costo de descargar cuando el superpoder está apagado).
+    let visionImages = images;
+    if (images.length) {
+      const activeSuperpowers = await getActiveSuperpowers(businessId);
+      visionImages = activeSuperpowers.has('Oído y vista')
+        ? await downloadTwilioImagesAsBase64(images)
+        : [];
+    }
+
     const existingConversation = await prisma.conversation.findFirst({
       where: {
         businessId,
@@ -90,7 +103,7 @@ router.post(
         botId,
         contactName: profileName,
         contactPhone: from,
-        ...(images.length ? { images } : {}),
+        ...(visionImages.length ? { images: visionImages } : {}),
       });
 
       await sendMessage(from, result.text);

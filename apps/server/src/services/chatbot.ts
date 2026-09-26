@@ -12,7 +12,7 @@ import { getDefaultAIProvider } from './ai';
 import type { ConversationTurn, ImageInput } from './ai';
 import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
 
-async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
+export async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
   const skills = await prisma.skill.findMany({
     where: { businessId, isActive: true },
     select: { name: true, config: true },
