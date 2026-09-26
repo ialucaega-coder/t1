@@ -1,16 +1,42 @@
 /**
  * Proveedor de IA usando ChatGPT (OpenAI).
  *
- * NOTA: este archivo importa el SDK 'openai', que todavía NO está instalado
- * en package.json. Hay que agregarlo con:
- *   npm install openai --workspace=apps/server
- * hasta entonces, `tsc --noEmit` va a fallar al no encontrar el módulo.
+ * El SDK 'openai' está instalado en el monorepo. Este proveedor soporta el
+ * superpoder "Oído y vista" (visión): los modelos gpt-4o / gpt-4o-mini aceptan
+ * imágenes por URL o base64 como parte del contenido del mensaje del usuario.
  */
 import OpenAI from 'openai';
-import type { AIProvider, AIProviderConfig, ConversationContext } from '../provider';
+import type { AIProvider, AIProviderConfig, ConversationContext, ImageInput } from '../provider';
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_MAX_TOKENS = 1024;
+
+/** Content-type por defecto para imágenes base64 si el caller no lo especifica. */
+const DEFAULT_IMAGE_MIME = 'image/jpeg';
+
+/**
+ * Arma el contenido del mensaje del usuario para la API de OpenAI. Si no hay
+ * imágenes, devuelve el texto plano; si las hay, devuelve el arreglo de partes
+ * (texto + image_url), usando data-URL para base64 y la URL directa si vino URL.
+ */
+function buildUserContent(
+  prompt: string,
+  images?: ImageInput[],
+): string | OpenAI.Chat.Completions.ChatCompletionContentPart[] {
+  if (!images || images.length === 0) return prompt;
+
+  const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+  for (const img of images) {
+    if (img.url) {
+      parts.push({ type: 'image_url', image_url: { url: img.url } });
+    } else if (img.base64) {
+      const mime = img.mediaType || DEFAULT_IMAGE_MIME;
+      parts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${img.base64}` } });
+    }
+  }
+  parts.push({ type: 'text', text: prompt });
+  return parts;
+}
 
 export class OpenAIProvider implements AIProvider {
   name = 'openai';
@@ -30,16 +56,15 @@ export class OpenAIProvider implements AIProvider {
   /**
    * Genera una respuesta usando la API de Chat Completions de OpenAI.
    * El prompt de sistema se manda como primer mensaje con role "system".
-   *
-   * NOTA: este proveedor todavía NO soporta el superpoder "Oído y vista"
-   * (visión). Si el contexto trae `images`, se ignoran de forma segura y solo
-   * se procesa el texto. La visión con OpenAI queda como mejora futura.
+   * Si el contexto trae imágenes (superpoder "Oído y vista"), se adjuntan al
+   * mensaje del usuario como partes multimodales (requiere un modelo con visión,
+   * ej: gpt-4o / gpt-4o-mini).
    */
   async generateResponse(prompt: string, context: ConversationContext): Promise<string> {
-    const messages = [
-      { role: 'system' as const, content: context.systemPrompt },
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      { role: 'system', content: context.systemPrompt },
       ...context.history.map((turn) => ({ role: turn.role, content: turn.content })),
-      { role: 'user' as const, content: prompt },
+      { role: 'user', content: buildUserContent(prompt, context.images) },
     ];
 
     const response = await this.client.chat.completions.create({
