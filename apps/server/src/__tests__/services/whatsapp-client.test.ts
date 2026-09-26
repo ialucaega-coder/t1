@@ -9,6 +9,7 @@ vi.mock('../../lib/prisma', () => ({ prisma: {} }));
 
 import {
   parseTwilioImages,
+  parseTwilioAudio,
   downloadTwilioImagesAsBase64,
   isTwilioMediaUrl,
 } from '../../services/whatsapp/client';
@@ -39,6 +40,25 @@ describe('parseTwilioImages', () => {
       body[`MediaContentType${i}`] = 'image/png';
     }
     expect(parseTwilioImages(body)).toHaveLength(4);
+  });
+});
+
+describe('parseTwilioAudio', () => {
+  it('extrae solo los audios (ignora imágenes)', () => {
+    const audios = parseTwilioAudio({
+      NumMedia: '2',
+      MediaUrl0: 'https://api.twilio.com/media/voz.ogg',
+      MediaContentType0: 'audio/ogg',
+      MediaUrl1: 'https://api.twilio.com/media/foto.jpg',
+      MediaContentType1: 'image/jpeg',
+    });
+    expect(audios).toEqual([
+      { url: 'https://api.twilio.com/media/voz.ogg', mediaType: 'audio/ogg' },
+    ]);
+  });
+
+  it('devuelve [] si no hay audios', () => {
+    expect(parseTwilioAudio({ NumMedia: '0' })).toEqual([]);
   });
 });
 

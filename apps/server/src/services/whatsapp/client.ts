@@ -127,6 +127,40 @@ export function parseTwilioImages(body: Record<string, unknown>): ImageInput[] {
   return images;
 }
 
+/** Un medio de audio adjunto (nota de voz) parseado del webhook de Twilio. */
+export interface AudioAttachment {
+  url: string;
+  mediaType: string;
+}
+
+/**
+ * Parsea los adjuntos de audio (content-type `audio/*`) de un webhook de Twilio,
+ * hasta un máximo de 2. Se usan para transcribir notas de voz de WhatsApp con
+ * Whisper (superpoder "Oído y vista"). El gate por superpoder vive en el webhook.
+ */
+export function parseTwilioAudio(body: Record<string, unknown>): AudioAttachment[] {
+  const count = parseInt(String(body?.NumMedia ?? '0'), 10);
+  if (!Number.isFinite(count) || count <= 0) return [];
+
+  const audios: AudioAttachment[] = [];
+  const MAX_AUDIOS = 2;
+
+  for (let i = 0; i < count && audios.length < MAX_AUDIOS; i++) {
+    const url = body[`MediaUrl${i}`];
+    const contentType = body[`MediaContentType${i}`];
+    if (
+      typeof url === 'string' &&
+      url &&
+      typeof contentType === 'string' &&
+      contentType.startsWith('audio/')
+    ) {
+      audios.push({ url, mediaType: contentType });
+    }
+  }
+
+  return audios;
+}
+
 /** Tope de bytes por imagen que descargamos de Twilio (5 MB, guarda de memoria/costo). */
 const MAX_TWILIO_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Timeout de las descargas salientes a Twilio (evita handlers colgados). */

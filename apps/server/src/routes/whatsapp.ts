@@ -10,8 +10,12 @@ import {
   isConfigured,
   resolveBusinessByNumber,
   parseTwilioImages,
+  parseTwilioAudio,
   downloadTwilioImagesAsBase64,
+  getTwilioAuthHeader,
+  isTwilioMediaUrl,
 } from '../services/whatsapp/client';
+import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { requireAuth } from '../middleware/auth';
 
 const sendMessageSchema = z.object({
@@ -32,7 +36,9 @@ router.post(
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const fullUrl = `${protocol}://${req.get('host')}${req.originalUrl}`;
 
-    if (process.env.NODE_ENV === 'production') {
+    // Firma segura por defecto: validamos siempre salvo opt-in explícito para
+    // desarrollo local (SKIP_WEBHOOK_SIGNATURE_VALIDATION=true).
+    if (process.env.SKIP_WEBHOOK_SIGNATURE_VALIDATION !== 'true') {
       if (!signature) {
         res.status(403).send('Missing signature');
         return;
@@ -48,15 +54,17 @@ router.post(
     const to = req.body.To || '';
     const profileName = req.body.ProfileName || '';
 
-    // Parseamos las imágenes adjuntas (Twilio manda NumMedia + MediaUrl0..N con
-    // sus MediaContentType0..N). El gate por superpoder "Oído y vista" está en
-    // processMessage: si el negocio no lo tiene activo, se ignoran.
+    // Parseamos imágenes y audios adjuntos (Twilio manda NumMedia + MediaUrl0..N
+    // con sus MediaContentType0..N). El gate por superpoder "Oído y vista" se
+    // aplica más abajo (imágenes) y en processMessage.
     const images = parseTwilioImages(req.body);
+    const audios = parseTwilioAudio(req.body);
 
-    // Si el mensaje viene solo con imagen y sin texto, usamos un texto por
-    // defecto para no romper la validación de processMessage.
+    // Si el mensaje viene solo con adjunto y sin texto, usamos un placeholder para
+    // no romper la validación (el audio puede reemplazarlo con su transcripción).
     const rawBody = req.body.Body || '';
-    const body = rawBody || (images.length ? '(imagen adjunta)' : '');
+    const body =
+      rawBody || (images.length ? '(imagen adjunta)' : audios.length ? '(nota de voz)' : '');
 
     if (!from || !body) {
       res.status(200).send('OK');
@@ -78,16 +86,36 @@ router.post(
     // webhook SIEMPRE responda 200 (si una consulta a DB o una descarga lanza,
     // Twilio no debe recibir un 500 y reintentar, duplicando el mensaje).
     try {
-      // Visión por WhatsApp: las MediaUrl de Twilio están tras Basic auth, así que
-      // Anthropic no puede bajarlas por URL. Solo si el negocio tiene activo "Oído
-      // y vista" las descargamos con nuestras credenciales y las convertimos a
-      // base64 (evita el costo de descargar cuando el superpoder está apagado).
+      // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
+      const hasAttachments = images.length > 0 || audios.length > 0;
+      const oidoYVista = hasAttachments
+        ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
+        : false;
+
+      // Visión: las MediaUrl de Twilio están tras Basic auth, así que Anthropic no
+      // puede bajarlas por URL. Solo si "Oído y vista" está activo las bajamos con
+      // credenciales y las convertimos a base64.
       let visionImages = images;
       if (images.length) {
-        const activeSuperpowers = await getActiveSuperpowers(businessId);
-        visionImages = activeSuperpowers.has('Oído y vista')
-          ? await downloadTwilioImagesAsBase64(images)
-          : [];
+        visionImages = oidoYVista ? await downloadTwilioImagesAsBase64(images) : [];
+      }
+
+      // Audio: transcribimos las notas de voz con Whisper y usamos el texto como
+      // mensaje. Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada).
+      let finalBody = body;
+      if (audios.length && oidoYVista) {
+        const authHeader = getTwilioAuthHeader();
+        for (const audio of audios) {
+          if (!isTwilioMediaUrl(audio.url)) continue; // anti-SSRF: no mandar creds a otros hosts
+          const transcript = await transcribeAudioFromUrl(audio.url, {
+            headers: authHeader ? { Authorization: authHeader } : undefined,
+            mediaType: audio.mediaType,
+          });
+          if (transcript) {
+            finalBody = rawBody ? `${rawBody}\n${transcript}` : transcript;
+            break;
+          }
+        }
       }
 
       const existingConversation = await prisma.conversation.findFirst({
@@ -101,7 +129,7 @@ router.post(
         orderBy: { updatedAt: 'desc' },
       });
 
-      const result = await processMessage(businessId, body, 'WHATSAPP', {
+      const result = await processMessage(businessId, finalBody, 'WHATSAPP', {
         conversationId: existingConversation?.id,
         botId,
         contactName: profileName,

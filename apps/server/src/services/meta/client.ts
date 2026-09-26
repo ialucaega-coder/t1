@@ -64,6 +64,11 @@ export function validateSignature(rawBody: Buffer | string | undefined, signatur
   return crypto.timingSafeEqual(a, b);
 }
 
+/** Un audio adjunto (nota de voz) de Meta. Sus URLs son públicas (sin auth). */
+export interface MetaAudio {
+  url: string;
+}
+
 /** Un mensaje entrante ya normalizado desde el webhook de Meta. */
 export interface MetaIncomingMessage {
   platform: MetaPlatform;
@@ -73,6 +78,8 @@ export interface MetaIncomingMessage {
   senderId: string;
   text: string;
   images: ImageInput[];
+  /** Audios adjuntos (para transcribir con Whisper si "Oído y vista" está activo). */
+  audios: MetaAudio[];
 }
 
 /**
@@ -104,18 +111,21 @@ export function parseMetaEvents(body: Record<string, unknown>): MetaIncomingMess
       const text = typeof message.text === 'string' ? message.text : '';
 
       const images: ImageInput[] = [];
+      const audios: MetaAudio[] = [];
       const attachments = Array.isArray(message.attachments) ? (message.attachments as Record<string, unknown>[]) : [];
       for (const att of attachments) {
-        if (images.length >= 4) break;
         const payload = att?.payload as Record<string, unknown> | undefined;
         const url = payload?.url;
-        if (att?.type === 'image' && typeof url === 'string' && url) {
+        if (typeof url !== 'string' || !url) continue;
+        if (att?.type === 'image' && images.length < 4) {
           images.push({ url });
+        } else if (att?.type === 'audio' && audios.length < 2) {
+          audios.push({ url });
         }
       }
 
-      if (!text && images.length === 0) continue; // stickers/otros sin contenido útil
-      out.push({ platform, recipientId, senderId, text, images });
+      if (!text && images.length === 0 && audios.length === 0) continue; // sin contenido útil
+      out.push({ platform, recipientId, senderId, text, images, audios });
     }
   }
 

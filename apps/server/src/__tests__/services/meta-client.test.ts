@@ -67,7 +67,7 @@ describe('parseMetaEvents', () => {
       entry: [{ id: 'PAGE_1', messaging: [{ sender: { id: 'USER_1' }, recipient: { id: 'PAGE_1' }, message: { text: 'hola' } }] }],
     });
     expect(events).toEqual([
-      { platform: 'messenger', recipientId: 'PAGE_1', senderId: 'USER_1', text: 'hola', images: [] },
+      { platform: 'messenger', recipientId: 'PAGE_1', senderId: 'USER_1', text: 'hola', images: [], audios: [] },
     ]);
   });
 
@@ -85,6 +85,22 @@ describe('parseMetaEvents', () => {
     expect(events).toHaveLength(1);
     expect(events[0].platform).toBe('instagram');
     expect(events[0].images).toEqual([{ url: 'https://cdn.meta/img.jpg' }]);
+  });
+
+  it('parsea un audio (nota de voz) adjunto', () => {
+    const events = parseMetaEvents({
+      object: 'page',
+      entry: [{
+        id: 'PAGE_1',
+        messaging: [{
+          sender: { id: 'U1' }, recipient: { id: 'PAGE_1' },
+          message: { attachments: [{ type: 'audio', payload: { url: 'https://cdn.meta/voz.mp4' } }] },
+        }],
+      }],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].audios).toEqual([{ url: 'https://cdn.meta/voz.mp4' }]);
+    expect(events[0].images).toEqual([]);
   });
 
   it('ignora echoes, eventos sin contenido y objects desconocidos', () => {

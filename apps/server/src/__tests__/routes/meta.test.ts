@@ -33,6 +33,9 @@ vi.mock('../../services/chatbot', () => ({
   processMessage: vi.fn(),
   getActiveSuperpowers: vi.fn(async () => new Set<string>()),
 }));
+vi.mock('../../services/ai/transcription', () => ({
+  transcribeAudioFromUrl: vi.fn(async () => null),
+}));
 
 import { prisma } from '../../lib/prisma';
 import {
@@ -43,6 +46,7 @@ import {
   isRecipientClaimedByAnother,
 } from '../../services/meta/client';
 import { processMessage, getActiveSuperpowers } from '../../services/chatbot';
+import { transcribeAudioFromUrl } from '../../services/ai/transcription';
 import { metaRouter } from '../../routes/meta';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -91,7 +95,7 @@ describe('routes/meta', () => {
   describe('POST /api/meta/webhook (eventos)', () => {
     it('procesa un mensaje: resuelve negocio, llama al cerebro y responde', async () => {
       mock(parseMetaEvents).mockReturnValue([
-        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: 'hola', images: [] },
+        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: 'hola', images: [], audios: [] },
       ]);
       mock(resolveBusinessByRecipient).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1', pageAccessToken: 'tok' });
       mock(prisma.conversation.findFirst).mockResolvedValue(null);
@@ -108,7 +112,7 @@ describe('routes/meta', () => {
 
     it('no llama al cerebro si no se resuelve el negocio', async () => {
       mock(parseMetaEvents).mockReturnValue([
-        { platform: 'messenger', recipientId: 'PAGE_X', senderId: 'U', text: 'hi', images: [] },
+        { platform: 'messenger', recipientId: 'PAGE_X', senderId: 'U', text: 'hi', images: [], audios: [] },
       ]);
       mock(resolveBusinessByRecipient).mockResolvedValue(null);
 
@@ -119,7 +123,7 @@ describe('routes/meta', () => {
 
     it('descarta imágenes si el superpoder "Oído y vista" está apagado', async () => {
       mock(parseMetaEvents).mockReturnValue([
-        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: 'mirá', images: [{ url: 'https://cdn/x.jpg' }] },
+        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: 'mirá', images: [{ url: 'https://cdn/x.jpg' }], audios: [] },
       ]);
       mock(resolveBusinessByRecipient).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1', pageAccessToken: 'tok' });
       mock(getActiveSuperpowers).mockResolvedValue(new Set());
@@ -130,6 +134,22 @@ describe('routes/meta', () => {
       await new Promise((r) => setTimeout(r, 20));
       const opts = mock(processMessage).mock.calls[0][3];
       expect(opts.images).toBeUndefined();
+    });
+
+    it('transcribe una nota de voz y la usa como mensaje (Oído y vista activo)', async () => {
+      mock(parseMetaEvents).mockReturnValue([
+        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: '', images: [], audios: [{ url: 'https://cdn/voz.mp4' }] },
+      ]);
+      mock(resolveBusinessByRecipient).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1', pageAccessToken: 'tok' });
+      mock(getActiveSuperpowers).mockResolvedValue(new Set(['Oído y vista']));
+      mock(transcribeAudioFromUrl).mockResolvedValue('quiero un turno el martes');
+      mock(prisma.conversation.findFirst).mockResolvedValue(null);
+      mock(processMessage).mockResolvedValue({ text: 'ok', conversationId: 'c1', intent: 'BOOKING', actions: [] });
+
+      await request(app).post('/api/meta/webhook').send({ object: 'instagram', entry: [] });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(mock(transcribeAudioFromUrl)).toHaveBeenCalledWith('https://cdn/voz.mp4');
+      expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'quiero un turno el martes', 'INSTAGRAM', expect.anything());
     });
   });
 

@@ -32,5 +32,5 @@ export const SUPERPOWERS: Superpower[] = [
   { name: 'Pide resenas Google', subtitle: 'MÁS RESEÑAS, MEJOR REPUTACIÓN.', description: 'Cuando el cliente queda conforme, el bot lo invita amablemente a dejar una reseña en Google.', icon: ThumbsUp, isActive: false },
   { name: 'Recupera no-shows', subtitle: 'RECUPERA A LOS QUE NO VINIERON.', description: 'Detecta turnos marcados como no-show y arma un mensaje para reprogramarlos automáticamente.', icon: CalendarClock, isActive: false },
   { name: 'Galería', subtitle: 'FOTOS, VIDEOS Y AUDIOS REALES.', description: 'Carga material real por URL para que el bot lo comparta en el chat y se vea en el panel.', icon: Images, isActive: false },
-  { name: 'Oído y vista', subtitle: 'ENTIENDE LAS FOTOS QUE LE MANDAN.', description: 'El bot analiza las imágenes que el cliente adjunta (por URL) y responde sobre lo que ve. El audio (transcripción) queda para una próxima versión.', icon: Eye, isActive: false },
+  { name: 'Oído y vista', subtitle: 'ENTIENDE FOTOS Y NOTAS DE VOZ.', description: 'El bot analiza las imágenes que el cliente adjunta y transcribe sus notas de voz (Whisper), respondiendo sobre lo que ve y escucha.', icon: Eye, isActive: false },
 ];

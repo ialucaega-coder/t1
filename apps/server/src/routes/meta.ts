@@ -15,6 +15,7 @@ import {
   isRecipientClaimedByAnother,
   type MetaPlatform,
 } from '../services/meta/client';
+import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { requireAuth } from '../middleware/auth';
 
 // ────────────────────────────────────────────────────────────────
@@ -83,13 +84,25 @@ router.post(
 
         const { businessId, botId, pageAccessToken } = target;
 
-        // Visión ("Oído y vista"): las URLs de imagen de Meta son públicas y
-        // temporales, así que Anthropic puede descargarlas por URL directa (a
-        // diferencia de Twilio). Solo las pasamos si el superpoder está activo.
-        let images = msg.images;
-        if (images.length) {
-          const active = await getActiveSuperpowers(businessId);
-          images = active.has('Oído y vista') ? images : [];
+        // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
+        const hasAttachments = msg.images.length > 0 || msg.audios.length > 0;
+        const oidoYVista = hasAttachments
+          ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
+          : false;
+
+        // Visión: las URLs de imagen de Meta son públicas y temporales, así que
+        // Anthropic puede descargarlas por URL directa (a diferencia de Twilio).
+        // Solo las pasamos si el superpoder está activo.
+        const images = oidoYVista ? msg.images : [];
+
+        // Audio: transcribimos notas de voz con Whisper (URLs públicas, sin auth).
+        // Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada a placeholder).
+        let transcript = '';
+        if (msg.audios.length && oidoYVista) {
+          for (const audio of msg.audios) {
+            const t = await transcribeAudioFromUrl(audio.url);
+            if (t) { transcript = t; break; }
+          }
         }
 
         const existing = await prisma.conversation.findFirst({
@@ -102,10 +115,15 @@ router.post(
           orderBy: { updatedAt: 'desc' },
         });
 
-        // El placeholder se calcula sobre las imágenes ORIGINALES (antes del gate),
-        // para que un mensaje de solo-imagen siempre reciba respuesta aunque el
-        // superpoder de visión esté apagado (consistente con el canal de WhatsApp).
-        const body = msg.text || (msg.images.length ? '(imagen adjunta)' : '');
+        // El placeholder se calcula sobre los adjuntos ORIGINALES (antes del gate),
+        // para que un mensaje de solo-adjunto siempre reciba respuesta aunque el
+        // superpoder esté apagado (consistente con el canal de WhatsApp).
+        const placeholder = msg.images.length
+          ? '(imagen adjunta)'
+          : msg.audios.length
+          ? '(nota de voz)'
+          : '';
+        const body = transcript || msg.text || placeholder;
         if (!body) continue;
 
         try {
