@@ -69,6 +69,17 @@ if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === 'dev-secret'
 }
 
 const app = express();
+
+// Cantidad de proxies de confianza delante del server (Cloud Run/LB = 1). Con
+// esto req.ip toma el cliente real del X-Forwarded-For y el rate limit por IP
+// funciona detrás del proxy. Por defecto 0 (sin confianza) para no permitir
+// spoofing de X-Forwarded-For si se despliega sin proxy; ops lo setea según el
+// deploy (TRUST_PROXY_HOPS=1 en Cloud Run).
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+if (Number.isFinite(trustProxyHops) && trustProxyHops > 0) {
+  app.set('trust proxy', trustProxyHops);
+}
+
 const httpServer = createServer(app);
 const defaultAllowedOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'];
 const allowedOrigins = Array.from(
