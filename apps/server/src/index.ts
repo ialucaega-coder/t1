@@ -37,6 +37,7 @@ import { whitelabelRouter } from './routes/whitelabel';
 import { arenaRouter } from './routes/arena';
 import { conversationsRouter } from './routes/conversations';
 import { whatsappRouter } from './routes/whatsapp';
+import { metaRouter } from './routes/meta';
 import { publicChatRouter } from './routes/publicChat';
 import { billingRouter } from './routes/billing';
 import { plansRouter } from './routes/plans';
@@ -120,7 +121,16 @@ app.use(validateRequestSize({ maxBodyBytes: 5 * 1024 * 1024 })); // 5 MB
 // This must be registered BEFORE express.json() parses the body.
 app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
 
-app.use(express.json({ limit: '5mb' }));
+app.use(
+  express.json({
+    limit: '5mb',
+    // Guardamos el cuerpo crudo para validar la firma HMAC del webhook de Meta
+    // (X-Hub-Signature-256 se calcula sobre los bytes exactos, no el JSON parseado).
+    verify: (req, _res, buf) => {
+      (req as typeof req & { rawBody?: Buffer }).rawBody = buf;
+    },
+  }),
+);
 app.use(sanitizeRequest);
 app.use(issueCsrfToken);
 app.use(csrfProtection);
@@ -163,6 +173,7 @@ app.use('/api/whitelabel', whitelabelRouter);
 app.use('/api/arena', arenaRouter);
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/whatsapp', whatsappRouter);
+app.use('/api/meta', metaRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/plans', plansRouter);
 app.use('/api/templates', templatesRouter);

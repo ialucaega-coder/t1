@@ -19,6 +19,7 @@ export * as skillsApi from './skills';
 export * as superpowersApi from './superpowers';
 export * as settingsApi from './settings';
 export * as connectionsApi from './connections';
+export * as metaApi from './meta';
 export * as agencyApi from './agency';
 export * as analyticsApi from './analytics';
 export * as marketplaceApi from './marketplace';

@@ -25,7 +25,7 @@ export async function getActiveSuperpowers(businessId: string): Promise<Set<stri
 }
 
 /** Canales por los que puede llegar un mensaje al bot. */
-export type ChatChannel = 'WEB' | 'TELEGRAM' | 'WHATSAPP' | 'VOICE';
+export type ChatChannel = 'WEB' | 'TELEGRAM' | 'WHATSAPP' | 'VOICE' | 'INSTAGRAM' | 'MESSENGER';
 
 /** Intenciones que el bot puede detectar en un mensaje del cliente. */
 export type ChatIntent = 'BOOKING' | 'CATALOG' | 'FAQ' | 'HUMAN';
@@ -528,11 +528,16 @@ async function getOrCreateConversation(
 
   const botId = options.botId || await getDefaultBotId(businessId);
 
+  // Mapa al enum BotChannel del schema (TELEGRAM | WHATSAPP | WEBCHAT | INSTAGRAM).
+  // MESSENGER no existe en el enum todavía, así que — igual que VOICE — cae en
+  // WEBCHAT; la conexión (Connection.type='MESSENGER') conserva el canal real.
   const channelMap: Record<ChatChannel, string> = {
     WEB: 'WEBCHAT',
     TELEGRAM: 'TELEGRAM',
     WHATSAPP: 'WHATSAPP',
     VOICE: 'WEBCHAT',
+    INSTAGRAM: 'INSTAGRAM',
+    MESSENGER: 'WEBCHAT',
   };
 
   return prisma.conversation.create({

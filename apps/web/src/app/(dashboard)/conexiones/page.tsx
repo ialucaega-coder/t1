@@ -4,8 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Send,
   MessageCircle,
-  Instagram,
-  Facebook,
   Globe,
   CheckCircle2,
   XCircle,
@@ -31,6 +29,7 @@ import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import * as webhooksApi from '@/lib/api/webhooks';
 import type { Webhook as WebhookType } from '@/lib/api/webhooks';
+import { MetaChannelCard } from './MetaChannelCard';
 
 // ────────────────────────────────────────────────────────────────
 // Canales de comunicación adicionales (proximamente)
@@ -38,9 +37,6 @@ import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 
 const upcomingChannels = [
   { name: 'WhatsApp', icon: MessageCircle, color: 'text-green-400', description: 'Conecta WhatsApp Business API' },
-  { name: 'Instagram', icon: Instagram, color: 'text-pink-400', description: 'Mensajes directos de Instagram' },
-  { name: 'Messenger', icon: Facebook, color: 'text-blue-500', description: 'Facebook Messenger para negocios' },
-  { name: 'Web Chat', icon: Globe, color: 'text-brand-400', description: 'Widget de chat para tu sitio web' },
 ];
 
 const integrations = [
@@ -661,6 +657,12 @@ export default function ConexionesPage() {
         {/* Telegram — canal principal, funcional */}
         <div className="mb-4">
           <TelegramCard />
+        </div>
+
+        {/* Instagram + Messenger (Meta) — funcionales */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <MetaChannelCard platform="instagram" />
+          <MetaChannelCard platform="messenger" />
         </div>
 
         {/* Web Chat Widget */}
