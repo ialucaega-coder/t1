@@ -6,6 +6,8 @@ import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { getIO } from '../lib/socket';
 import { cache, cacheKey } from '../lib/cache';
+import * as whatsapp from '../services/whatsapp/client';
+import { issueOtp, verifyOtp, publicBookingRequiresOtp } from '../lib/otp';
 
 const router = Router();
 
@@ -197,7 +199,14 @@ router.get('/book/:slug', asyncHandler(async (req, res) => {
     specialties: p.specialties,
   }));
 
-  res.json({ business, services, schedules, professionals: profList });
+  res.json({
+    business,
+    services,
+    schedules,
+    professionals: profList,
+    // El widget muestra el paso de verificación por SMS/WhatsApp cuando aplica.
+    requiresPhoneVerification: publicBookingRequiresOtp(whatsapp.isConfigured()),
+  });
 }));
 
 router.get('/book/:slug/slots', asyncHandler(async (req, res) => {
@@ -285,8 +294,64 @@ router.get('/book/:slug/slots', asyncHandler(async (req, res) => {
   res.json({ slots });
 }));
 
+// Tope de OTP por teléfono/día y cooldown entre envíos (anti SMS-bombing/costo).
+const MAX_OTP_PER_DAY = 5;
+const OTP_COOLDOWN_MS = 60 * 1000;
+
+router.post('/book/:slug/request-otp', asyncHandler(async (req, res) => {
+  const phone = String(req.body?.phone || '').trim();
+  if (!phone) {
+    res.status(400).json({ error: 'Falta el teléfono' });
+    return;
+  }
+
+  const business = await prisma.business.findUnique({
+    where: { slug: String(req.params.slug) },
+    select: { id: true, whatsappNumber: true },
+  });
+  if (!business) {
+    res.status(404).json({ error: 'Negocio no encontrado' });
+    return;
+  }
+
+  if (!whatsapp.isConfigured()) {
+    res.status(400).json({ error: 'La verificación por WhatsApp no está disponible.' });
+    return;
+  }
+
+  // Rate limit: cooldown entre envíos + tope diario por teléfono/negocio.
+  const day = new Date().toISOString().slice(0, 10);
+  const cooldownKey = cacheKey(business.id, 'otp-cooldown', phone);
+  if (cache.get<number>(cooldownKey)) {
+    res.status(429).json({ error: 'Esperá un momento antes de pedir otro código.' });
+    return;
+  }
+  const countKey = cacheKey(business.id, 'otp-count', day, phone);
+  const sent = cache.get<number>(countKey) ?? 0;
+  if (sent >= MAX_OTP_PER_DAY) {
+    res.status(429).json({ error: 'Demasiados intentos hoy. Probá más tarde.' });
+    return;
+  }
+
+  const code = await issueOtp(business.id, phone);
+  try {
+    await whatsapp.sendMessage(
+      phone,
+      `Tu código de verificación es ${code}. Vence en 10 minutos.`,
+      business.whatsappNumber || undefined,
+    );
+  } catch {
+    res.status(502).json({ error: 'No se pudo enviar el código. Intentá de nuevo.' });
+    return;
+  }
+
+  cache.set(cooldownKey, 1, OTP_COOLDOWN_MS);
+  cache.set(countKey, sent + 1, 24 * 60 * 60 * 1000);
+  res.json({ sent: true });
+}));
+
 router.post('/book/:slug', asyncHandler(async (req, res) => {
-  const { serviceId, professionalId: reqProfId, date, time, name, phone, email } = req.body;
+  const { serviceId, professionalId: reqProfId, date, time, name, phone, email, otp } = req.body;
 
     if (!serviceId || !date || !time || !name || !phone) {
       res.status(400).json({ error: 'Faltan campos obligatorios' });
@@ -301,6 +366,22 @@ router.post('/book/:slug', asyncHandler(async (req, res) => {
     if (!business) {
       res.status(404).json({ error: 'Negocio no encontrado' });
       return;
+    }
+
+    // Verificación de teléfono (opt-in): si está activa, exigimos un OTP válido
+    // antes de crear/asociar el cliente y la reserva. Evita que alguien reserve
+    // a nombre del teléfono de otra persona.
+    if (publicBookingRequiresOtp(whatsapp.isConfigured())) {
+      const result = await verifyOtp(business.id, String(phone).trim(), String(otp || ''));
+      if (result !== 'ok') {
+        const msg =
+          result === 'expired' ? 'El código venció. Pedí uno nuevo.'
+          : result === 'too_many_attempts' ? 'Demasiados intentos. Pedí un código nuevo.'
+          : result === 'not_found' ? 'Primero verificá tu teléfono.'
+          : 'Código de verificación inválido.';
+        res.status(401).json({ error: msg, code: 'PHONE_VERIFICATION_REQUIRED' });
+        return;
+      }
     }
 
     const service = await prisma.service.findFirst({

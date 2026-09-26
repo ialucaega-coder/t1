@@ -22,8 +22,19 @@ vi.mock('../../lib/prisma', () => ({
 }));
 vi.mock('../../services/chatbot', () => ({ processMessage: vi.fn() }));
 vi.mock('../../lib/socket', () => ({ getIO: vi.fn(() => null) }));
+vi.mock('../../services/whatsapp/client', () => ({
+  isConfigured: vi.fn(() => true),
+  sendMessage: vi.fn(async () => 'SID'),
+}));
+vi.mock('../../lib/otp', () => ({
+  issueOtp: vi.fn(async () => '123456'),
+  verifyOtp: vi.fn(async () => 'ok'),
+  publicBookingRequiresOtp: vi.fn(() => false), // opt-in off por defecto
+}));
 
 import { prisma } from '../../lib/prisma';
+import * as whatsapp from '../../services/whatsapp/client';
+import { verifyOtp, publicBookingRequiresOtp } from '../../lib/otp';
 import { publicChatRouter } from '../../routes/publicChat';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -109,5 +120,59 @@ describe('routes/publicChat — POST /book/:slug', () => {
   it('devuelve 400 si faltan campos obligatorios', async () => {
     const res = await request(app).post('/api/public/book/mi-negocio').send({ name: 'Ana' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('routes/publicChat — verificación de teléfono (OTP)', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(whatsapp.isConfigured).mockReturnValue(true);
+    mock(prisma.business.findUnique).mockResolvedValue({ id: 'biz_1', whatsappNumber: '+549351' });
+    mock(prisma.service.findFirst).mockResolvedValue({ id: 'svc_1', duration: 30, price: 1000 });
+    mock(prisma.schedule.findMany).mockResolvedValue([{ startTime: '09:00', endTime: '18:00' }]);
+    mock(prisma.booking.findMany).mockResolvedValue([]);
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'client_1' });
+    mock(prisma.booking.create).mockResolvedValue({ id: 'booking_1' });
+    mock(prisma.notification.create).mockResolvedValue({ id: 'n1' });
+    mock(prisma.$executeRaw).mockResolvedValue(undefined);
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+  });
+
+  it('request-otp envía el código por WhatsApp y responde sent:true', async () => {
+    const res = await request(app).post('/api/public/book/mi-negocio/request-otp').send({ phone: '+549111' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sent: true });
+    expect(mock(whatsapp.sendMessage)).toHaveBeenCalledWith('+549111', expect.stringContaining('123456'), '+549351');
+  });
+
+  it('request-otp responde 400 si WhatsApp no está configurado', async () => {
+    mock(whatsapp.isConfigured).mockReturnValue(false);
+    const res = await request(app).post('/api/public/book/mi-negocio/request-otp').send({ phone: '+549111' });
+    expect(res.status).toBe(400);
+  });
+
+  it('con verificación activa, rechaza (401) la reserva sin OTP válido', async () => {
+    mock(publicBookingRequiresOtp).mockReturnValue(true);
+    mock(verifyOtp).mockResolvedValue('invalid');
+
+    const res = await request(app).post('/api/public/book/mi-negocio').send(payload);
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('PHONE_VERIFICATION_REQUIRED');
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+  });
+
+  it('con verificación activa y OTP válido, crea la reserva', async () => {
+    mock(publicBookingRequiresOtp).mockReturnValue(true);
+    mock(verifyOtp).mockResolvedValue('ok');
+
+    const res = await request(app).post('/api/public/book/mi-negocio').send({ ...payload, otp: '123456' });
+
+    expect(res.status).toBe(201);
+    expect(mock(verifyOtp)).toHaveBeenCalledWith('biz_1', '+5491100000000', '123456');
+    expect(prisma.booking.create).toHaveBeenCalled();
   });
 });
