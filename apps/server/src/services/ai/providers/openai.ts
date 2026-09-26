@@ -47,7 +47,12 @@ export class OpenAIProvider implements AIProvider {
   private temperature: number;
 
   constructor(config: AIProviderConfig) {
-    this.client = new OpenAI({ apiKey: config.apiKey });
+    // baseURL permite apuntar a cualquier API compatible con OpenAI (Groq,
+    // DeepSeek, Mistral, Together, Perplexity, Cohere, Gemini, Ollama, LM Studio).
+    this.client = new OpenAI({
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    });
     this.model = config.model || DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.temperature = config.temperature ?? 0.7;

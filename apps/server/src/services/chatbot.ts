@@ -8,7 +8,7 @@
  * configurado para el negocio.
  */
 import { prisma } from '../lib/prisma';
-import { getDefaultAIProvider } from './ai';
+import { getAIProviderForBusiness } from './ai/engine';
 import type { ConversationTurn, ImageInput } from './ai';
 import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
 
@@ -353,7 +353,7 @@ export async function processMessage(
     }
 
     try {
-      const provider = getDefaultAIProvider();
+      const provider = await getAIProviderForBusiness(businessId);
       responseText = await provider.generateResponse(clientMessage, {
         businessId,
         clientName,

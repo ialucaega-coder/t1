@@ -8,8 +8,15 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { listAvailableProviders, getDefaultAIProvider } from '../services/ai';
+import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../services/ai/engine';
+import type { ProviderFamily } from '../services/ai/catalog';
 
 const router = Router();
+
+const PROVIDER_FAMILIES: ProviderFamily[] = [
+  'openai', 'anthropic', 'gemini', 'groq', 'deepseek', 'mistral',
+  'together', 'perplexity', 'cohere', 'ollama', 'lmstudio',
+];
 
 const chatSchema = z.object({
   message: z.string().min(1),
@@ -121,6 +128,58 @@ router.get('/providers', requireAuth, asyncHandler(async (_req, res) => {
     // Ningún proveedor configurado todavía
   }
   res.json({ providers, defaultProvider });
+}));
+
+// ────────────────────────────────────────────────────────────────
+// Motor de IA: catálogo de modelos, selección del activo y API keys
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/ai/engines
+ * Devuelve el catálogo de motores con su estado para el negocio: cuál está
+ * activo, cuáles tienen key propia, cuáles pueden ir por relay y cuáles están
+ * listos. Nunca expone el valor de las keys.
+ */
+router.get('/engines', requireAuth, asyncHandler(async (req, res) => {
+  const data = await listEnginesForBusiness(req.auth!.businessId);
+  res.json(data);
+}));
+
+const setEngineSchema = z.object({ engineId: z.string().min(1) });
+
+/**
+ * PUT /api/ai/engine
+ * Cambia el motor de IA activo del negocio.
+ */
+router.put('/engine', requireAuth, asyncHandler(async (req, res) => {
+  const { engineId } = setEngineSchema.parse(req.body);
+  try {
+    const cfg = await setActiveEngine(req.auth!.businessId, engineId);
+    res.json({ success: true, activeEngineId: cfg.activeEngineId });
+  } catch {
+    res.status(400).json({ error: 'Motor de IA desconocido' });
+  }
+}));
+
+const setKeySchema = z.object({
+  provider: z.string().min(1),
+  apiKey: z.string().max(400).default(''),
+});
+
+/**
+ * PUT /api/ai/keys
+ * Guarda (o borra, con apiKey vacía) la API key propia del negocio para una
+ * familia de proveedor. La key se guarda cifrada-en-reposo por la DB; nunca se
+ * devuelve al cliente.
+ */
+router.put('/keys', requireAuth, asyncHandler(async (req, res) => {
+  const { provider, apiKey } = setKeySchema.parse(req.body);
+  if (!PROVIDER_FAMILIES.includes(provider as ProviderFamily)) {
+    res.status(400).json({ error: 'Proveedor desconocido' });
+    return;
+  }
+  await setEngineKey(req.auth!.businessId, provider as ProviderFamily, apiKey);
+  res.json({ success: true });
 }));
 
 export { router as aiRouter };

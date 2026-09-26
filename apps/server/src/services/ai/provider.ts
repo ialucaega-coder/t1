@@ -74,4 +74,10 @@ export interface AIProviderConfig {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * URL base alternativa para APIs compatibles con OpenAI (Groq, DeepSeek,
+   * Mistral, Together, Perplexity, Cohere, Gemini, Ollama, LM Studio, etc.).
+   * Si no se pasa, el proveedor OpenAI usa el endpoint oficial.
+   */
+  baseURL?: string;
 }
