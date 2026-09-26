@@ -342,6 +342,41 @@ router.post('/book/:slug', asyncHandler(async (req, res) => {
       profId = first?.id || '';
     }
 
+    // Validación server-side del turno: /slots es solo consultivo (lo usa el
+    // widget), así que acá reconfirmamos que el horario cae dentro de un horario
+    // activo y que no se solapa con otra reserva. Evita doble-reserva y turnos
+    // fuera de agenda enviados directamente a la API.
+    const dayOfWeek = new Date(date).getDay();
+    const daySchedules = await prisma.schedule.findMany({
+      where: {
+        businessId: business.id,
+        dayOfWeek,
+        isActive: true,
+        ...(profId ? { professionalId: profId } : {}),
+      },
+      select: { startTime: true, endTime: true },
+    });
+    const withinSchedule = daySchedules.some((s) => time >= s.startTime && endTime <= s.endTime);
+    if (!withinSchedule) {
+      res.status(409).json({ error: 'El horario elegido no está disponible.' });
+      return;
+    }
+
+    const sameDayBookings = await prisma.booking.findMany({
+      where: {
+        businessId: business.id,
+        date: new Date(date),
+        status: { notIn: ['CANCELLED'] },
+        ...(profId ? { professionalId: profId } : {}),
+      },
+      select: { startTime: true, endTime: true },
+    });
+    const overlaps = sameDayBookings.some((b) => time < b.endTime && endTime > b.startTime);
+    if (overlaps) {
+      res.status(409).json({ error: 'Ese horario ya fue reservado. Por favor, elegí otro.' });
+      return;
+    }
+
     const booking = await prisma.booking.create({
       data: {
         businessId: business.id,
