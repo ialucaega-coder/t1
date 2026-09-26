@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
@@ -9,6 +10,28 @@ import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendOrderStatusUpdate, sendOrderCreated } from '../services/notifications';
 
 const router = Router();
+
+// Persistencia sin schema de las idempotency-keys: una Connection oculta
+// (type 'ORDER_IDEMPOTENCY', config {key, orderId}) por cada pedido creado con
+// una Idempotency-Key. No contamina campos visibles de Order/Transaction.
+const IDEMP_TYPE = 'ORDER_IDEMPOTENCY';
+
+const ORDER_INCLUDE = { items: { include: { product: true } }, client: true } as const;
+
+/** Busca el pedido ya creado para una idempotency-key (o null). */
+async function findOrderByIdempotencyKey(
+  db: Pick<typeof prisma, 'connection' | 'order'>,
+  businessId: string,
+  key: string,
+) {
+  const conn = await db.connection.findFirst({
+    where: { businessId, type: IDEMP_TYPE, config: { path: ['key'], equals: key } },
+    select: { config: true },
+  });
+  const orderId = (conn?.config as { orderId?: string } | null)?.orderId;
+  if (!orderId) return null;
+  return db.order.findFirst({ where: { id: orderId, businessId }, include: ORDER_INCLUDE });
+}
 
 router.get(
   '/',
@@ -67,9 +90,21 @@ router.post(
   validate(createOrderSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateOrderInput;
+    const businessId = req.auth!.businessId;
+    const idempotencyKey = (req.header('Idempotency-Key') || '').trim().slice(0, 200) || null;
+
+    // Fast path: si ya procesamos esta clave, devolvemos el pedido existente sin
+    // crear nada (idempotencia ante doble-submit o reintento de red).
+    if (idempotencyKey) {
+      const prior = await findOrderByIdempotencyKey(prisma, businessId, idempotencyKey);
+      if (prior) {
+        res.status(200).json(prior);
+        return;
+      }
+    }
 
     const products = await prisma.product.findMany({
-      where: { id: { in: data.items.map((i) => i.productId) }, businessId: req.auth!.businessId },
+      where: { id: { in: data.items.map((i) => i.productId) }, businessId },
     });
 
     if (products.length !== data.items.length) {
@@ -91,13 +126,23 @@ router.post(
       return sum + Number(product.price) * item.quantity;
     }, 0);
 
-    const order = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
+      // Con idempotency-key: serializamos duplicados concurrentes de la MISMA
+      // clave con un advisory lock y re-chequeamos dentro de la transacción
+      // (cierra la ventana entre el fast path y el create).
+      if (idempotencyKey) {
+        const lockKey = `order-idemp:${businessId}:${idempotencyKey}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const dup = await findOrderByIdempotencyKey(tx, businessId, idempotencyKey);
+        if (dup) return { order: dup, duplicated: true };
+      }
+
       const newOrder = await tx.order.create({
         data: {
           totalPrice,
           notes: data.notes,
           clientId: data.clientId || req.auth!.userId,
-          businessId: req.auth!.businessId,
+          businessId,
           items: {
             create: data.items.map((item) => {
               const product = products.find((p) => p.id === item.productId)!;
@@ -109,7 +154,7 @@ router.post(
             }),
           },
         },
-        include: { items: { include: { product: true } }, client: true },
+        include: ORDER_INCLUDE,
       });
 
       await tx.transaction.create({
@@ -118,7 +163,8 @@ router.post(
           type: 'SALE',
           paymentMethod: data.paymentMethod,
           reference: `ORD-${newOrder.id.slice(-8).toUpperCase()}`,
-          businessId: req.auth!.businessId,
+          businessId,
+          orderId: newOrder.id,
         },
       });
 
@@ -129,15 +175,31 @@ router.post(
         });
       }
 
-      return newOrder;
+      // Registra la clave para deduplicar futuros reintentos.
+      if (idempotencyKey) {
+        await tx.connection.create({
+          data: {
+            name: 'Idempotencia de pedido',
+            type: IDEMP_TYPE,
+            icon: 'Key',
+            isActive: false,
+            config: { key: idempotencyKey, orderId: newOrder.id } as Prisma.InputJsonObject,
+            businessId,
+          },
+        });
+      }
+
+      return { order: newOrder, duplicated: false };
     });
 
-    // Notifica al admin el nuevo pedido (in-app). Fire-and-forget.
-    void sendOrderCreated(order).catch((err) =>
-      console.error('[Orders] Error notificando alta de pedido:', err)
-    );
+    // Solo notificamos si es un pedido nuevo (no en el replay idempotente).
+    if (!result.duplicated) {
+      void sendOrderCreated(result.order).catch((err) =>
+        console.error('[Orders] Error notificando alta de pedido:', err)
+      );
+    }
 
-    res.status(201).json(order);
+    res.status(result.duplicated ? 200 : 201).json(result.order);
   })
 );
 
