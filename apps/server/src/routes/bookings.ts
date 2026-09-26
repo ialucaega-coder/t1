@@ -71,7 +71,11 @@ router.post(
   validate(createBookingSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateBookingInput;
-    const service = await prisma.service.findUnique({ where: { id: data.serviceId } });
+    // Scoped por negocio: evita reservar contra el servicio (precio/duración) de
+    // otro tenant enviando un serviceId ajeno.
+    const service = await prisma.service.findFirst({
+      where: { id: data.serviceId, businessId: req.auth!.businessId },
+    });
     if (!service) {
       throw new AppError(404, 'Service not found');
     }

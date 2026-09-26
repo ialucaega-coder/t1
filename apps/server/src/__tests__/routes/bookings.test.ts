@@ -21,7 +21,7 @@ vi.mock('../../lib/prisma', () => ({
       delete: vi.fn(),
     },
     service: {
-      findUnique: vi.fn(),
+      findFirst: vi.fn(),
     },
     user: {
       findFirst: vi.fn(),
@@ -132,7 +132,7 @@ describe('routes/bookings', () => {
     };
 
     it('crea una reserva calculando la hora de fin a partir de la duracion del servicio', async () => {
-      (prisma.service.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: 'svc_1',
         duration: 30,
         price: 1000,
@@ -154,7 +154,7 @@ describe('routes/bookings', () => {
     });
 
     it('devuelve 404 si el servicio no existe', async () => {
-      (prisma.service.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
       const res = await request(app).post('/api/bookings').send(validPayload);
 
@@ -162,7 +162,7 @@ describe('routes/bookings', () => {
     });
 
     it('rechaza (404) un clientId que no pertenece al negocio (anti cross-tenant)', async () => {
-      (prisma.service.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: 'svc_1',
         duration: 30,
         price: 1000,
