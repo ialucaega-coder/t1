@@ -14,6 +14,14 @@ interface CreateNotificationData {
   businessId: string;
 }
 
+interface ClientNotificationData {
+  type: NotificationType;
+  title: string;
+  body: string;
+  userId: string;
+  businessId: string;
+}
+
 interface BookingPayload {
   id: string;
   date: Date;
@@ -33,16 +41,22 @@ interface OrderPayload {
   totalPrice: unknown; // Decimal from Prisma
 }
 
+type Recipient = { email: string | null; phone: string | null } | null;
+
 // ─── Servicio ────────────────────────────────────────────────────────
 
 /**
- * Crea y persiste una notificación en la base de datos y la despacha al canal
- * externo correspondiente (WhatsApp / email) cuando aplica. El despacho es
- * best-effort: nunca lanza ni bloquea el flujo que la originó.
+ * Crea y persiste una notificación con un canal explícito y la despacha.
+ * Pensada para notificaciones in-app del panel/scheduler (channel PUSH), pero
+ * si se le pasa EMAIL/WHATSAPP resuelve el destinatario SCOPED por negocio.
  */
 export async function createNotification(data: CreateNotificationData) {
   const notification = await prisma.notification.create({ data });
-  await dispatchToChannel(notification);
+  const recipient =
+    data.channel === 'EMAIL' || data.channel === 'WHATSAPP'
+      ? await findRecipient(data.userId, data.businessId)
+      : null;
+  await deliver(notification, recipient);
   return notification;
 }
 
@@ -80,17 +94,14 @@ export async function sendBookingCreated(booking: BookingPayload) {
 
 /**
  * Notifica al cliente cuando su reserva es confirmada. El cliente no entra al
- * panel, así que se le llega por el mejor canal externo disponible
- * (WhatsApp si tiene teléfono y hay Twilio; si no, email).
+ * panel, así que se le llega por el mejor canal externo disponible.
  */
 export async function sendBookingConfirmed(booking: BookingPayload) {
   const serviceName = booking.service?.name ?? 'tu servicio';
   const dateStr = formatDate(booking.date);
-  const channel = await resolveClientChannel(booking.clientId);
 
-  return createNotification({
+  return notifyClient({
     type: 'BOOKING_CONFIRMED',
-    channel,
     title: 'Reserva confirmada',
     body: `Tu reserva de ${serviceName} para el ${dateStr} a las ${booking.startTime} ha sido confirmada.`,
     userId: booking.clientId,
@@ -104,11 +115,9 @@ export async function sendBookingConfirmed(booking: BookingPayload) {
 export async function sendBookingCancelled(booking: BookingPayload) {
   const serviceName = booking.service?.name ?? 'tu servicio';
   const dateStr = formatDate(booking.date);
-  const channel = await resolveClientChannel(booking.clientId);
 
-  return createNotification({
+  return notifyClient({
     type: 'BOOKING_CANCELLED',
-    channel,
     title: 'Reserva cancelada',
     body: `Tu reserva de ${serviceName} para el ${dateStr} a las ${booking.startTime} fue cancelada. Si fue un error, escribinos para reprogramarla.`,
     userId: booking.clientId,
@@ -122,11 +131,9 @@ export async function sendBookingCancelled(booking: BookingPayload) {
 export async function sendBookingReminder(booking: BookingPayload) {
   const serviceName = booking.service?.name ?? 'tu cita';
   const dateStr = formatDate(booking.date);
-  const channel = await resolveClientChannel(booking.clientId);
 
-  return createNotification({
+  return notifyClient({
     type: 'BOOKING_REMINDER',
-    channel,
     title: 'Recordatorio de cita',
     body: `Tu cita de ${serviceName} es hoy ${dateStr} a las ${booking.startTime}. ¡Te esperamos!`,
     userId: booking.clientId,
@@ -153,11 +160,9 @@ export async function sendOrderStatusUpdate(order: OrderPayload) {
     style: 'currency',
     currency: 'ARS',
   });
-  const channel = await resolveClientChannel(order.clientId);
 
-  return createNotification({
+  return notifyClient({
     type: 'ORDER_STATUS',
-    channel,
     title: `Pedido ${statusLabel}`,
     body: `${clientName ? clientName + ', tu' : 'Tu'} pedido por ${priceStr} ahora está ${statusLabel}.`,
     userId: order.clientId,
@@ -176,92 +181,114 @@ function formatDate(date: Date): string {
 }
 
 /**
- * Elige el mejor canal externo para llegarle a un cliente según lo que tenga
- * cargado y lo que la plataforma tenga configurado:
- *   WhatsApp (teléfono + Twilio configurado) > email > PUSH (solo in-app).
- * Nunca lanza: ante cualquier fallo cae a PUSH (queda registrada in-app).
+ * Busca al destinatario SIEMPRE acotado por negocio. Esto es lo que impide una
+ * fuga entre tenants: aunque una reserva/pedido se haya creado con un `userId`
+ * de otro negocio, acá no lo encontramos (id + businessId) y no sale ningún
+ * envío externo. Nunca lanza: ante error o no-match, devuelve null.
  */
-async function resolveClientChannel(userId: string): Promise<NotificationChannel> {
+async function findRecipient(userId: string, businessId: string): Promise<Recipient> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { phone: true, email: true },
+    // findFirst con {id, businessId}: id es único, pero el filtro por negocio
+    // garantiza el aislamiento multi-tenant en el envío.
+    return await prisma.user.findFirst({
+      where: { id: userId, businessId },
+      select: { email: true, phone: true },
     });
-    if (whatsapp.isConfigured() && user?.phone) return 'WHATSAPP';
-    if (user?.email) return 'EMAIL';
   } catch (err) {
-    console.error('[Notifications] Error resolviendo canal del cliente:', err);
+    console.error('[Notifications] Error buscando destinatario:', describeError(err));
+    return null;
   }
+}
+
+/**
+ * Elige el mejor canal externo para un destinatario ya resuelto:
+ *   WhatsApp (teléfono + Twilio configurado) > email > PUSH (solo in-app).
+ */
+function pickChannel(recipient: Recipient): NotificationChannel {
+  if (whatsapp.isConfigured() && recipient?.phone) return 'WHATSAPP';
+  if (recipient?.email) return 'EMAIL';
   return 'PUSH';
 }
 
 /**
- * Despacha la notificación al canal externo correspondiente.
- * El envío es fire-and-forget: los errores se loguean pero no bloquean ni
- * lanzan (una notificación que no sale no debe romper la reserva/pedido).
+ * Notifica a un cliente por su mejor canal externo. Hace UNA sola búsqueda del
+ * destinatario (acotada por negocio) y la reutiliza para elegir canal y para
+ * despachar. Si el usuario no pertenece al negocio, cae a PUSH (in-app) y no
+ * sale nada al exterior.
  */
-async function dispatchToChannel(notification: {
-  channel: string;
-  title: string;
-  body: string;
-  userId: string;
-}) {
-  // Un solo lookup del destinatario, reutilizado por email y WhatsApp.
-  let user: { email: string | null; phone: string | null } | null = null;
-  if (notification.channel === 'EMAIL' || notification.channel === 'WHATSAPP') {
-    try {
-      user = await prisma.user.findUnique({
-        where: { id: notification.userId },
-        select: { email: true, phone: true },
-      });
-    } catch (err) {
-      console.error('[Notifications] Error buscando destinatario:', err);
-      return;
-    }
-  }
+async function notifyClient(data: ClientNotificationData) {
+  const recipient = await findRecipient(data.userId, data.businessId);
+  const channel = pickChannel(recipient);
+  const notification = await prisma.notification.create({ data: { ...data, channel } });
+  await deliver(notification, recipient);
+  return notification;
+}
 
+/**
+ * Despacha la notificación al canal externo usando el destinatario ya resuelto
+ * (que fue buscado acotado por negocio). Fire-and-forget: los errores se
+ * loguean redactados y nunca lanzan ni bloquean el flujo que la originó.
+ */
+async function deliver(
+  notification: { channel: string; title: string; body: string },
+  recipient: Recipient,
+) {
   const text = `${notification.title}\n\n${notification.body}`;
 
   switch (notification.channel) {
     case 'EMAIL': {
-      if (!user?.email) {
-        console.warn(`[Notifications] Sin email para el usuario ${notification.userId}`);
+      if (!recipient?.email) {
+        console.warn('[Notifications] Sin email para el destinatario; se omite.');
         return;
       }
       // Fire-and-forget: no awaiteamos para no bloquear el flujo principal.
-      sendGenericNotification(user.email, notification.title, notification.body).catch((err) =>
-        console.error('[Notifications] Error despachando email:', err)
+      sendGenericNotification(recipient.email, notification.title, notification.body).catch((err) =>
+        console.error('[Notifications] Error despachando email:', describeError(err))
       );
       return;
     }
 
     case 'WHATSAPP': {
-      if (!whatsapp.isConfigured() || !user?.phone) {
-        console.warn(`[Notifications] WhatsApp no disponible para el usuario ${notification.userId}`);
+      if (!whatsapp.isConfigured() || !recipient?.phone) {
+        console.warn('[Notifications] WhatsApp no disponible para el destinatario; se omite.');
         return;
       }
-      whatsapp.sendMessage(user.phone, text).catch((err) =>
-        console.error('[Notifications] Error despachando WhatsApp:', err)
+      whatsapp.sendMessage(recipient.phone, text).catch((err) =>
+        console.error('[Notifications] Error despachando WhatsApp:', describeError(err))
       );
       return;
     }
 
     case 'PUSH':
       // In-app: se muestra en la campana del panel. La persistencia ES la entrega;
-      // no hay envío externo (el cliente que no usa el panel se notifica por otro canal).
+      // no hay envío externo.
       return;
 
     case 'TELEGRAM':
     case 'SMS':
       // El schema no guarda una dirección por-usuario para estos canales
-      // (chatId de Telegram / número verificado de SMS), así que no podemos
-      // resolver un destino. Queda registrada in-app.
-      console.log(
-        `[Notifications] Canal ${notification.channel} sin destino por-usuario; queda solo in-app.`
-      );
+      // (chatId de Telegram / número verificado de SMS). Queda registrada in-app.
+      console.log(`[Notifications] Canal ${notification.channel} sin destino por-usuario; queda solo in-app.`);
       return;
 
     default:
       console.warn(`[Notifications] Canal desconocido: ${notification.channel}`);
   }
+}
+
+/**
+ * Describe un error para logs SIN filtrar PII del destinatario: los SDKs de
+ * Twilio/Resend suelen incluir el número/email en `message` (ej: "The 'To'
+ * number +54... is not valid"), así que logueamos solo nombre y código.
+ */
+function describeError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { code?: string | number; status?: number; name?: string };
+    const parts: string[] = [];
+    if (e.name) parts.push(e.name);
+    if (e.code !== undefined) parts.push(`code ${e.code}`);
+    if (e.status !== undefined) parts.push(`status ${e.status}`);
+    if (parts.length) return parts.join(' ');
+  }
+  return 'error desconocido';
 }

@@ -76,6 +76,16 @@ router.post(
       throw new AppError(400, 'One or more products not found');
     }
 
+    // Anti cross-tenant: si viene un clientId explícito, debe pertenecer al negocio.
+    // Evita que se asocie (y luego se notifique a) un cliente de otro negocio.
+    if (data.clientId && data.clientId !== req.auth!.userId) {
+      const client = await prisma.user.findFirst({
+        where: { id: data.clientId, businessId: req.auth!.businessId },
+        select: { id: true },
+      });
+      if (!client) throw new AppError(404, 'Cliente no encontrado en este negocio');
+    }
+
     const totalPrice = data.items.reduce((sum, item) => {
       const product = products.find((p) => p.id === item.productId)!;
       return sum + Number(product.price) * item.quantity;

@@ -23,6 +23,9 @@ vi.mock('../../lib/prisma', () => ({
     service: {
       findUnique: vi.fn(),
     },
+    user: {
+      findFirst: vi.fn(),
+    },
   },
 }));
 
@@ -156,6 +159,26 @@ describe('routes/bookings', () => {
       const res = await request(app).post('/api/bookings').send(validPayload);
 
       expect(res.status).toBe(404);
+    });
+
+    it('rechaza (404) un clientId que no pertenece al negocio (anti cross-tenant)', async () => {
+      (prisma.service.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'svc_1',
+        duration: 30,
+        price: 1000,
+      });
+      // El cliente de otro negocio no aparece al filtrar por businessId.
+      (prisma.user.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/bookings')
+        .send({ ...validPayload, clientId: 'user_de_otro_negocio' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.user.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user_de_otro_negocio', businessId: 'biz_1' } })
+      );
+      expect(prisma.booking.create).not.toHaveBeenCalled();
     });
 
     it('devuelve 400 cuando faltan campos requeridos', async () => {

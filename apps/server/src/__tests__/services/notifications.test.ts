@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../lib/prisma', () => ({
   prisma: {
     notification: { create: vi.fn(async (args) => ({ id: 'n1', ...args.data })) },
-    user: { findUnique: vi.fn(), findMany: vi.fn() },
+    user: { findFirst: vi.fn(), findMany: vi.fn() },
   },
 }));
 vi.mock('../../services/email', () => ({
@@ -53,7 +53,7 @@ describe('services/notifications', () => {
 
   describe('sendBookingConfirmed — resolución de canal', () => {
     it('usa WhatsApp cuando el cliente tiene teléfono y Twilio está configurado', async () => {
-      mock(prisma.user.findUnique).mockResolvedValue({ phone: '+5491122334455', email: 'ana@mail.com' });
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: '+5491122334455', email: 'ana@mail.com' });
 
       await sendBookingConfirmed(booking);
 
@@ -64,8 +64,32 @@ describe('services/notifications', () => {
       expect(mock(sendGenericNotification)).not.toHaveBeenCalled();
     });
 
+    it('busca al destinatario SCOPED por businessId (aislamiento multi-tenant)', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: '+549112233', email: null });
+
+      await sendBookingConfirmed(booking);
+
+      // El fix crítico: la búsqueda del destinatario filtra por negocio, así un
+      // clientId de otro tenant no recibe el envío externo.
+      expect(mock(prisma.user.findFirst)).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'client_1', businessId: 'biz_1' } })
+      );
+    });
+
+    it('no envía nada al exterior si el usuario no pertenece al negocio (findFirst null)', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue(null);
+
+      await sendBookingConfirmed(booking);
+
+      expect(mock(prisma.notification.create)).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ channel: 'PUSH' }) })
+      );
+      expect(mock(whatsapp.sendMessage)).not.toHaveBeenCalled();
+      expect(mock(sendGenericNotification)).not.toHaveBeenCalled();
+    });
+
     it('cae a email cuando no hay teléfono', async () => {
-      mock(prisma.user.findUnique).mockResolvedValue({ phone: null, email: 'ana@mail.com' });
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: null, email: 'ana@mail.com' });
 
       await sendBookingConfirmed(booking);
 
@@ -78,7 +102,7 @@ describe('services/notifications', () => {
 
     it('cae a email cuando Twilio no está configurado aunque haya teléfono', async () => {
       mock(whatsapp.isConfigured).mockReturnValue(false);
-      mock(prisma.user.findUnique).mockResolvedValue({ phone: '+549112233', email: 'ana@mail.com' });
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: '+549112233', email: 'ana@mail.com' });
 
       await sendBookingConfirmed(booking);
 
@@ -89,7 +113,7 @@ describe('services/notifications', () => {
     });
 
     it('cae a PUSH (in-app) cuando el cliente no tiene ni teléfono ni email', async () => {
-      mock(prisma.user.findUnique).mockResolvedValue({ phone: null, email: null });
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: null, email: null });
 
       await sendBookingConfirmed(booking);
 
@@ -119,14 +143,14 @@ describe('services/notifications', () => {
 
   describe('robustez', () => {
     it('no lanza aunque el envío de WhatsApp falle', async () => {
-      mock(prisma.user.findUnique).mockResolvedValue({ phone: '+549112233', email: null });
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: '+549112233', email: null });
       mock(whatsapp.sendMessage).mockRejectedValue(new Error('twilio down'));
 
       await expect(sendBookingConfirmed(booking)).resolves.toBeTruthy();
     });
 
     it('cae a PUSH si el lookup del cliente falla al resolver el canal', async () => {
-      mock(prisma.user.findUnique).mockRejectedValueOnce(new Error('db error'));
+      mock(prisma.user.findFirst).mockRejectedValueOnce(new Error('db error'));
 
       await sendOrderStatusUpdate({
         id: 'o1',
