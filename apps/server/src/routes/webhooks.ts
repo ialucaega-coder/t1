@@ -4,6 +4,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
+import { assertSafePublicUrl } from '../lib/ssrf';
 
 const router = Router();
 
@@ -65,6 +66,8 @@ router.post(
   validate(createWebhookSchema),
   asyncHandler(async (req, res) => {
     const { name, url, events, secret } = req.body;
+    // Anti-SSRF: no permitimos guardar un destino interno/privado.
+    await assertSafePublicUrl(url);
     const webhook = await prisma.connection.create({
       data: {
         name,
@@ -96,6 +99,8 @@ router.patch(
 
     const currentConfig = (existing.config as Record<string, unknown>) || {};
     const { name, url, events, secret, isActive } = req.body;
+    // Anti-SSRF al actualizar la URL.
+    if (url !== undefined) await assertSafePublicUrl(url);
 
     const webhook = await prisma.connection.update({
       where: { id },
@@ -145,6 +150,10 @@ router.post(
 
     const config = webhook.config as Record<string, unknown>;
     const url = config.url as string;
+
+    // Anti-SSRF: el destino no puede apuntar a rangos privados/loopback/
+    // link-local (metadata de la nube, servicios internos). Lanza 400 si no.
+    await assertSafePublicUrl(url);
 
     try {
       const response = await fetch(url, {
