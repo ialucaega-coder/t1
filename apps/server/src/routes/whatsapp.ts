@@ -137,7 +137,9 @@ router.post(
         ...(visionImages.length ? { images: visionImages } : {}),
       });
 
-      await sendMessage(from, result.text);
+      // Responde DESDE el número del negocio (el `To` al que escribió el
+      // cliente), no desde el número global, para respetar el multi-tenant.
+      await sendMessage(from, result.text, to.replace('whatsapp:', '').trim() || undefined);
     } catch (error) {
       console.error('WhatsApp webhook error:', error);
     }

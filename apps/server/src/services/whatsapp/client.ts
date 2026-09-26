@@ -22,9 +22,16 @@ export function isConfigured(): boolean {
   return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
 }
 
-export async function sendMessage(to: string, body: string): Promise<string> {
+/**
+ * Envía un WhatsApp. `fromNumber` permite usar el número dedicado del negocio
+ * como remitente (multi-tenant); si se omite, cae al número global de la
+ * plataforma (`TWILIO_PHONE_NUMBER`). El número que se pase debe estar
+ * aprovisionado en la cuenta de Twilio (los números por-negocio lo están, ya
+ * que son los mismos por los que Twilio enruta los mensajes entrantes).
+ */
+export async function sendMessage(to: string, body: string, fromNumber?: string): Promise<string> {
   const client = getClient();
-  const from = process.env.TWILIO_PHONE_NUMBER;
+  const from = fromNumber || process.env.TWILIO_PHONE_NUMBER;
   if (!from) throw new Error('Falta TWILIO_PHONE_NUMBER');
 
   const msg = await client.messages.create({

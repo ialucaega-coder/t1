@@ -10,6 +10,7 @@ vi.mock('../../lib/prisma', () => ({
   prisma: {
     notification: { create: vi.fn(async (args) => ({ id: 'n1', ...args.data })) },
     user: { findFirst: vi.fn(), findMany: vi.fn() },
+    business: { findUnique: vi.fn(async () => ({ whatsappNumber: null })) },
   },
 }));
 vi.mock('../../services/email', () => ({
@@ -50,6 +51,7 @@ describe('services/notifications', () => {
       id: 'n1',
       ...(args.data as object),
     }));
+    mock(prisma.business.findUnique).mockResolvedValue({ whatsappNumber: null });
   });
 
   describe('sendBookingConfirmed — resolución de canal', () => {
@@ -61,8 +63,21 @@ describe('services/notifications', () => {
       expect(mock(prisma.notification.create)).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ channel: 'WHATSAPP', type: 'BOOKING_CONFIRMED' }) })
       );
-      expect(mock(whatsapp.sendMessage)).toHaveBeenCalledWith('+5491122334455', expect.stringContaining('Reserva confirmada'));
+      expect(mock(whatsapp.sendMessage)).toHaveBeenCalledWith('+5491122334455', expect.stringContaining('Reserva confirmada'), undefined);
       expect(mock(sendGenericNotification)).not.toHaveBeenCalled();
+    });
+
+    it('usa el número dedicado del negocio como remitente de WhatsApp cuando existe', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ phone: '+5491122334455', email: null });
+      mock(prisma.business.findUnique).mockResolvedValue({ whatsappNumber: '+5493511110000' });
+
+      await sendBookingConfirmed(booking);
+
+      expect(mock(whatsapp.sendMessage)).toHaveBeenCalledWith(
+        '+5491122334455',
+        expect.any(String),
+        '+5493511110000'
+      );
     });
 
     it('busca al destinatario SCOPED por businessId (aislamiento multi-tenant)', async () => {

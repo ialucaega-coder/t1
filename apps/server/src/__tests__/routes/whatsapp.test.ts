@@ -91,7 +91,8 @@ describe('routes/whatsapp — webhook', () => {
 
     expect(res.status).toBe(200);
     expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'hola', 'WHATSAPP', expect.objectContaining({ botId: 'bot_1' }));
-    expect(mock(sendMessage)).toHaveBeenCalledWith('+549', 'respuesta');
+    // Responde al cliente (+549) DESDE el número del negocio (el To, +1).
+    expect(mock(sendMessage)).toHaveBeenCalledWith('+549', 'respuesta', '+1');
   });
 
   it('con "Oído y vista" activo, descarga imágenes a base64 y las pasa', async () => {

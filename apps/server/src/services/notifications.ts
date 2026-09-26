@@ -249,8 +249,28 @@ async function notifyClient(data: ClientNotificationData) {
   const recipient = await findRecipient(data.userId, data.businessId);
   const channel = pickChannel(recipient);
   const notification = await prisma.notification.create({ data: { ...data, channel } });
-  await deliver(notification, recipient);
+  // Para WhatsApp, resolvemos el número dedicado del negocio como remitente.
+  const senderNumber = channel === 'WHATSAPP' ? await resolveBusinessSender(data.businessId) : undefined;
+  await deliver(notification, recipient, senderNumber);
   return notification;
+}
+
+/**
+ * Número de WhatsApp dedicado del negocio (remitente saliente). Es el mismo por
+ * el que Twilio enruta los entrantes, así que está aprovisionado en la cuenta.
+ * Devuelve undefined si el negocio no tiene uno (deliver cae al número global).
+ */
+async function resolveBusinessSender(businessId: string): Promise<string | undefined> {
+  try {
+    const business = await prisma.business.findUnique({
+      where: { id: businessId },
+      select: { whatsappNumber: true },
+    });
+    return business?.whatsappNumber || undefined;
+  } catch (err) {
+    console.error('[Notifications] Error resolviendo remitente del negocio:', describeError(err));
+    return undefined;
+  }
 }
 
 /**
@@ -261,6 +281,7 @@ async function notifyClient(data: ClientNotificationData) {
 async function deliver(
   notification: { channel: string; title: string; body: string },
   recipient: Recipient,
+  senderNumber?: string,
 ) {
   const text = `${notification.title}\n\n${notification.body}`;
 
@@ -282,7 +303,7 @@ async function deliver(
         console.warn('[Notifications] WhatsApp no disponible para el destinatario; se omite.');
         return;
       }
-      whatsapp.sendMessage(recipient.phone, text).catch((err) =>
+      whatsapp.sendMessage(recipient.phone, text, senderNumber).catch((err) =>
         console.error('[Notifications] Error despachando WhatsApp:', describeError(err))
       );
       return;
