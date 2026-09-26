@@ -6,7 +6,7 @@ import { prisma } from '../lib/prisma';
 import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrderStatusInput } from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
-import { sendOrderStatusUpdate } from '../services/notifications';
+import { sendOrderStatusUpdate, sendOrderCreated } from '../services/notifications';
 
 const router = Router();
 
@@ -131,6 +131,11 @@ router.post(
 
       return newOrder;
     });
+
+    // Notifica al admin el nuevo pedido (in-app). Fire-and-forget.
+    void sendOrderCreated(order).catch((err) =>
+      console.error('[Orders] Error notificando alta de pedido:', err)
+    );
 
     res.status(201).json(order);
   })

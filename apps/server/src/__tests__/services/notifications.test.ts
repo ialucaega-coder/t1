@@ -26,6 +26,7 @@ import * as whatsapp from '../../services/whatsapp/client';
 import {
   sendBookingConfirmed,
   sendBookingCreated,
+  sendOrderCreated,
   sendOrderStatusUpdate,
 } from '../../services/notifications';
 
@@ -138,6 +139,24 @@ describe('services/notifications', () => {
       );
       expect(mock(whatsapp.sendMessage)).not.toHaveBeenCalled();
       expect(mock(sendGenericNotification)).not.toHaveBeenCalled();
+    });
+
+    it('sendOrderCreated crea PUSH por cada admin sin envío externo', async () => {
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'admin_1' }]);
+
+      await sendOrderCreated({
+        id: 'o1',
+        status: 'PENDING',
+        clientId: 'client_1',
+        businessId: 'biz_1',
+        client: { name: 'Ana' },
+        totalPrice: 2500,
+      });
+
+      expect(mock(prisma.notification.create)).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ channel: 'PUSH', title: 'Nuevo pedido recibido', userId: 'admin_1' }) })
+      );
+      expect(mock(whatsapp.sendMessage)).not.toHaveBeenCalled();
     });
   });
 

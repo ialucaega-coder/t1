@@ -93,6 +93,35 @@ export async function sendBookingCreated(booking: BookingPayload) {
 }
 
 /**
+ * Notifica al admin del negocio cuando entra un nuevo pedido (in-app / panel).
+ */
+export async function sendOrderCreated(order: OrderPayload) {
+  const adminUsers = await prisma.user.findMany({
+    where: { businessId: order.businessId, role: 'ADMIN' },
+    select: { id: true },
+  });
+
+  const clientName = order.client?.name ?? 'Un cliente';
+  const priceStr = Number(order.totalPrice).toLocaleString('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+  });
+
+  return Promise.all(
+    adminUsers.map((admin) =>
+      createNotification({
+        type: 'ORDER_STATUS',
+        channel: 'PUSH',
+        title: 'Nuevo pedido recibido',
+        body: `${clientName} hizo un pedido por ${priceStr}.`,
+        userId: admin.id,
+        businessId: order.businessId,
+      })
+    )
+  );
+}
+
+/**
  * Notifica al cliente cuando su reserva es confirmada. El cliente no entra al
  * panel, así que se le llega por el mejor canal externo disponible.
  */
