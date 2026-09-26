@@ -3,8 +3,8 @@
  *   - GET/PUT /config (autenticadas; PUT solo ADMIN, con zod)
  *   - Webhooks de Twilio POST /incoming y /respond (sin auth) → devuelven TwiML.
  *
- * En entorno de test NODE_ENV !== 'production', así que la verificación de
- * firma de Twilio se omite (ver `verifiedTwilio`). Se mockean la config de voz,
+ * En test seteamos SKIP_WEBHOOK_SIGNATURE_VALIDATION=true, así que la
+ * verificación de firma de Twilio se omite (ver `verifiedTwilio`). Se mockean la config de voz,
  * el cliente de voz (incluido un VoiceResponse falso), el cerebro (processMessage)
  * y Prisma.
  */
@@ -93,6 +93,9 @@ describe('routes/voice', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Los webhooks de Twilio ahora validan firma por defecto; en test la
+    // omitimos con el opt-in explícito (igual que whatsapp.test.ts).
+    process.env.SKIP_WEBHOOK_SIGNATURE_VALIDATION = 'true';
     (loadVoiceSettings as ReturnType<typeof vi.fn>).mockResolvedValue(CFG);
   });
 

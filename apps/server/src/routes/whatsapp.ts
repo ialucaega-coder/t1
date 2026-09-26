@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler';
 import { validate } from '../middleware/validate';
@@ -24,6 +24,12 @@ const sendMessageSchema = z.object({
 });
 
 const router = Router();
+
+// Twilio postea el webhook entrante como application/x-www-form-urlencoded (no
+// JSON), así que este router necesita su propio parser: el global solo tiene
+// express.json(), con lo que el body llegaría vacío y From/To/Body/firma no
+// resolverían. Mismo patrón que el router de voz.
+router.use(express.urlencoded({ extended: false }));
 
 router.get('/status', requireAuth, (_req: Request, res: Response) => {
   res.json({ configured: isConfigured() });

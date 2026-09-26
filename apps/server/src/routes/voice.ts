@@ -50,9 +50,15 @@ function fullUrl(req: Request): string {
   return `${protocol}://${req.get('host')}${req.originalUrl}`;
 }
 
-/** En producción exige firma válida de Twilio; en dev la omite. */
+/**
+ * Firma segura por defecto: validamos siempre la firma de Twilio salvo opt-in
+ * explícito para desarrollo local (SKIP_WEBHOOK_SIGNATURE_VALIDATION=true),
+ * igual que los webhooks de WhatsApp y Meta. Antes fallaba-abierto salvo que
+ * NODE_ENV fuera exactamente 'production', lo que dejaba staging/preview sin
+ * firma.
+ */
 function verifiedTwilio(req: Request, res: Response): boolean {
-  if (process.env.NODE_ENV !== 'production') return true;
+  if (process.env.SKIP_WEBHOOK_SIGNATURE_VALIDATION === 'true') return true;
   const signature = req.headers['x-twilio-signature'] as string | undefined;
   if (!signature || !validateVoiceSignature(fullUrl(req), req.body, signature)) {
     res.status(403).send('Invalid signature');

@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import crypto from 'crypto';
 import { z } from 'zod';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { validate } from '../middleware/validate';
@@ -30,6 +31,14 @@ import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
+/** Comparación de tokens en tiempo constante (evita fugas por timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 /** Mapea la plataforma interna al canal del chatbot. */
 function chatChannelFor(platform: MetaPlatform): ChatChannel {
   return platform === 'instagram' ? 'INSTAGRAM' : 'MESSENGER';
@@ -46,7 +55,7 @@ router.get('/webhook', (req: Request, res: Response) => {
   const challenge = req.query['hub.challenge'];
 
   const expected = process.env.META_VERIFY_TOKEN;
-  if (mode === 'subscribe' && expected && token === expected) {
+  if (mode === 'subscribe' && expected && typeof token === 'string' && safeEqual(token, expected)) {
     res.status(200).send(String(challenge ?? ''));
     return;
   }
