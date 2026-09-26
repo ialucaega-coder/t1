@@ -16,6 +16,8 @@ import OpenAI, { toFile } from 'openai';
 const WHISPER_MODEL = 'whisper-1';
 /** Tope de audio que aceptamos bajar/transcribir (Whisper admite hasta 25 MB). */
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+/** Timeout de la descarga del audio (evita requests colgadas sobre URLs lentas). */
+const AUDIO_FETCH_TIMEOUT_MS = 15000;
 
 let cachedClient: OpenAI | null = null;
 
@@ -65,7 +67,7 @@ export async function transcribeAudioBuffer(buffer: Buffer, mediaType?: string):
     const text = (result?.text || '').trim();
     return text || null;
   } catch (error) {
-    console.error('Error transcribiendo audio:', error);
+    console.error('Error transcribiendo audio:', error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -81,16 +83,22 @@ export async function transcribeAudioFromUrl(
   if (!isTranscriptionAvailable() || !url) return null;
 
   try {
-    const res = await fetch(url, opts.headers ? { headers: opts.headers } : undefined);
+    const res = await fetch(url, {
+      ...(opts.headers ? { headers: opts.headers } : {}),
+      signal: AbortSignal.timeout(AUDIO_FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
 
     const contentType = res.headers.get('content-type') || opts.mediaType || 'audio/ogg';
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_AUDIO_BYTES) return null;
+
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0 || buf.length > MAX_AUDIO_BYTES) return null;
 
     return await transcribeAudioBuffer(buf, contentType);
   } catch (error) {
-    console.error('Error descargando/transcribiendo audio:', error);
+    console.error('Error descargando/transcribiendo audio:', error instanceof Error ? error.message : error);
     return null;
   }
 }

@@ -38,8 +38,12 @@ export interface EngineStatus extends Omit<AIEngine, 'baseURL' | 'keyEnv' | 'key
   ready: boolean;
 }
 
-// Caché de providers por negocio+motor; se invalida al cambiar la config.
-const providerCache = new Map<string, AIProvider>();
+// Caché de providers por negocio+motor. Se invalida explícitamente al cambiar la
+// config, y además tiene un TTL corto: en despliegues multi-instancia la
+// invalidación explícita solo alcanza al proceso que hizo el cambio, así que el
+// TTL garantiza que una key rotada/revocada deje de usarse pronto sin reiniciar.
+const PROVIDER_CACHE_TTL_MS = 5 * 60 * 1000;
+const providerCache = new Map<string, { provider: AIProvider; expiresAt: number }>();
 
 function cacheKeyFor(businessId: string, engineId: string): string {
   return `${businessId}:${engineId}`;
@@ -56,6 +60,10 @@ export async function loadEngineConfig(businessId: string): Promise<EngineConfig
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CONNECTION_TYPE },
     select: { config: true },
+    // Orden determinista: si por una carrera existieran filas duplicadas para el
+    // mismo negocio (no hay unique constraint a nivel DB por ser JSON), siempre
+    // gana la misma. Lo ideal sería @@unique([businessId, type]) en el schema.
+    orderBy: { id: 'asc' },
   });
   const cfg = (conn?.config as Partial<EngineConfig> | null) || {};
   return {
@@ -66,7 +74,10 @@ export async function loadEngineConfig(businessId: string): Promise<EngineConfig
 
 /** Upsert de la Connection AI_ENGINE conservando el resto de la config. */
 async function upsertConfig(businessId: string, mutate: (cfg: EngineConfig) => EngineConfig): Promise<EngineConfig> {
-  const existing = await prisma.connection.findFirst({ where: { businessId, type: CONNECTION_TYPE } });
+  const existing = await prisma.connection.findFirst({
+    where: { businessId, type: CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
+  });
   const current = await loadEngineConfig(businessId);
   const next = mutate(current);
 
@@ -117,13 +128,17 @@ function resolveKey(engine: AIEngine, cfg: EngineConfig): string | null {
 export async function getAIProviderForBusiness(businessId: string): Promise<AIProvider> {
   const cfg = await loadEngineConfig(businessId);
   const engine = getEngineById(cfg.activeEngineId);
-  if (!engine) return getDefaultAIProvider();
+  if (!engine) return safeDefaultProvider();
 
+  const now = Date.now();
   const cached = providerCache.get(cacheKeyFor(businessId, engine.id));
-  if (cached) return cached;
+  if (cached && cached.expiresAt > now) return cached.provider;
 
   const key = resolveKey(engine, cfg);
-  if (!key) return getDefaultAIProvider(); // sin key ni relay: fallback resiliente
+  // Sin key propia, relay ni local: caemos al proveedor por defecto de la
+  // plataforma (si tampoco hay, safeDefaultProvider lanza un error de dominio
+  // claro que processMessage captura para degradar con un mensaje amable).
+  if (!key) return safeDefaultProvider();
 
   let provider: AIProvider;
   if (engine.kind === 'anthropic') {
@@ -132,8 +147,21 @@ export async function getAIProviderForBusiness(businessId: string): Promise<AIPr
     provider = new OpenAIProvider({ apiKey: key, baseURL: engine.baseURL, model: engine.model });
   }
 
-  providerCache.set(cacheKeyFor(businessId, engine.id), provider);
+  providerCache.set(cacheKeyFor(businessId, engine.id), { provider, expiresAt: now + PROVIDER_CACHE_TTL_MS });
   return provider;
+}
+
+/**
+ * Envuelve getDefaultAIProvider para no dejar escapar un throw inesperado del
+ * factory: si no hay ningún proveedor global configurado, lanza un error de
+ * dominio claro (el caller ya lo captura y responde con un mensaje amable).
+ */
+function safeDefaultProvider(): AIProvider {
+  try {
+    return getDefaultAIProvider();
+  } catch {
+    throw new Error('No hay un motor de IA disponible (sin key propia, relay ni proveedor por defecto).');
+  }
 }
 
 /** Arma el estado del catálogo para el panel del negocio (sin exponer keys). */
