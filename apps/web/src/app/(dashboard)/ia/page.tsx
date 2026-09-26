@@ -1,26 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Bot, Sparkles, Send, Loader2, CheckCircle2, XCircle, Copy, Check } from 'lucide-react';
+import { useState } from 'react';
+import { Sparkles, Send, Loader2, Copy, Check } from 'lucide-react';
 import * as aiApi from '@/lib/api/ai';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { ErrorAlert } from '@/components/common/ErrorAlert';
-import type { AIProviderStatus, AIProvidersResponse, ChatTurn } from '@/types';
-
-// Metadata solo visual (nombre lindo, descripción, colores) para cada proveedor
-// soportado por el backend. El estado real (configurado o no) viene de la API.
-const PROVIDER_META: Record<string, { label: string; description: string; color: string }> = {
-  anthropic: {
-    label: 'Claude (Anthropic)',
-    description: 'El modelo detrás de este mismo panel — gran balance de calidad y costo.',
-    color: 'from-amber-500/10 to-amber-600/5',
-  },
-  openai: {
-    label: 'ChatGPT (OpenAI)',
-    description: 'La IA más conocida — modelos rápidos y económicos para volumen alto.',
-    color: 'from-green-500/10 to-green-600/5',
-  },
-};
+import type { ChatTurn } from '@/types';
+import { MotorDeIA } from './MotorDeIA';
 
 export default function IAPage() {
   return (
@@ -29,93 +13,14 @@ export default function IAPage() {
         <p className="mono-label mb-1">CONFIGURACIÓN DE IA</p>
         <h3 className="text-lg font-bold text-white mb-2">El cerebro de tu bot</h3>
         <p className="text-sm text-slate-400">
-          Acá ves qué proveedores de IA están conectados, editás el prompt de sistema que define
-          cómo se comporta tu bot, y podés probarlo con un mensaje real antes de publicarlo.
+          Elegí el motor de IA que responde a tus clientes, cargá tus API keys, editás el prompt de
+          sistema que define cómo se comporta tu bot, y probalo con un mensaje real antes de publicarlo.
         </p>
       </div>
 
-      <ProvidersSection />
+      <MotorDeIA />
       <PromptEditorSection />
       <TestChatSection />
-    </div>
-  );
-}
-
-/** Sección: estado de los proveedores de IA configurados en el backend. */
-function ProvidersSection() {
-  const [providers, setProviders] = useState<AIProviderStatus[]>([]);
-  const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // Carga el estado de los proveedores al montar el componente.
-    aiApi
-      .getProviders()
-      .then((res: AIProvidersResponse) => {
-        if (cancelled) return;
-        setProviders(res.providers);
-        setDefaultProvider(res.defaultProvider);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'No se pudo cargar el estado de los proveedores');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div>
-      <p className="mono-label mb-2">PROVEEDORES</p>
-      <h3 className="text-lg font-bold text-white mb-4">Estado de conexión</h3>
-
-      {loading && <LoadingSpinner label="Cargando IA..." />}
-
-      {error && <ErrorAlert message={error} />}
-
-      {!loading && !error && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {providers.map((provider) => {
-            const meta = PROVIDER_META[provider.name] ?? {
-              label: provider.name,
-              description: '',
-              color: 'from-slate-500/10 to-slate-600/5',
-            };
-            const isDefault = defaultProvider === provider.name;
-            return (
-              <div key={provider.name} className={`card-accent bg-gradient-to-br ${meta.color}`}>
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface">
-                    <Bot className="h-5 w-5 text-brand-400" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-white">{meta.label}</h4>
-                    <p className="text-xs text-slate-400">{meta.description}</p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  {provider.configured ? (
-                    <span className="badge-active flex items-center gap-1">
-                      <CheckCircle2 className="h-3 w-3" /> CONECTADO
-                    </span>
-                  ) : (
-                    <span className="badge text-slate-500 border border-slate-700 flex items-center gap-1">
-                      <XCircle className="h-3 w-3" /> SIN CONFIGURAR
-                    </span>
-                  )}
-                  {isDefault && <span className="badge-premium">POR DEFECTO</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
