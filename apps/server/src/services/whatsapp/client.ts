@@ -129,6 +129,33 @@ export function parseTwilioImages(body: Record<string, unknown>): ImageInput[] {
 
 /** Tope de bytes por imagen que descargamos de Twilio (5 MB, guarda de memoria/costo). */
 const MAX_TWILIO_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Timeout de las descargas salientes a Twilio (evita handlers colgados). */
+const TWILIO_FETCH_TIMEOUT_MS = 8000;
+
+/**
+ * Allow-list anti-SSRF: solo adjuntamos las credenciales Basic de Twilio si la
+ * URL apunta efectivamente a un host de Twilio. Las `MediaUrl` vienen del body
+ * del webhook (no confiable si la firma no se validó), así que sin esta guarda
+ * un atacante podría hacernos mandar el `AccountSid:AuthToken` a su propio host.
+ */
+export function isTwilioMediaUrl(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    return h === 'api.twilio.com' || h.endsWith('.twilio.com');
+  } catch {
+    return false;
+  }
+}
+
+/** Header Basic auth de Twilio (`AccountSid:AuthToken`), o null si faltan creds. */
+export function getTwilioAuthHeader(): string | null {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken) return null;
+  return `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`;
+}
 
 /**
  * Descarga las imágenes de Twilio (MediaUrl) usando Basic auth y las devuelve
@@ -142,31 +169,38 @@ const MAX_TWILIO_IMAGE_BYTES = 5 * 1024 * 1024;
  *
  * Robustez: si falta configuración o una descarga falla / se pasa del tope de
  * tamaño, esa imagen se descarta en silencio (no rompe el webhook). Devuelve
- * solo las que se pudieron convertir. El redirect de Twilio apunta a un enlace
- * pre-firmado de S3, y `fetch` de Node quita el header Authorization en
- * redirecciones cross-origin, así que no se filtran credenciales al CDN.
+ * solo las que se pudieron convertir.
+ *
+ * Seguridad: solo se adjunta la credencial a URLs de Twilio (`isTwilioMediaUrl`,
+ * anti-SSRF), con timeout, y se corta por `Content-Length` antes de bufferizar.
+ * El redirect de Twilio apunta a un enlace pre-firmado de S3, y `fetch` de Node
+ * quita el header Authorization en redirecciones cross-origin.
  */
 export async function downloadTwilioImagesAsBase64(images: ImageInput[]): Promise<ImageInput[]> {
   if (!images.length) return [];
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!accountSid || !authToken) return [];
-
-  const authHeader = `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`;
+  const authHeader = getTwilioAuthHeader();
+  if (!authHeader) return [];
 
   const results = await Promise.all(
     images.map(async (img): Promise<ImageInput | null> => {
       // Si ya viene como base64 (otro canal), la dejamos pasar tal cual.
       if (img.base64) return img;
-      if (!img.url) return null;
+      if (!img.url || !isTwilioMediaUrl(img.url)) return null;
 
       try {
-        const res = await fetch(img.url, { headers: { Authorization: authHeader } });
+        const res = await fetch(img.url, {
+          headers: { Authorization: authHeader },
+          signal: AbortSignal.timeout(TWILIO_FETCH_TIMEOUT_MS),
+        });
         if (!res.ok) return null;
 
         const contentType = res.headers.get('content-type') || img.mediaType || 'image/jpeg';
         if (!contentType.startsWith('image/')) return null;
+
+        // Cortamos antes de bufferizar si el servidor declara un tamaño excesivo.
+        const declared = Number(res.headers.get('content-length'));
+        if (Number.isFinite(declared) && declared > MAX_TWILIO_IMAGE_BYTES) return null;
 
         const buf = Buffer.from(await res.arrayBuffer());
         if (buf.length === 0 || buf.length > MAX_TWILIO_IMAGE_BYTES) return null;

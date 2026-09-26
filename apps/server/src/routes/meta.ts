@@ -11,6 +11,8 @@ import {
   resolveBusinessByRecipient,
   sendMessage,
   connectionTypeFor,
+  verifyTokenOwnership,
+  isRecipientClaimedByAnother,
   type MetaPlatform,
 } from '../services/meta/client';
 import { requireAuth } from '../middleware/auth';
@@ -58,7 +60,10 @@ router.get('/webhook', (req: Request, res: Response) => {
 router.post(
   '/webhook',
   asyncHandler(async (req: Request, res: Response) => {
-    if (process.env.NODE_ENV === 'production') {
+    // Firma segura por defecto: validamos siempre salvo opt-in explícito para
+    // desarrollo local (SKIP_WEBHOOK_SIGNATURE_VALIDATION=true). No dependemos de
+    // que NODE_ENV esté seteado a 'production' en cada despliegue.
+    if (process.env.SKIP_WEBHOOK_SIGNATURE_VALIDATION !== 'true') {
       const signature = req.headers['x-hub-signature-256'];
       const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
       if (!validateSignature(rawBody, signature)) {
@@ -97,7 +102,10 @@ router.post(
           orderBy: { updatedAt: 'desc' },
         });
 
-        const body = msg.text || (images.length ? '(imagen adjunta)' : '');
+        // El placeholder se calcula sobre las imágenes ORIGINALES (antes del gate),
+        // para que un mensaje de solo-imagen siempre reciba respuesta aunque el
+        // superpoder de visión esté apagado (consistente con el canal de WhatsApp).
+        const body = msg.text || (msg.images.length ? '(imagen adjunta)' : '');
         if (!body) continue;
 
         try {
@@ -147,6 +155,18 @@ router.post(
     const type = connectionTypeFor(platform as MetaPlatform);
     const botChannel = platform === 'instagram' ? 'INSTAGRAM' : 'WEBCHAT';
     const label = platform === 'instagram' ? 'Instagram' : 'Messenger';
+    const identityId = (igId ?? pageId) as string;
+
+    // Anti-hijack cross-tenant: el token debe controlar realmente la identidad
+    // declarada, y ningún otro negocio puede tenerla ya reclamada.
+    const owns = await verifyTokenOwnership(pageAccessToken, identityId);
+    if (!owns) {
+      throw new AppError(400, 'El token no controla la página/cuenta indicada. Verificá el Page Access Token y el ID.');
+    }
+    const claimed = await isRecipientClaimedByAnother(platform as MetaPlatform, identityId, businessId);
+    if (claimed) {
+      throw new AppError(409, 'Esa página/cuenta ya está conectada a otro negocio.');
+    }
 
     // Aseguramos un bot activo para este canal (reutiliza el existente si lo hay).
     let bot = await prisma.bot.findFirst({

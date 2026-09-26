@@ -25,6 +25,8 @@ vi.mock('../../services/meta/client', () => ({
   resolveBusinessByRecipient: vi.fn(),
   sendMessage: vi.fn(),
   connectionTypeFor: (p: string) => (p === 'instagram' ? 'INSTAGRAM' : 'MESSENGER'),
+  verifyTokenOwnership: vi.fn(async () => true),
+  isRecipientClaimedByAnother: vi.fn(async () => false),
 }));
 
 vi.mock('../../services/chatbot', () => ({
@@ -33,7 +35,13 @@ vi.mock('../../services/chatbot', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
-import { parseMetaEvents, resolveBusinessByRecipient, sendMessage } from '../../services/meta/client';
+import {
+  parseMetaEvents,
+  resolveBusinessByRecipient,
+  sendMessage,
+  verifyTokenOwnership,
+  isRecipientClaimedByAnother,
+} from '../../services/meta/client';
 import { processMessage, getActiveSuperpowers } from '../../services/chatbot';
 import { metaRouter } from '../../routes/meta';
 import { errorHandler } from '../../middleware/errorHandler';
@@ -153,6 +161,25 @@ describe('routes/meta', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ platform: 'messenger', pageAccessToken: 'tok' });
       expect(res.status).toBe(400);
+    });
+
+    it('400 si el token no controla la identidad declarada (anti-hijack)', async () => {
+      mock(verifyTokenOwnership).mockResolvedValue(false);
+      const res = await request(app)
+        .post('/api/meta/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ platform: 'instagram', pageAccessToken: 'tok', igId: 'IG_AJENO' });
+      expect(res.status).toBe(400);
+    });
+
+    it('409 si otro negocio ya reclamó esa identidad', async () => {
+      mock(verifyTokenOwnership).mockResolvedValue(true);
+      mock(isRecipientClaimedByAnother).mockResolvedValue(true);
+      const res = await request(app)
+        .post('/api/meta/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ platform: 'instagram', pageAccessToken: 'tok', igId: 'IG_1' });
+      expect(res.status).toBe(409);
     });
   });
 

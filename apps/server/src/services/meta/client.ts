@@ -20,6 +20,8 @@ export type MetaPlatform = 'instagram' | 'messenger';
 
 const GRAPH_VERSION = 'v21.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+/** Timeout de las llamadas salientes a Graph API (evita handlers colgados). */
+const GRAPH_TIMEOUT_MS = 8000;
 
 /** ¿Hay al menos las variables mínimas para operar el canal de Meta? */
 export function isConfigured(): boolean {
@@ -160,11 +162,14 @@ export async function resolveBusinessByRecipient(
 
     let botId = typeof cfg.botId === 'string' ? cfg.botId : '';
     if (!botId) {
+      // El fallback filtra por el canal que usa /connect para cada plataforma
+      // (INSTAGRAM para IG, WEBCHAT para Messenger — el enum no tiene MESSENGER),
+      // para no agarrar por error un bot de WhatsApp/Telegram del mismo negocio.
       const bot = await prisma.bot.findFirst({
         where: {
           businessId: conn.businessId,
           status: 'ACTIVE',
-          ...(platform === 'instagram' ? { channel: 'INSTAGRAM' } : {}),
+          channel: platform === 'instagram' ? 'INSTAGRAM' : 'WEBCHAT',
         },
         select: { id: true },
         orderBy: { createdAt: 'asc' },
@@ -193,10 +198,58 @@ export async function sendMessage(pageAccessToken: string, recipientId: string, 
       message: { text },
       messaging_type: 'RESPONSE',
     }),
+    signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`Meta Send API respondió ${res.status}: ${detail}`);
   }
+}
+
+/**
+ * Verifica que un Page Access Token controle realmente la identidad declarada
+ * (`expectedId` = pageId o igId). Sin esto, cualquier admin autenticado podría
+ * reclamar el pageId/igId público de OTRO negocio con un token cualquiera y
+ * secuestrar sus conversaciones (hijack cross-tenant).
+ *
+ * Consulta `GET /{expectedId}?fields=id` con el token: si el token tiene acceso
+ * a ese nodo, Graph devuelve el mismo id; si no, devuelve error. Ante fallo de
+ * red devuelve false (fail-closed). Se saltea solo si no hay App configurada
+ * (META_APP_SECRET), para no bloquear entornos de desarrollo sin credenciales.
+ */
+export async function verifyTokenOwnership(pageAccessToken: string, expectedId: string): Promise<boolean> {
+  if (!process.env.META_APP_SECRET) return true; // dev sin App configurada
+  if (!pageAccessToken || !expectedId) return false;
+
+  try {
+    const url = `${GRAPH_BASE}/${encodeURIComponent(expectedId)}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) });
+    if (!res.ok) return false;
+    const data = (await res.json().catch(() => null)) as { id?: string } | null;
+    return data?.id === expectedId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ¿Hay OTRO negocio (distinto de `businessId`) con una conexión activa que ya
+ * reclamó esta identidad de Meta? Evita que dos tenants compartan el mismo
+ * pageId/igId (la unicidad no se puede imponer a nivel de DB por ser JSON).
+ */
+export async function isRecipientClaimedByAnother(
+  platform: MetaPlatform,
+  identityId: string,
+  businessId: string,
+): Promise<boolean> {
+  const type = connectionTypeFor(platform);
+  const connections = await prisma.connection.findMany({
+    where: { type, isActive: true, businessId: { not: businessId } },
+    select: { config: true },
+  });
+  return connections.some((c) => {
+    const cfg = (c.config as Record<string, unknown> | null) || {};
+    return cfg.pageId === identityId || cfg.igId === identityId;
+  });
 }

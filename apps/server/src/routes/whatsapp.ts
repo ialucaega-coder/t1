@@ -74,30 +74,33 @@ router.post(
 
     const { businessId, botId } = target;
 
-    // Visión por WhatsApp: las MediaUrl de Twilio están tras Basic auth, así que
-    // Anthropic no puede bajarlas por URL. Solo si el negocio tiene activo "Oído
-    // y vista" las descargamos con nuestras credenciales y las convertimos a
-    // base64 (evita el costo de descargar cuando el superpoder está apagado).
-    let visionImages = images;
-    if (images.length) {
-      const activeSuperpowers = await getActiveSuperpowers(businessId);
-      visionImages = activeSuperpowers.has('Oído y vista')
-        ? await downloadTwilioImagesAsBase64(images)
-        : [];
-    }
-
-    const existingConversation = await prisma.conversation.findFirst({
-      where: {
-        businessId,
-        botId,
-        channel: 'WHATSAPP',
-        contactPhone: from,
-        status: 'OPEN',
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
-
+    // Todo el post-procesamiento va dentro de try/catch para garantizar que el
+    // webhook SIEMPRE responda 200 (si una consulta a DB o una descarga lanza,
+    // Twilio no debe recibir un 500 y reintentar, duplicando el mensaje).
     try {
+      // Visión por WhatsApp: las MediaUrl de Twilio están tras Basic auth, así que
+      // Anthropic no puede bajarlas por URL. Solo si el negocio tiene activo "Oído
+      // y vista" las descargamos con nuestras credenciales y las convertimos a
+      // base64 (evita el costo de descargar cuando el superpoder está apagado).
+      let visionImages = images;
+      if (images.length) {
+        const activeSuperpowers = await getActiveSuperpowers(businessId);
+        visionImages = activeSuperpowers.has('Oído y vista')
+          ? await downloadTwilioImagesAsBase64(images)
+          : [];
+      }
+
+      const existingConversation = await prisma.conversation.findFirst({
+        where: {
+          businessId,
+          botId,
+          channel: 'WHATSAPP',
+          contactPhone: from,
+          status: 'OPEN',
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
       const result = await processMessage(businessId, body, 'WHATSAPP', {
         conversationId: existingConversation?.id,
         botId,

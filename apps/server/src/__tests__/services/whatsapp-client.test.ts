@@ -10,6 +10,7 @@ vi.mock('../../lib/prisma', () => ({ prisma: {} }));
 import {
   parseTwilioImages,
   downloadTwilioImagesAsBase64,
+  isTwilioMediaUrl,
 } from '../../services/whatsapp/client';
 
 describe('parseTwilioImages', () => {
@@ -38,6 +39,17 @@ describe('parseTwilioImages', () => {
       body[`MediaContentType${i}`] = 'image/png';
     }
     expect(parseTwilioImages(body)).toHaveLength(4);
+  });
+});
+
+describe('isTwilioMediaUrl', () => {
+  it('acepta hosts de Twilio por https y rechaza el resto', () => {
+    expect(isTwilioMediaUrl('https://api.twilio.com/2010-04-01/Accounts/AC/Media/ME')).toBe(true);
+    expect(isTwilioMediaUrl('https://api.us1.twilio.com/x')).toBe(true);
+    expect(isTwilioMediaUrl('http://api.twilio.com/x')).toBe(false); // no https
+    expect(isTwilioMediaUrl('https://atacante.com/x')).toBe(false);
+    expect(isTwilioMediaUrl('https://api.twilio.com.atacante.com/x')).toBe(false);
+    expect(isTwilioMediaUrl('no-es-url')).toBe(false);
   });
 });
 
@@ -107,6 +119,18 @@ describe('downloadTwilioImagesAsBase64', () => {
       { url: 'https://api.twilio.com/media/notimg', mediaType: 'image/jpeg' },
     ]);
     expect(result).toEqual([]);
+  });
+
+  it('NO manda credenciales a un host que no es de Twilio (anti-SSRF)', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await downloadTwilioImagesAsBase64([
+      { url: 'https://atacante.com/roba-token.jpg', mediaType: 'image/jpeg' },
+    ]);
+
+    expect(result).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled(); // nunca se pega al host malicioso
   });
 
   it('deja pasar imágenes que ya vienen en base64 sin descargar', async () => {
