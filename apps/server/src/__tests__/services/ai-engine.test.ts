@@ -179,7 +179,7 @@ describe('listEnginesForBusiness', () => {
 
     // Nunca se filtran campos internos ni el valor de la key.
     expect(JSON.stringify(engines)).not.toContain('sk-propia');
-    expect((gpt as Record<string, unknown>).keyEnv).toBeUndefined();
-    expect((gpt as Record<string, unknown>).baseURL).toBeUndefined();
+    expect((gpt as unknown as Record<string, unknown>).keyEnv).toBeUndefined();
+    expect((gpt as unknown as Record<string, unknown>).baseURL).toBeUndefined();
   });
 });
