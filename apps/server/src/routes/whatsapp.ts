@@ -155,7 +155,13 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { to, message } = req.body;
 
-    const sid = await sendMessage(to, message);
+    // Envía desde el número dedicado del negocio (fallback al global si no tiene).
+    const business = await prisma.business.findUnique({
+      where: { id: req.auth!.businessId },
+      select: { whatsappNumber: true },
+    });
+
+    const sid = await sendMessage(to, message, business?.whatsappNumber || undefined);
     res.json({ success: true, sid });
   })
 );
