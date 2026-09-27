@@ -159,7 +159,7 @@ describe('routes/bots', () => {
   describe('PATCH /api/bots/:id', () => {
     it('actualiza el bot y devuelve la version fresca', async () => {
       mock(prisma.bot.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.bot.findUnique).mockResolvedValue({ id: 'bot_1', status: 'ACTIVE' });
+      mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1', status: 'ACTIVE' });
 
       const res = await request(app).patch('/api/bots/bot_1').send({ status: 'ACTIVE' });
 
@@ -176,7 +176,7 @@ describe('routes/bots', () => {
       const res = await request(app).patch('/api/bots/no-existe').send({ status: 'PAUSED' });
 
       expect(res.status).toBe(404);
-      expect(prisma.bot.findUnique).not.toHaveBeenCalled();
+      expect(prisma.bot.findFirst).not.toHaveBeenCalled();
     });
 
     it('devuelve 400 con un status invalido', async () => {

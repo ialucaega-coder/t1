@@ -80,7 +80,7 @@ router.patch(
       data: { name, description, systemPrompt, model, temperature, status },
     });
     if (upd.count === 0) return res.status(404).json({ error: 'Builder not found' });
-    const builder = await prisma.arenaBuilder.findUnique({ where: { id: req.params.id as string } });
+    const builder = await prisma.arenaBuilder.findFirst({ where: { id: req.params.id as string, businessId: req.auth!.businessId } });
     res.json(builder);
   })
 );
@@ -137,7 +137,7 @@ router.post(
       data: { votes: { increment: 1 } },
     });
     if (idea.count === 0) return res.status(404).json({ error: 'Idea not found' });
-    const updated = await prisma.arenaIdea.findUnique({ where: { id: req.params.id as string } });
+    const updated = await prisma.arenaIdea.findFirst({ where: { id: req.params.id as string, businessId: req.auth!.businessId } });
     res.json(updated);
   })
 );

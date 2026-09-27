@@ -65,7 +65,7 @@ router.patch(
       data: { role, status },
     });
     if (upd.count === 0) return res.status(404).json({ error: 'Member not found' });
-    const member = await prisma.teamMember.findUnique({ where: { id: req.params.id as string } });
+    const member = await prisma.teamMember.findFirst({ where: { id: req.params.id as string, businessId: req.auth!.businessId } });
     res.json(member);
   })
 );

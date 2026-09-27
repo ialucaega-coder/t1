@@ -178,7 +178,7 @@ describe('routes/campaigns', () => {
   describe('PATCH /api/campaigns/:id', () => {
     it('actualiza una campana existente', async () => {
       mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.campaign.findUnique).mockResolvedValue({ id: 'c1', name: 'Nuevo' });
+      mock(prisma.campaign.findFirst).mockResolvedValue({ id: 'c1', name: 'Nuevo' });
 
       const res = await request(app)
         .patch('/api/campaigns/c1')
@@ -198,7 +198,7 @@ describe('routes/campaigns', () => {
         .send({ name: 'Nuevo' });
 
       expect(res.status).toBe(404);
-      expect(prisma.campaign.findUnique).not.toHaveBeenCalled();
+      expect(prisma.campaign.findFirst).not.toHaveBeenCalled();
     });
   });
 

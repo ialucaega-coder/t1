@@ -18,6 +18,7 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(),
       updateMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       deleteMany: vi.fn(),
     },
     arenaIdea: {
@@ -25,6 +26,7 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(),
       updateMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
     },
   },
 }));
@@ -120,7 +122,7 @@ describe('routes/arena', () => {
   describe('PATCH /api/arena/builders/:id', () => {
     it('actualiza el builder cuando pertenece al negocio', async () => {
       mock(prisma.arenaBuilder.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.arenaBuilder.findUnique).mockResolvedValue({ id: 'b1', name: 'Nuevo' });
+      mock(prisma.arenaBuilder.findFirst).mockResolvedValue({ id: 'b1', name: 'Nuevo' });
 
       const res = await request(app).patch('/api/arena/builders/b1').send({ name: 'Nuevo' });
 
@@ -139,7 +141,7 @@ describe('routes/arena', () => {
         .send({ name: 'Nuevo' });
 
       expect(res.status).toBe(404);
-      expect(prisma.arenaBuilder.findUnique).not.toHaveBeenCalled();
+      expect(prisma.arenaBuilder.findFirst).not.toHaveBeenCalled();
     });
   });
 
@@ -210,7 +212,7 @@ describe('routes/arena', () => {
   describe('POST /api/arena/ideas/:id/vote', () => {
     it('incrementa los votos cuando la idea pertenece al negocio', async () => {
       mock(prisma.arenaIdea.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.arenaIdea.findUnique).mockResolvedValue({ id: 'i1', votes: 2 });
+      mock(prisma.arenaIdea.findFirst).mockResolvedValue({ id: 'i1', votes: 2 });
 
       const res = await request(app).post('/api/arena/ideas/i1/vote');
 
@@ -230,7 +232,7 @@ describe('routes/arena', () => {
       const res = await request(app).post('/api/arena/ideas/de-otro-negocio/vote');
 
       expect(res.status).toBe(404);
-      expect(prisma.arenaIdea.findUnique).not.toHaveBeenCalled();
+      expect(prisma.arenaIdea.findFirst).not.toHaveBeenCalled();
     });
   });
 

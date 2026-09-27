@@ -97,7 +97,7 @@ router.patch(
       data: { name, plan, status, bots, revenue },
     });
     if (upd.count === 0) return res.status(404).json({ error: 'Client not found' });
-    const client = await prisma.agencyClient.findUnique({ where: { id: req.params.id as string } });
+    const client = await prisma.agencyClient.findFirst({ where: { id: req.params.id as string, businessId: req.auth!.businessId } });
     res.json(client);
   })
 );

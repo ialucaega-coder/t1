@@ -21,6 +21,7 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(),
       updateMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       deleteMany: vi.fn(),
     },
   },
@@ -178,7 +179,7 @@ describe('routes/agency', () => {
   describe('PATCH /api/agency/clients/:id', () => {
     it('actualiza el cliente cuando pertenece al negocio', async () => {
       mock(prisma.agencyClient.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.agencyClient.findUnique).mockResolvedValue({ id: 'ac1', name: 'Nuevo' });
+      mock(prisma.agencyClient.findFirst).mockResolvedValue({ id: 'ac1', name: 'Nuevo' });
 
       const res = await request(app).patch('/api/agency/clients/ac1').send({ name: 'Nuevo' });
 
@@ -197,7 +198,7 @@ describe('routes/agency', () => {
         .send({ name: 'Nuevo' });
 
       expect(res.status).toBe(404);
-      expect(prisma.agencyClient.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agencyClient.findFirst).not.toHaveBeenCalled();
     });
 
     it('devuelve 400 cuando revenue es negativo (validacion Zod)', async () => {

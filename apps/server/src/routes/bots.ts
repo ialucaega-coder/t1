@@ -92,7 +92,7 @@ router.patch(
       data: { name, description, channel, status, config, token, webhookUrl },
     });
     if (bot.count === 0) return res.status(404).json({ error: 'Bot not found' });
-    const updated = await prisma.bot.findUnique({ where: { id: req.params.id as string } });
+    const updated = await prisma.bot.findFirst({ where: { id: req.params.id as string, businessId: req.auth!.businessId } });
     res.json(updated);
   })
 );

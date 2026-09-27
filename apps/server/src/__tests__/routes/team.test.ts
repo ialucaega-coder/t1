@@ -16,6 +16,7 @@ vi.mock('../../lib/prisma', () => ({
     teamMember: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
       updateMany: vi.fn(),
       deleteMany: vi.fn(),
@@ -124,7 +125,7 @@ describe('routes/team', () => {
   describe('PATCH /api/team/members/:id', () => {
     it('actualiza el miembro con scope por businessId (anti cross-tenant)', async () => {
       mock(prisma.teamMember.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.teamMember.findUnique).mockResolvedValue({ id: 'm1', role: 'ADMIN' });
+      mock(prisma.teamMember.findFirst).mockResolvedValue({ id: 'm1', role: 'ADMIN' });
 
       const res = await request(app).patch('/api/team/members/m1').send({ role: 'ADMIN' });
 
@@ -140,7 +141,7 @@ describe('routes/team', () => {
       const res = await request(app).patch('/api/team/members/de-otro-negocio').send({ role: 'ADMIN' });
 
       expect(res.status).toBe(404);
-      expect(prisma.teamMember.findUnique).not.toHaveBeenCalled();
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
     });
   });
 
