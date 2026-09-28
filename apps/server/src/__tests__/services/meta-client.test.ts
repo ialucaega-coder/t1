@@ -20,6 +20,7 @@ import {
   parseMetaEvents,
   resolveBusinessByRecipient,
   sendMessage,
+  verifyTokenOwnership,
 } from '../../services/meta/client';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -57,6 +58,50 @@ describe('validateSignature', () => {
     delete process.env.META_APP_SECRET;
     const sig = 'sha256=' + crypto.createHmac('sha256', 'secret123').update(raw).digest('hex');
     expect(validateSignature(raw, sig)).toBe(false);
+  });
+});
+
+describe('verifyTokenOwnership — fail-closed en producción', () => {
+  const OLD_ENV = { ...process.env };
+  afterEach(() => {
+    process.env = { ...OLD_ENV };
+    vi.unstubAllGlobals();
+  });
+
+  it('sin META_APP_SECRET en producción falla cerrado (evita hijack cross-tenant)', async () => {
+    delete process.env.META_APP_SECRET;
+    process.env.NODE_ENV = 'production';
+    expect(await verifyTokenOwnership('cualquier-token', 'IG_1')).toBe(false);
+  });
+
+  it('sin META_APP_SECRET fuera de producción se permite (ergonomía de dev)', async () => {
+    delete process.env.META_APP_SECRET;
+    process.env.NODE_ENV = 'development';
+    expect(await verifyTokenOwnership('cualquier-token', 'IG_1')).toBe(true);
+  });
+
+  it('con secret configurado, valida contra Graph que el token controla la identidad', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'IG_1' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok', 'IG_1')).toBe(true);
+  });
+
+  it('con secret configurado, rechaza si Graph devuelve otro id (token de otra página)', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'OTRA' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok', 'IG_1')).toBe(false);
+  });
+
+  it('con secret configurado, falla cerrado ante error de red/Graph', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok', 'IG_1')).toBe(false);
   });
 });
 

@@ -13,6 +13,8 @@ import jwt from 'jsonwebtoken';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
     service: { findMany: vi.fn(), createMany: vi.fn() },
     template: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
     skill: { findMany: vi.fn(), update: vi.fn() },
@@ -51,6 +53,10 @@ describe('routes/industryTemplates', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (prisma.$executeRaw as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (tx: typeof prisma) => unknown) => cb(prisma)
+    );
   });
 
   describe('GET /api/plantillas-negocio', () => {

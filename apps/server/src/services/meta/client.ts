@@ -225,11 +225,16 @@ export async function sendMessage(pageAccessToken: string, recipientId: string, 
  *
  * Consulta `GET /{expectedId}?fields=id` con el token: si el token tiene acceso
  * a ese nodo, Graph devuelve el mismo id; si no, devuelve error. Ante fallo de
- * red devuelve false (fail-closed). Se saltea solo si no hay App configurada
- * (META_APP_SECRET), para no bloquear entornos de desarrollo sin credenciales.
+ * red devuelve false (fail-closed).
+ *
+ * Si no hay App configurada (`META_APP_SECRET`) no se puede verificar la
+ * propiedad del token: en desarrollo se permite (para no bloquear entornos sin
+ * credenciales), pero en PRODUCCIÓN se falla cerrado. Permitirlo en producción
+ * habilitaría el hijack cross-tenant que esta función existe para evitar (mismo
+ * criterio fail-closed que `validateSignature`).
  */
 export async function verifyTokenOwnership(pageAccessToken: string, expectedId: string): Promise<boolean> {
-  if (!process.env.META_APP_SECRET) return true; // dev sin App configurada
+  if (!process.env.META_APP_SECRET) return process.env.NODE_ENV !== 'production';
   if (!pageAccessToken || !expectedId) return false;
 
   try {

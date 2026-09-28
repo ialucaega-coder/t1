@@ -36,53 +36,64 @@ router.post(
     const template = getIndustryTemplate(String(req.params.id));
     if (!template) throw new AppError(404, 'Plantilla no encontrada');
 
-    // 1) Servicios: crear solo los que no existan (idempotente por nombre)
-    const existingServices = await prisma.service.findMany({
-      where: { businessId },
-      select: { name: true, sortOrder: true },
-    });
-    const existingNames = new Set(existingServices.map((s) => s.name.trim().toLowerCase()));
-    let nextSortOrder = existingServices.reduce((max, s) => Math.max(max, s.sortOrder), 0) + 1;
-
-    const serviciosACrear = template.servicios.filter(
-      (s) => !existingNames.has(s.name.trim().toLowerCase())
-    );
-
-    if (serviciosACrear.length > 0) {
-      await prisma.service.createMany({
-        data: serviciosACrear.map((s) => ({
-          businessId,
-          name: s.name,
-          description: s.description,
-          duration: s.durationMin,
-          price: new Prisma.Decimal(s.price),
-          isActive: true,
-          sortOrder: nextSortOrder++,
-        })),
-      });
-    }
-
-    // 2) Prompt sugerido: crear o actualizar (idempotente por nombre)
+    // Pasos 1) y 2) van serializados por negocio con un advisory lock
+    // transaccional: Service y Template no tienen @@unique (freeze de schema),
+    // así que dos "aplicar" casi simultáneos (doble click / reintento de red)
+    // podrían duplicar servicios o el prompt. Re-chequeamos con el lock tomado,
+    // igual que en el sembrado de comandos/marketplace/catalog.
     const promptName = `Personalidad del bot - ${template.nombre}`;
-    const existingPrompt = await prisma.template.findFirst({
-      where: { businessId, type: PROMPT_TYPE, name: promptName },
+    const serviciosACrear = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`apply-template:${businessId}`}, 0))`;
+
+      // 1) Servicios: crear solo los que no existan (idempotente por nombre).
+      const existingServices = await tx.service.findMany({
+        where: { businessId },
+        select: { name: true, sortOrder: true },
+      });
+      const existingNames = new Set(existingServices.map((s) => s.name.trim().toLowerCase()));
+      let nextSortOrder = existingServices.reduce((max, s) => Math.max(max, s.sortOrder), 0) + 1;
+
+      const toCreate = template.servicios.filter(
+        (s) => !existingNames.has(s.name.trim().toLowerCase())
+      );
+
+      if (toCreate.length > 0) {
+        await tx.service.createMany({
+          data: toCreate.map((s) => ({
+            businessId,
+            name: s.name,
+            description: s.description,
+            duration: s.durationMin,
+            price: new Prisma.Decimal(s.price),
+            isActive: true,
+            sortOrder: nextSortOrder++,
+          })),
+        });
+      }
+
+      // 2) Prompt sugerido: crear o actualizar (idempotente por nombre).
+      const existingPrompt = await tx.template.findFirst({
+        where: { businessId, type: PROMPT_TYPE, name: promptName },
+      });
+      if (existingPrompt) {
+        await tx.template.update({
+          where: { id: existingPrompt.id },
+          data: { content: template.prompt, category: writePromptCategory('Personalidad', true) },
+        });
+      } else {
+        await tx.template.create({
+          data: {
+            businessId,
+            name: promptName,
+            type: PROMPT_TYPE,
+            content: template.prompt,
+            category: writePromptCategory('Personalidad', true),
+          },
+        });
+      }
+
+      return toCreate;
     });
-    if (existingPrompt) {
-      await prisma.template.update({
-        where: { id: existingPrompt.id },
-        data: { content: template.prompt, category: writePromptCategory('Personalidad', true) },
-      });
-    } else {
-      await prisma.template.create({
-        data: {
-          businessId,
-          name: promptName,
-          type: PROMPT_TYPE,
-          content: template.prompt,
-          category: writePromptCategory('Personalidad', true),
-        },
-      });
-    }
 
     // 3) Superpoderes recomendados: asegurar defaults y activarlos
     await ensureDefaultFeatures(businessId, 'superpower', DEFAULT_SUPERPOWERS);
