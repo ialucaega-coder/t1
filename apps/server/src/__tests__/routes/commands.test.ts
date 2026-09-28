@@ -13,6 +13,8 @@ import type { Request, Response, NextFunction } from 'express';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
     command: {
       count: vi.fn(),
       createMany: vi.fn(),
@@ -56,6 +58,8 @@ describe('routes/commands', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (prisma.$executeRaw as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
   });
 
   describe('GET /api/commands', () => {

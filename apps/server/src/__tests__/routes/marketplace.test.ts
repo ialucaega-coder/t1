@@ -13,6 +13,8 @@ import type { Request, Response, NextFunction } from 'express';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
     marketplaceItem: {
       count: vi.fn(),
       createMany: vi.fn(),
@@ -62,6 +64,8 @@ describe('routes/marketplace', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (prisma.$executeRaw as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
     // Por defecto ya hay items sembrados (no se ejecuta el seed).
     mock(prisma.marketplaceItem.count).mockResolvedValue(8);
     mock(prisma.marketplaceItem.createMany).mockResolvedValue({ count: 8 });

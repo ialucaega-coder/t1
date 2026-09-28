@@ -18,10 +18,16 @@ const DEFAULT_ITEMS = [
 ];
 
 async function ensureDefaults() {
-  const count = await prisma.marketplaceItem.count();
-  if (count === 0) {
-    await prisma.marketplaceItem.createMany({ data: DEFAULT_ITEMS });
-  }
+  // Fast path sin lock.
+  if ((await prisma.marketplaceItem.count()) > 0) return;
+
+  // Seed global race-safe: dos requests concurrentes con la tabla vacía podrían
+  // duplicar el catálogo por defecto. Advisory lock transaccional + re-chequeo.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('seed-marketplace', 0))`;
+    if ((await tx.marketplaceItem.count()) > 0) return;
+    await tx.marketplaceItem.createMany({ data: DEFAULT_ITEMS });
+  });
 }
 
 router.get(
