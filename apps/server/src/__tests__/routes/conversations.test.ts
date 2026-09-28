@@ -14,9 +14,11 @@ import jwt from 'jsonwebtoken';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    conversation: { findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+    $transaction: vi.fn(),
+    $queryRaw: vi.fn(),
+    conversation: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     teamMember: { findFirst: vi.fn() },
-    user: { findUnique: vi.fn() },
+    user: { findFirst: vi.fn() },
   },
 }));
 
@@ -50,11 +52,22 @@ describe('routes/conversations (inbox)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // La mutación de metadata corre en $transaction con lock FOR UPDATE.
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (tx: typeof prisma) => unknown) => cb(prisma)
+    );
+    // Por defecto la conversación existe (el lock devuelve una fila).
+    (prisma.$queryRaw as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([{ id: 'c1' }]);
     // La ruta devuelve updated.metadata; devolvemos lo que se le pasó.
     (prisma.conversation.update as ReturnType<typeof vi.fn>).mockImplementation(
       async ({ data }: { data: { metadata: unknown } }) => ({ metadata: data.metadata })
     );
   });
+
+  /** Setea el metadata fresco que el helper lee dentro del lock (findUnique). */
+  function freshMeta(metadata: Record<string, unknown>) {
+    (prisma.conversation.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({ metadata });
+  }
 
   describe('GET /api/conversations (displayChannel)', () => {
     it('expone displayChannel = realChannel cuando el canal real vive en metadata', async () => {
@@ -93,7 +106,7 @@ describe('routes/conversations (inbox)', () => {
 
   describe('PATCH /api/conversations/:id/assign', () => {
     it('asigna la conversación a un miembro del equipo existente', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1', businessId: 'biz_1', metadata: {} });
+      freshMeta({});
       (prisma.teamMember.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'm1', name: 'Sofía' });
 
       const res = await request(app)
@@ -106,9 +119,7 @@ describe('routes/conversations (inbox)', () => {
     });
 
     it('desasigna cuando assignedTo es null', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
-        id: 'c1', businessId: 'biz_1', metadata: { assignedTo: 'm1', assignedToName: 'Sofía' },
-      });
+      freshMeta({ assignedTo: 'm1', assignedToName: 'Sofía' });
 
       const res = await request(app)
         .patch('/api/conversations/c1/assign')
@@ -121,7 +132,6 @@ describe('routes/conversations (inbox)', () => {
     });
 
     it('devuelve 404 si el miembro del equipo no existe', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1', businessId: 'biz_1', metadata: {} });
       (prisma.teamMember.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
       const res = await request(app)
@@ -134,7 +144,9 @@ describe('routes/conversations (inbox)', () => {
     });
 
     it('devuelve 404 si la conversación no existe', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      // El miembro existe, pero el lock no encuentra la conversación.
+      (prisma.teamMember.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'm1', name: 'Sofía' });
+      (prisma.$queryRaw as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       const res = await request(app)
         .patch('/api/conversations/nope/assign')
@@ -142,12 +154,13 @@ describe('routes/conversations (inbox)', () => {
         .send({ assignedTo: 'm1' });
 
       expect(res.status).toBe(404);
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
     });
   });
 
   describe('PATCH /api/conversations/:id/tags', () => {
     it('normaliza etiquetas: recorta, elimina vacías y duplicados (case-insensitive)', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1', businessId: 'biz_1', metadata: {} });
+      freshMeta({});
 
       const res = await request(app)
         .patch('/api/conversations/c1/tags')
@@ -170,8 +183,8 @@ describe('routes/conversations (inbox)', () => {
 
   describe('POST /api/conversations/:id/notes', () => {
     it('agrega una nota interna con autor', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1', businessId: 'biz_1', metadata: {} });
-      (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'Luca' });
+      freshMeta({});
+      (prisma.user.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'Luca' });
 
       const res = await request(app)
         .post('/api/conversations/c1/notes')
@@ -186,10 +199,8 @@ describe('routes/conversations (inbox)', () => {
 
     it('respeta el tope máximo de notas (MAX_NOTES=200)', async () => {
       const existentes = Array.from({ length: 200 }, (_, i) => ({ text: `n${i}`, at: '', by: 'x' }));
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
-        id: 'c1', businessId: 'biz_1', metadata: { notes: existentes },
-      });
-      (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'Luca' });
+      freshMeta({ notes: existentes });
+      (prisma.user.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'Luca' });
 
       const res = await request(app)
         .post('/api/conversations/c1/notes')
@@ -207,9 +218,7 @@ describe('routes/conversations (inbox)', () => {
 
   describe('PATCH /api/conversations/:id/read', () => {
     it('marca la lectura por usuario (readBy[userId]) sin pisar la de otros', async () => {
-      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
-        id: 'c1', businessId: 'biz_1', metadata: { readBy: { user_2: '2026-01-01T00:00:00.000Z' } },
-      });
+      freshMeta({ readBy: { user_2: '2026-01-01T00:00:00.000Z' } });
 
       const res = await request(app)
         .patch('/api/conversations/c1/read')

@@ -72,6 +72,46 @@ function displayChannelFor(channel: string, metadata: Prisma.JsonValue | null | 
   return typeof meta.realChannel === 'string' && meta.realChannel ? meta.realChannel : channel;
 }
 
+/**
+ * Aplica una mutación a `Conversation.metadata` de forma atómica.
+ *
+ * Corre dentro de una transacción y bloquea la fila con `SELECT ... FOR UPDATE`
+ * (scopeada por negocio), re-lee el metadata fresco y recién ahí aplica el
+ * cambio. Así dos escrituras concurrentes sobre la misma conversación (dos
+ * agentes, dos tabs, reintentos) se serializan y no se pisan: sin esto, el
+ * patrón leer-mutar-en-memoria-escribir pierde cambios (lost-update) — p. ej.
+ * una nota interna o la marca de leído de otro agente podía desaparecer.
+ * Mismo patrón que `services/gallery/config.ts::mutateGallery`.
+ *
+ * Devuelve `{ ok:false }` si la conversación no existe para ese negocio.
+ */
+async function mutateConversationMeta<T>(
+  conversationId: string,
+  businessId: string,
+  mutate: (meta: ConversationMeta) => { meta: ConversationMeta; result: T },
+): Promise<{ ok: true; result: T; metadata: Prisma.JsonValue } | { ok: false }> {
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "conversations"
+      WHERE id = ${conversationId} AND "businessId" = ${businessId}
+      FOR UPDATE`;
+    if (locked.length === 0) return { ok: false as const };
+
+    const fresh = await tx.conversation.findUnique({
+      where: { id: conversationId },
+      select: { metadata: true },
+    });
+    const { meta: nextMeta, result } = mutate(readMeta(fresh?.metadata));
+
+    const updated = await tx.conversation.update({
+      where: { id: conversationId },
+      data: { metadata: nextMeta as Prisma.InputJsonValue },
+      select: { metadata: true },
+    });
+    return { ok: true as const, result, metadata: updated.metadata };
+  });
+}
+
 const router = Router();
 
 router.get(
@@ -199,37 +239,36 @@ router.patch(
   validate(assignSchema),
   asyncHandler(async (req, res) => {
     const { assignedTo } = req.body as { assignedTo?: string | null };
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
 
-    const conversation = await prisma.conversation.findFirst({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
-    });
-    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-
-    const meta = readMeta(conversation.metadata);
-
+    // El miembro se valida fuera del lock (no depende del metadata).
+    let member: { id: string; name: string } | null = null;
     if (assignedTo) {
-      const member = await prisma.teamMember.findFirst({
-        where: { id: assignedTo, businessId: req.auth!.businessId },
+      member = await prisma.teamMember.findFirst({
+        where: { id: assignedTo, businessId },
         select: { id: true, name: true },
       });
       if (!member) return res.status(404).json({ error: 'Team member not found' });
-      meta.assignedTo = member.id;
-      meta.assignedToName = member.name;
-    } else {
-      meta.assignedTo = null;
-      meta.assignedToName = null;
     }
 
-    const updated = await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { metadata: meta as Prisma.InputJsonValue },
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      if (member) {
+        meta.assignedTo = member.id;
+        meta.assignedToName = member.name;
+      } else {
+        meta.assignedTo = null;
+        meta.assignedToName = null;
+      }
+      return { meta, result: null };
+    });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+
+    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
+      conversationId,
     });
 
-    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
-      conversationId: conversation.id,
-    });
-
-    res.json({ metadata: updated.metadata });
+    res.json({ metadata: outcome.metadata });
   })
 );
 
@@ -240,11 +279,8 @@ router.patch(
   validate(tagsSchema),
   asyncHandler(async (req, res) => {
     const { tags } = req.body as { tags: string[] };
-
-    const conversation = await prisma.conversation.findFirst({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
-    });
-    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
 
     // Normaliza: trim, elimina vacíos y duplicados (case-insensitive)
     const seen = new Set<string>();
@@ -258,19 +294,17 @@ router.patch(
       clean.push(t);
     }
 
-    const meta = readMeta(conversation.metadata);
-    meta.tags = clean;
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      meta.tags = clean;
+      return { meta, result: null };
+    });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    const updated = await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { metadata: meta as Prisma.InputJsonValue },
+    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
+      conversationId,
     });
 
-    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
-      conversationId: conversation.id,
-    });
-
-    res.json({ metadata: updated.metadata });
+    res.json({ metadata: outcome.metadata });
   })
 );
 
@@ -281,36 +315,34 @@ router.post(
   validate(noteSchema),
   asyncHandler(async (req, res) => {
     const { text } = req.body as { text: string };
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
 
-    const conversation = await prisma.conversation.findFirst({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
-    });
-    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-
-    const author = await prisma.user.findUnique({
-      where: { id: req.auth!.userId },
+    const author = await prisma.user.findFirst({
+      where: { id: req.auth!.userId, businessId },
       select: { name: true },
     });
 
-    const meta = readMeta(conversation.metadata);
     const note: ConversationNote = {
       text,
       at: new Date().toISOString(),
       by: req.auth!.userId,
       byName: author?.name ?? undefined,
     };
-    meta.notes = [...(meta.notes ?? []), note].slice(-MAX_NOTES);
 
-    const updated = await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { metadata: meta as Prisma.InputJsonValue },
+    // El append lee las notas frescas dentro del lock: sin esto, dos notas casi
+    // simultáneas se pisaban y una desaparecía.
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      meta.notes = [...(meta.notes ?? []), note].slice(-MAX_NOTES);
+      return { meta, result: null };
+    });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+
+    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
+      conversationId,
     });
 
-    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
-      conversationId: conversation.id,
-    });
-
-    res.json({ note, metadata: updated.metadata });
+    res.json({ note, metadata: outcome.metadata });
   })
 );
 
@@ -319,24 +351,20 @@ router.patch(
   '/:id/read',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const conversation = await prisma.conversation.findFirst({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
-    });
-    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-
-    const meta = readMeta(conversation.metadata);
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
     const now = new Date().toISOString();
-    // Lectura POR usuario: cada agente marca su propia lectura, así el "no leído"
-    // de un miembro no desaparece porque otro haya abierto la conversación.
-    meta.readBy = { ...(meta.readBy ?? {}), [req.auth!.userId]: now };
-    meta.lastReadAt = now; // compat con lectura global previa
 
-    const updated = await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { metadata: meta as Prisma.InputJsonValue },
+    // Lectura POR usuario dentro del lock: el merge del map readBy lee el estado
+    // fresco, así la marca de otro agente no se pierde por una escritura concurrente.
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      meta.readBy = { ...(meta.readBy ?? {}), [req.auth!.userId]: now };
+      meta.lastReadAt = now; // compat con lectura global previa
+      return { meta, result: null };
     });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    res.json({ metadata: updated.metadata });
+    res.json({ metadata: outcome.metadata });
   })
 );
 
