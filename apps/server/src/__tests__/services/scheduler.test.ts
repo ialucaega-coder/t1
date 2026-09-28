@@ -10,7 +10,7 @@
  * node-cron se mockea (no se programan cron reales). Prisma y el generador de
  * reportes también se mockean.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('node-cron', () => ({ default: { schedule: vi.fn() } }));
 
@@ -29,12 +29,13 @@ vi.mock('../../services/superpowers/report', () => ({
   generatePostSaleFollowUps: vi.fn(),
 }));
 
+import cron from 'node-cron';
 import { prisma } from '../../lib/prisma';
 import {
   generateDailyReport,
   generateReminders,
 } from '../../services/superpowers/report';
-import { runDailyReports, runReminders } from '../../services/scheduler';
+import { runDailyReports, runReminders, startScheduler } from '../../services/scheduler';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -118,6 +119,29 @@ describe('services/scheduler', () => {
       expect(generateDailyReport).toHaveBeenCalledTimes(2);
       expect(prisma.notification.create).toHaveBeenCalledTimes(1);
       errSpy.mockRestore();
+    });
+  });
+
+  describe('startScheduler — gate de escalado horizontal', () => {
+    const OLD_ENV = { ...process.env };
+    afterEach(() => { process.env = { ...OLD_ENV }; });
+
+    it('con RUN_SCHEDULER=false no programa ningún cron (otra instancia lo corre)', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.RUN_SCHEDULER = 'false';
+
+      startScheduler();
+
+      expect(cron.schedule).not.toHaveBeenCalled();
+    });
+
+    it('en entorno de test no programa cron (guard de NODE_ENV)', () => {
+      process.env.NODE_ENV = 'test';
+      delete process.env.RUN_SCHEDULER;
+
+      startScheduler();
+
+      expect(cron.schedule).not.toHaveBeenCalled();
     });
   });
 

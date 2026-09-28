@@ -166,9 +166,22 @@ export async function runPostSaleFollowUps(): Promise<void> {
 
 let started = false;
 
-/** Programa los jobs diarios. Idempotente (no duplica los cron). */
+/**
+ * Programa los jobs diarios. Idempotente (no duplica los cron).
+ *
+ * Escalado horizontal: los cron viven en la memoria del proceso, así que si el
+ * server corre con más de una instancia cada una dispararía los jobs y
+ * duplicaría reportes/recordatorios para todos los negocios. Para escalar,
+ * poné `RUN_SCHEDULER=false` en TODAS las instancias salvo UNA. Por defecto
+ * corre (compatibilidad con el despliegue de una sola instancia).
+ */
 export function startScheduler(): void {
   if (started || process.env.NODE_ENV === 'test') return;
+
+  if (process.env.RUN_SCHEDULER === 'false') {
+    console.log('[scheduler] Deshabilitado por RUN_SCHEDULER=false (otra instancia corre los jobs)');
+    return;
+  }
   started = true;
 
   // Reporte diario a las 20:00 (hora del servidor).

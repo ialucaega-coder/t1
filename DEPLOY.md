@@ -131,6 +131,11 @@ Config de producción a no olvidar (además de los secrets):
   reservas públicas (requiere Twilio configurado).
 - **`SKIP_WEBHOOK_SIGNATURE_VALIDATION`** — dejar **sin setear** en producción.
   Los webhooks validan firma por defecto; esta variable solo la saltea en dev/test.
+- **`RUN_SCHEDULER`** — el scheduler de superpoderes (reportes/recordatorios
+  diarios) usa `node-cron` en memoria del proceso. Con **una sola instancia** no
+  hace falta tocar nada (corre por defecto). Si escalás horizontalmente a más de
+  una instancia, poné **`RUN_SCHEDULER=false` en todas menos una**, o cada
+  instancia disparará los jobs y duplicará las notificaciones diarias.
 
 ### Base de datos y migraciones
 
