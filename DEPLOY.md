@@ -139,20 +139,31 @@ Config de producción a no olvidar (además de los secrets):
 
 ### Base de datos y migraciones
 
-El esquema vive en `prisma/schema.prisma`. Estado actual: el esquema se sincroniza
-con **`npm run db:push`** (sin migraciones versionadas todavía). Para un pipeline
-de producción robusto conviene pasar a **migraciones versionadas**:
+El esquema vive en `prisma/schema.prisma`. Ya existe la **migración baseline
+versionada** en `prisma/migrations/0_init/` (generada desde el schema actual con
+`prisma migrate diff --from-empty`, representa TODO el esquema vigente).
+
+> ⚠️ **La base ya tiene las tablas** (se venían creando con `db push`). Por eso
+> NO corras `db:migrate`/`migrate dev` contra una base existente: detectaría
+> "drift" y podría **resetear datos**. Hay que **baselinar** una sola vez.
+
+**Adopción de migraciones sobre una base EXISTENTE (baseline, no destructivo):**
 
 ```bash
-# Generar la migración baseline a partir del schema actual (una vez):
-npm run db:migrate -- --name init
-# En cada deploy, aplicar migraciones pendientes (idempotente):
+# 1) Marcar la baseline como YA aplicada (NO ejecuta el SQL: las tablas ya existen).
+#    Correr una vez por entorno (staging y prod), contra DIRECT_URL.
+npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma
+
+# 2) De ahí en más, en cada deploy aplicar migraciones pendientes (idempotente):
 npm run db:migrate:deploy
 ```
 
-> Migrar el esquema es una operación con impacto en datos: coordinala con el
-> equipo y hacela contra `DIRECT_URL` (conexión directa, no el pooler). Mientras
-> no haya migraciones versionadas, `db:migrate:deploy` no aplica cambios.
+**Base NUEVA/vacía (ej. staging desde cero):** `npm run db:migrate:deploy` aplica
+`0_init` directamente (crea todo el esquema).
+
+**Nuevas migraciones a futuro:** editás `schema.prisma`, generás la migración con
+`npm run db:migrate -- --name <cambio>` en un entorno de desarrollo (usa `DIRECT_URL`,
+no el pooler), la revisás, y se aplica en deploy con `db:migrate:deploy`.
 
 ### Probar la imagen localmente
 
