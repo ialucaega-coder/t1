@@ -114,8 +114,40 @@ Cargá el contenido de `key.json` como secret `GCP_SA_KEY` y **borralo localment
 
 Configuralas en el servicio de Cloud Run (`Variables & Secrets`), idealmente via
 **Secret Manager**: `DATABASE_URL`, `DIRECT_URL`, `NEXTAUTH_SECRET`,
-`ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`, `TWILIO_*`, `RESEND_API_KEY`,
-`SENTRY_DSN`, etc. El workflow no las toca.
+`ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `TWILIO_*`,
+`RESEND_API_KEY`, `SENTRY_DSN`, etc. El workflow no las toca. Lista completa con
+comentarios en `apps/server/.env.example`.
+
+Config de producción a no olvidar (además de los secrets):
+
+- **`TRUST_PROXY_HOPS=1`** — detrás del proxy de Cloud Run, para que `req.ip`
+  tome el cliente real de `X-Forwarded-For` y el rate limit por IP funcione.
+  Sin esto (default `0`) el rate limit ve la IP del proxy.
+- **`FRONTEND_URLS`** — orígenes CORS permitidos (coma-separados) si hay más de
+  un dominio de frontend; complementa a `FRONTEND_URL`.
+- **`API_PUBLIC_URL`** — URL pública del backend (para armar webhooks, ej. Telegram).
+- **`META_VERIFY_TOKEN` / `META_APP_SECRET`** — si se usa el canal Instagram/Messenger.
+- **`PUBLIC_BOOKING_REQUIRE_OTP=true`** — para exigir verificación de teléfono en
+  reservas públicas (requiere Twilio configurado).
+- **`SKIP_WEBHOOK_SIGNATURE_VALIDATION`** — dejar **sin setear** en producción.
+  Los webhooks validan firma por defecto; esta variable solo la saltea en dev/test.
+
+### Base de datos y migraciones
+
+El esquema vive en `prisma/schema.prisma`. Estado actual: el esquema se sincroniza
+con **`npm run db:push`** (sin migraciones versionadas todavía). Para un pipeline
+de producción robusto conviene pasar a **migraciones versionadas**:
+
+```bash
+# Generar la migración baseline a partir del schema actual (una vez):
+npm run db:migrate -- --name init
+# En cada deploy, aplicar migraciones pendientes (idempotente):
+npm run db:migrate:deploy
+```
+
+> Migrar el esquema es una operación con impacto en datos: coordinala con el
+> equipo y hacela contra `DIRECT_URL` (conexión directa, no el pooler). Mientras
+> no haya migraciones versionadas, `db:migrate:deploy` no aplica cambios.
 
 ### Probar la imagen localmente
 
