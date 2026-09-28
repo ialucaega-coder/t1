@@ -21,6 +21,35 @@ env:
 
 jobs:
   # -------------------------------------------------------------------
+  # Job: audit — auditoria de vulnerabilidades en dependencias (npm audit)
+  # Corre en paralelo a lint/type-check/test y no bloquea al resto de la
+  # pipeline: solo falla el job ante vulnerabilidades HIGH o CRITICAL, y
+  # aun asi se marca continue-on-error para no romper el build mientras
+  # se resuelven (el resultado queda visible en el resumen del workflow).
+  # -------------------------------------------------------------------
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # Solo reporta vulnerabilidades high/critical para evitar ruido de
+      # advisories bajas/moderadas en dependencias transitivas.
+      - name: npm audit (high y critical)
+        run: npm audit --audit-level=high
+
+  # -------------------------------------------------------------------
   # Job: lint — ESLint/Next lint sobre todos los workspaces (via turbo)
   # -------------------------------------------------------------------
   lint:

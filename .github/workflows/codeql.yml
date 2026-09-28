@@ -1,0 +1,50 @@
+# .github/workflows/codeql.yml
+# Analisis estatico de seguridad (SAST) con CodeQL para JavaScript/TypeScript.
+# Se ejecuta en push a main, en cada Pull Request contra main y semanalmente
+# via schedule, para detectar vulnerabilidades sin depender de que alguien
+# abra un PR.
+
+name: "CodeQL"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Todos los lunes a las 05:00 UTC.
+    - cron: '0 5 * * 1'
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      # Para JS/TS no hace falta un paso de build explicito: CodeQL analiza
+      # el codigo fuente directamente (autobuild no es necesario).
+      - name: Ejecutar analisis CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
