@@ -68,6 +68,24 @@ if (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET === 'dev-secret'
   console.warn('WARNING: Using insecure default JWT secret. Set NEXTAUTH_SECRET in .env');
 }
 
+// META_APP_SECRET es opcional (el canal Meta lo es), por eso NO se tira throw.
+// Pero si parece que el canal Meta está en uso (hay META_VERIFY_TOKEN) y falta
+// el App Secret, la verificación de firma/propiedad de token de Meta falla
+// CERRADO en producción (src/services/meta/client.ts): los webhooks entrantes
+// serán rechazados. Avisamos claro al arrancar para no depurar a ciegas.
+if (
+  process.env.NODE_ENV === 'production' &&
+  process.env.META_VERIFY_TOKEN &&
+  !process.env.META_APP_SECRET
+) {
+  console.warn(
+    'WARNING: META_VERIFY_TOKEN está seteado pero falta META_APP_SECRET. La ' +
+      'verificación de firma/propiedad de token de Meta fallará cerrado en ' +
+      'producción y los webhooks de Instagram/Messenger serán rechazados. ' +
+      'Set META_APP_SECRET en el entorno.'
+  );
+}
+
 const app = express();
 
 // Cantidad de proxies de confianza delante del server (Cloud Run/LB = 1). Con

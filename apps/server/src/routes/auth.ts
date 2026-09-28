@@ -18,8 +18,9 @@ import type { Response } from 'express';
 
 const router = Router();
 
-// Duración del JWT y de la cookie de sesión asociada (14 días).
-const JWT_EXPIRES_IN = '14d';
+// Duración del JWT y de la cookie de sesión asociada. Configurable por env
+// JWT_EXPIRES_IN (formato de `vercel/ms`, ej. '7d', '14d', '12h'); default '14d'.
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '14d') as jwt.SignOptions['expiresIn'];
 const JWT_COOKIE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_FAILED_LOGINS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;

@@ -188,7 +188,51 @@ como env vars en Vercel.
 
 ---
 
-## 5. Checklist antes de mergear a `main`
+## 5. Backups y restore (Supabase)
+
+La base de datos vive en **Supabase (PostgreSQL)**. Supabase realiza **backups
+automáticos** del proyecto (diarios en los planes pagos; PITR / Point-in-Time
+Recovery disponible como add-on). Los backups existen — pero un backup que nunca
+se probó no es un backup: **hay que probar el restore periódicamente**.
+
+### Por qué probar el restore
+
+- Verifica que el backup es íntegro y realmente restaurable.
+- Mide y valida el **RTO** (tiempo objetivo de recuperación) y el **RPO**
+  (pérdida de datos aceptable) reales frente a los que asume el negocio.
+- Ejercita el runbook para que en un incidente real no se improvise.
+
+### Procedimiento recomendado (a un entorno de STAGING, nunca sobre producción)
+
+1. **Crear un destino aislado.** Provisioná un proyecto/instancia de Supabase de
+   **staging** separado de producción. El restore de prueba NUNCA se hace sobre
+   el proyecto productivo.
+2. **Tomar el backup de origen.** En Supabase Dashboard → `Database > Backups`,
+   elegí el backup más reciente (o un punto en el tiempo con PITR). Alternativa
+   por CLI: `supabase db dump --db-url "$DIRECT_URL" -f backup.sql` contra
+   producción (usar `DIRECT_URL`, conexión directa, no el pooler).
+3. **Restaurar en staging.** Restaurá el backup/punto elegido en el proyecto de
+   staging (desde el Dashboard, o `psql "$STAGING_DIRECT_URL" -f backup.sql`).
+   Cronometrá el proceso de punta a punta → ese es tu **RTO** medido.
+4. **Verificar integridad.** Contra staging:
+   - Comparar conteos de filas de las tablas críticas (`Business`, `User`,
+     `Conversation`, reservas) contra producción.
+   - Correr `prisma migrate status` (o `db:push` en dry-run) para confirmar que
+     el esquema restaurado coincide con `prisma/schema.prisma`.
+   - Hacer un smoke test de la app apuntando `DATABASE_URL`/`DIRECT_URL` a
+     staging: login, listar datos, crear un registro de prueba.
+5. **Documentar resultados.** Registrar fecha del backup restaurado, RTO medido,
+   RPO observado (antigüedad del último backup disponible) y cualquier anomalía.
+6. **Limpiar.** Dar de baja el proyecto de staging o su acceso; borrar los dumps
+   locales (contienen datos productivos) y nunca commitearlos.
+
+> Frecuencia sugerida: probar el restore al menos una vez por trimestre y después
+> de cualquier cambio grande de esquema. Guardá el último resultado documentado
+> junto a este runbook o en el gestor de incidentes del equipo.
+
+---
+
+## 6. Checklist antes de mergear a `main`
 
 - [ ] `npx tsc --noEmit -p apps/web/tsconfig.json` pasa sin errores.
 - [ ] `npx tsc --noEmit -p apps/server/tsconfig.json` pasa sin errores.
