@@ -63,32 +63,44 @@ export async function loadBrandVoice(businessId: string): Promise<BrandVoice> {
 /**
  * Guarda (merge) un parche parcial de la Voz de Marca. Crea el registro
  * Connection type='BRAND' si todavía no existe.
+ *
+ * Atómico: corre en una transacción y bloquea la fila con `SELECT ... FOR
+ * UPDATE`, re-leyendo el config fresco antes de mergear el parche. Sin esto,
+ * dos guardados concurrentes (dos tabs) se pisaban y uno perdía sus cambios
+ * (lost-update). Mismo patrón que gallery/conversations.
  */
 export async function saveBrandVoice(businessId: string, patch: Partial<BrandVoice>): Promise<BrandVoice> {
-  const existing = await prisma.connection.findFirst({
-    where: { businessId, type: BRAND_CONNECTION_TYPE },
-  });
-  const current = normalize(existing?.config);
-  const next: BrandVoice = { ...current, ...patch };
+  return prisma.$transaction(async (tx) => {
+    let conn = await tx.connection.findFirst({
+      where: { businessId, type: BRAND_CONNECTION_TYPE },
+      select: { id: true },
+    });
 
-  if (existing) {
-    await prisma.connection.update({
-      where: { id: existing.id },
+    if (!conn) {
+      conn = await tx.connection.create({
+        data: {
+          name: BRAND_CONNECTION_NAME,
+          type: BRAND_CONNECTION_TYPE,
+          icon: 'Sparkles',
+          isActive: true,
+          config: DEFAULT_BRAND_VOICE as unknown as object,
+          businessId,
+        },
+        select: { id: true },
+      });
+    } else {
+      await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${conn.id} FOR UPDATE`;
+    }
+
+    const fresh = await tx.connection.findUnique({ where: { id: conn.id }, select: { config: true } });
+    const next: BrandVoice = { ...normalize(fresh?.config), ...patch };
+
+    await tx.connection.update({
+      where: { id: conn.id },
       data: { config: next as unknown as object, isActive: true },
     });
-  } else {
-    await prisma.connection.create({
-      data: {
-        name: BRAND_CONNECTION_NAME,
-        type: BRAND_CONNECTION_TYPE,
-        icon: 'Sparkles',
-        isActive: true,
-        config: next as unknown as object,
-        businessId,
-      },
-    });
-  }
-  return next;
+    return next;
+  });
 }
 
 /**

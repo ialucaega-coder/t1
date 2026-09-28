@@ -73,36 +73,54 @@ export async function loadVoiceSettings(businessId: string): Promise<VoiceSettin
   return { ...defaults, ...saved };
 }
 
-/** Guarda (upsert) la config de voz de un negocio. */
+/**
+ * Guarda (upsert) la config de voz de un negocio.
+ *
+ * Atómico: corre en una transacción y bloquea la fila con `SELECT ... FOR
+ * UPDATE`, re-leyendo el config fresco antes de mergear el parche, para que dos
+ * guardados concurrentes no se pisen (lost-update). El nombre del negocio (para
+ * los defaults) se lee fuera del lock porque no depende del config.
+ */
 export async function saveVoiceSettings(
   businessId: string,
   patch: Partial<VoiceSettings>
 ): Promise<VoiceSettings> {
-  const current = await loadVoiceSettings(businessId);
-  const next: VoiceSettings = { ...current, ...patch };
-
-  const existing = await prisma.connection.findFirst({
-    where: { businessId, type: CONNECTION_TYPE },
-    select: { id: true },
+  const business = await prisma.business.findUnique({
+    where: { id: businessId },
+    select: { name: true },
   });
+  const defaults = defaultVoiceSettings(business?.name || 'nuestro negocio');
 
-  if (existing) {
-    await prisma.connection.update({
-      where: { id: existing.id },
+  return prisma.$transaction(async (tx) => {
+    let conn = await tx.connection.findFirst({
+      where: { businessId, type: CONNECTION_TYPE },
+      select: { id: true },
+    });
+
+    if (!conn) {
+      conn = await tx.connection.create({
+        data: {
+          businessId,
+          name: 'Asistente de Voz',
+          type: CONNECTION_TYPE,
+          icon: 'phone',
+          isActive: defaults.enabled,
+          config: defaults as object,
+        },
+        select: { id: true },
+      });
+    } else {
+      await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${conn.id} FOR UPDATE`;
+    }
+
+    const fresh = await tx.connection.findUnique({ where: { id: conn.id }, select: { config: true } });
+    const saved = (fresh?.config as Partial<VoiceSettings> | null) || {};
+    const next: VoiceSettings = { ...defaults, ...saved, ...patch };
+
+    await tx.connection.update({
+      where: { id: conn.id },
       data: { config: next as object, isActive: next.enabled },
     });
-  } else {
-    await prisma.connection.create({
-      data: {
-        businessId,
-        name: 'Asistente de Voz',
-        type: CONNECTION_TYPE,
-        icon: 'phone',
-        isActive: next.enabled,
-        config: next as object,
-      },
-    });
-  }
-
-  return next;
+    return next;
+  });
 }
