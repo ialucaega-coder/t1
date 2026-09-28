@@ -50,6 +50,52 @@ jobs:
         run: npm audit --audit-level=high
 
   # -------------------------------------------------------------------
+  # Job: migrations-check — falla si el schema de Prisma y las migraciones
+  # versionadas se desincronizan (drift). Evita que se edite schema.prisma
+  # sin generar la migración correspondiente. Usa una DB Postgres efímera
+  # como shadow para replayar las migraciones y compararlas con el schema.
+  # -------------------------------------------------------------------
+  migrations-check:
+    name: Migrations Drift Check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shadow
+          POSTGRES_PASSWORD: shadow
+          POSTGRES_DB: shadow
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U shadow -d shadow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # --exit-code devuelve 2 si hay diferencias entre las migraciones
+      # versionadas (replayadas en la shadow DB) y el schema actual.
+      - name: Verificar sincronización schema ↔ migraciones
+        run: >-
+          npx prisma migrate diff
+          --from-migrations ./prisma/migrations
+          --to-schema-datamodel ./prisma/schema.prisma
+          --shadow-database-url postgresql://shadow:shadow@localhost:5433/shadow
+          --exit-code
+
+  # -------------------------------------------------------------------
   # Job: lint — ESLint/Next lint sobre todos los workspaces (via turbo)
   # -------------------------------------------------------------------
   lint:
