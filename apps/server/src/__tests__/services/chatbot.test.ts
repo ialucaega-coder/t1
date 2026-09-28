@@ -17,6 +17,7 @@ vi.mock('../../lib/prisma', () => ({
     product: { findMany: vi.fn() },
     skill: { findMany: vi.fn() },
     user: { findFirst: vi.fn(), findUnique: vi.fn() },
+    business: { findUnique: vi.fn() },
     notification: { create: vi.fn() },
   },
 }));
@@ -29,6 +30,7 @@ vi.mock('../../services/brand/config', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
+import { getAIProviderForBusiness } from '../../services/ai/engine';
 import { processMessage, type ChatChannel } from '../../services/chatbot';
 
 const mock = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -80,5 +82,40 @@ describe('services/chatbot — canal real en metadata', () => {
     const data = createData();
     expect(data.channel).toBe('INSTAGRAM');
     expect(data.metadata).toBeUndefined();
+  });
+});
+
+describe('services/chatbot — scoping del nombre de cliente (anti IDOR)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    mock(prisma.conversation.create).mockResolvedValue({ id: 'c1' });
+    mock(prisma.conversation.update).mockResolvedValue({ id: 'c1' });
+    mock(prisma.message.create).mockResolvedValue({ id: 'm1' });
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+    mock(prisma.business.findUnique).mockResolvedValue({ name: 'Barbería' });
+    mock(getAIProviderForBusiness).mockResolvedValue({
+      generateResponse: vi.fn().mockResolvedValue('respuesta del bot'),
+    });
+  });
+
+  it('busca el nombre del cliente scopeado por businessId, no solo por id', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue({ name: 'Ana' });
+
+    // Mensaje neutro (no dispara CATALOG) + clientId → ruta IA con lookup de nombre.
+    await processMessage('biz_1', 'hola, ¿cómo estás?', 'WEB', {
+      history: [],
+      botId: 'bot_1',
+      clientId: 'user_de_otro_negocio',
+    });
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_de_otro_negocio', businessId: 'biz_1' } })
+    );
+    // Nunca por id sin scope (patrón IDOR).
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 });

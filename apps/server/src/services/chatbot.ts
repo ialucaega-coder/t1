@@ -339,7 +339,13 @@ export async function processMessage(
 
     let clientName = options.contactName;
     if (!clientName && options.clientId) {
-      const client = await prisma.user.findUnique({ where: { id: options.clientId }, select: { name: true } });
+      // Scopeado por negocio: clientId puede venir del request, así que sin el
+      // businessId un atacante podría filtrar el nombre de un usuario de OTRO
+      // negocio hacia el prompt de IA (IDOR cross-tenant).
+      const client = await prisma.user.findFirst({
+        where: { id: options.clientId, businessId },
+        select: { name: true },
+      });
       clientName = client?.name;
     }
 
