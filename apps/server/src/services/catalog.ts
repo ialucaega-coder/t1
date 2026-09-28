@@ -26,35 +26,60 @@ export function readFeatureConfig(
   return config as { kind?: string; subtitle?: string; iconName?: string };
 }
 
+/** Nombres (normalizados) de las features de un `kind` ya presentes en un negocio. */
+function existingNamesForKind(
+  rows: { name: string; config: Prisma.JsonValue | null }[],
+  kind: FeatureKind
+): Set<string> {
+  return new Set(
+    rows
+      .filter((row) => readFeatureConfig(row.config).kind === kind)
+      .map((row) => row.name.trim().toLowerCase())
+  );
+}
+
+/** Payload de `createMany` para las features faltantes. */
+function toSkillRows(businessId: string, kind: FeatureKind, features: DefaultFeature[]) {
+  return features.map((feature) => ({
+    businessId,
+    name: feature.name,
+    description: feature.description,
+    icon: feature.iconName,
+    isActive: feature.isActive,
+    config: { kind, subtitle: feature.subtitle, iconName: feature.iconName },
+  }));
+}
+
 /**
- * Siembra los defaults de un tipo (skill/superpower) para un negocio si todavía
- * no tiene ninguno. Es idempotente en el caso normal; ante dos llamadas casi
- * simultáneas en el primerísimo uso podría sembrar dos veces (no hay @@unique en
- * Skill), pero al centralizarla queda un único lugar para endurecerla a futuro.
+ * Siembra los defaults de un tipo (skill/superpower) para un negocio, agregando
+ * solo los que falten. Así, cuando se suman features nuevas al catálogo, también
+ * aparecen en los negocios que ya tenían las anteriores.
+ *
+ * Race-safe: como Skill no tiene @@unique (freeze de schema), dos requests casi
+ * simultáneas del primer uso podrían sembrar duplicados. Fast path sin lock; si
+ * hay faltantes, tomamos un advisory lock transaccional por negocio+kind y
+ * re-chequeamos adentro, igual que en el sembrado de comandos y marketplace.
  */
 export async function ensureDefaultFeatures(
   businessId: string,
   kind: FeatureKind,
   defaults: readonly DefaultFeature[]
 ): Promise<void> {
+  // Fast path sin lock: calculamos faltantes con lo que ya hay.
   const existing = await prisma.skill.findMany({ where: { businessId } });
-  const existingForKind = existing.filter((row) => readFeatureConfig(row.config).kind === kind);
-  const existingNames = new Set(existingForKind.map((row) => row.name.trim().toLowerCase()));
-
-  // Sembramos solo los que faltan. Así, cuando se agregan features nuevas al
-  // catálogo, aparecen también en los negocios que ya tenían las anteriores
-  // (antes solo se sembraba si el negocio no tenía ninguna).
+  const existingNames = existingNamesForKind(existing, kind);
   const missing = defaults.filter((f) => !existingNames.has(f.name.trim().toLowerCase()));
   if (missing.length === 0) return;
 
-  await prisma.skill.createMany({
-    data: missing.map((feature) => ({
-      businessId,
-      name: feature.name,
-      description: feature.description,
-      icon: feature.iconName,
-      isActive: feature.isActive,
-      config: { kind, subtitle: feature.subtitle, iconName: feature.iconName },
-    })),
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`seed-features:${kind}:${businessId}`}, 0))`;
+
+    // Re-chequeo con el lock tomado: otra request concurrente pudo sembrar ya.
+    const inside = await tx.skill.findMany({ where: { businessId } });
+    const insideNames = existingNamesForKind(inside, kind);
+    const stillMissing = defaults.filter((f) => !insideNames.has(f.name.trim().toLowerCase()));
+    if (stillMissing.length === 0) return;
+
+    await tx.skill.createMany({ data: toSkillRows(businessId, kind, stillMissing) });
   });
 }
