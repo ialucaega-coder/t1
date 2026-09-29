@@ -154,6 +154,32 @@ describe('lib/http-client', () => {
     });
   });
 
+  describe('timeout / resiliencia', () => {
+    it('pasa un AbortSignal al fetch (para poder cancelar por timeout)', async () => {
+      fetchMock.mockResolvedValue(res([]));
+      const client = new HttpClient();
+
+      await client.get('/services');
+
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('convierte un AbortError en un mensaje claro de timeout', async () => {
+      fetchMock.mockRejectedValue(new DOMException('aborted', 'AbortError'));
+      const client = new HttpClient();
+
+      await expect(client.get('/services')).rejects.toThrow(/tardó demasiado/i);
+    });
+
+    it('propaga otros errores de red tal cual (no los enmascara como timeout)', async () => {
+      fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+      const client = new HttpClient();
+
+      await expect(client.get('/services')).rejects.toThrow('Failed to fetch');
+    });
+  });
+
   describe('verbos HTTP', () => {
     it('put manda method PUT y serializa el body', async () => {
       fetchMock.mockResolvedValue(res({ id: 's1' }));

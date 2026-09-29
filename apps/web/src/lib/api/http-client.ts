@@ -1,5 +1,11 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
+// Timeout por request. Sin esto, una API lenta o caída deja las secciones que
+// dependen del fetch colgadas indefinidamente (spinner infinito). Con el
+// AbortController cortamos a los N ms y lanzamos un error claro que el hook
+// convierte en su estado de error/fallback.
+export const REQUEST_TIMEOUT_MS = 20000;
+
 // Nombre de la cookie "espejo" del token, en el dominio del propio
 // frontend (no es la cookie httpOnly que emite la API, que vive en
 // otro dominio/puerto y por lo tanto no es visible para Next.js).
@@ -53,10 +59,26 @@ export class HttpClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`${API_URL}${path}`, {
-      ...options,
-      headers,
-    });
+    // Aborta el request si supera REQUEST_TIMEOUT_MS (evita spinners infinitos
+    // cuando el backend está lento o caído).
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(`${API_URL}${path}`, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new Error('La solicitud tardó demasiado. Revisá tu conexión e intentá de nuevo.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (res.status === 401) {
       this.setToken(null);
