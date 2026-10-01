@@ -42,14 +42,25 @@ function inMemoryRateLimit(max: number) {
 }
 
 /**
- * Cuenta un hit en Redis y devuelve si está permitido. Patrón INCR + PEXPIRE:
- * la primera petición de la ventana crea la clave y le pone TTL; las siguientes
- * solo incrementan. Clave de helper exportada para poder testearla con un
- * cliente mock, sin un Redis real.
+ * Script Lua ATÓMICO: incrementa el contador y le pone TTL en una sola
+ * operación server-side. Hacer INCR y PEXPIRE por separado no es atómico —
+ * si el proceso muere (o PEXPIRE falla) entre ambos, la clave queda SIN TTL y
+ * esa IP recibe 429 para siempre. El script además auto-repara claves
+ * huérfanas: si por lo que sea el TTL quedó en -1, lo vuelve a setear.
+ */
+const RATE_LIMIT_LUA = `
+local c = redis.call('INCR', KEYS[1])
+if c == 1 or redis.call('PTTL', KEYS[1]) == -1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return c`;
+
+/**
+ * Cuenta un hit en Redis (de forma atómica) y devuelve si está permitido.
+ * Helper exportado para poder testearlo con un cliente mock, sin un Redis real.
  */
 export async function redisAllow(client: Redis, key: string, max: number, ttlMs: number): Promise<boolean> {
-  const count = await client.incr(key);
-  if (count === 1) await client.pexpire(key, ttlMs);
+  const count = Number(await client.eval(RATE_LIMIT_LUA, 1, key, String(ttlMs)));
   return count <= max;
 }
 

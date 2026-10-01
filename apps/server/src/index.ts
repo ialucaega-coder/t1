@@ -8,8 +8,9 @@ import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
+import type { Redis } from 'ioredis';
 import { initSocket } from './lib/socket';
-import { getRedis } from './lib/redis';
+import { getRedis, closeRedis } from './lib/redis';
 import { authRouter } from './routes/auth';
 import { bookingsRouter } from './routes/bookings';
 import { servicesRouter } from './routes/services';
@@ -129,8 +130,13 @@ const io = new Server(httpServer, {
 // eventos entre instancias (un emit desde cualquier réplica llega a todos los
 // clientes). Sin Redis, queda el adaptador en memoria (válido single-node).
 const redisForSockets = getRedis();
+let socketSub: Redis | undefined;
 if (redisForSockets) {
-  io.adapter(createAdapter(redisForSockets, redisForSockets.duplicate()));
+  // Guardamos el cliente `sub` para poder cerrarlo en el apagado. duplicate()
+  // no copia listeners, así que le ponemos su propio handler de error.
+  socketSub = redisForSockets.duplicate();
+  socketSub.on('error', (err: Error) => console.error('[redis:sub] error:', err.message));
+  io.adapter(createAdapter(redisForSockets, socketSub));
   console.log('[socket.io] Adaptador Redis habilitado (escalado multi-instancia).');
 }
 
@@ -255,5 +261,31 @@ httpServer.listen(PORT, () => {
   // Programar jobs diarios de superpoderes (reportes / recordatorios)
   startScheduler();
 });
+
+// Apagado limpio: en Cloud Run / K8s el contenedor recibe SIGTERM antes de
+// matarse. Cerramos conexiones (HTTP, Socket.IO y Redis) para no dejar sockets
+// colgados ni conexiones Redis huérfanas. Idempotente ante señales repetidas.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} recibido; cerrando...`);
+
+  // Forzamos la salida si algo se cuelga, para no quedar bloqueando el deploy.
+  const forceExit = setTimeout(() => process.exit(0), 10_000);
+  forceExit.unref?.();
+
+  try {
+    io.close();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await Promise.allSettled([socketSub?.quit(), closeRedis()]);
+  } catch (err) {
+    console.error('[shutdown] error al cerrar:', (err as Error).message);
+  } finally {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 export { io };

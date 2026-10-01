@@ -35,10 +35,30 @@ export function getRedis(): Redis | null {
     return null;
   }
 
+  // Valida el formato para fallar claro al arrancar en vez de degradar en
+  // silencio con una URL mal formada. Si es inválida, deshabilita Redis
+  // (fallback in-memory) en vez de tumbar el proceso.
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`esquema no soportado: ${parsed.protocol}`);
+    }
+  } catch (err) {
+    console.error(`[redis] REDIS_URL inválida (${(err as Error).message}); se usa el fallback in-memory.`);
+    client = null;
+    return null;
+  }
+
   client = new Redis(url, {
     maxRetriesPerRequest: 3,
-    // No reintenta para siempre si el host no existe: evita ruido infinito.
-    retryStrategy: (times) => (times > 10 ? null : Math.min(times * 200, 2000)),
+    // Acota la latencia por comando durante una caída: en operación normal los
+    // comandos tardan <5ms, así que esto solo dispara en un corte real y deja
+    // que el caller degrade rápido (fail-open) en vez de colgar el request.
+    commandTimeout: 1000,
+    // Reconexión indefinida con backoff acotado: NUNCA devolvemos null, porque
+    // eso dejaría al cliente en estado "end" sin recuperarse (rate limiter en
+    // fail-open permanente y adaptador de Socket.IO muerto) tras un corte largo.
+    retryStrategy: (times) => Math.min(times * 200, 5000),
   });
   client.on('error', (err) => console.error('[redis] error de conexión:', err.message));
   client.on('connect', () => console.log('[redis] conectado'));
