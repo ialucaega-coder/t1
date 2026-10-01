@@ -122,6 +122,9 @@ export default function AsistenteVozPage() {
 
   // ─── Carga inicial ───────────────────────────────────────────────
   useEffect(() => {
+    // Capturamos la referencia del array de timers al montar: nunca se reasigna
+    // (solo se le hace push/forEach), así que el cleanup limpia la misma lista.
+    const activeTimers = timers.current;
     setWebhookUrl(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api'}/voice/incoming`);
 
     voiceApi.getConfig().then(setCfg).catch(() => setCfg(null)).finally(() => setLoading(false));
@@ -136,7 +139,7 @@ export default function AsistenteVozPage() {
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
     return () => {
-      timers.current.forEach(clearTimeout);
+      activeTimers.forEach(clearTimeout);
       if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
     };
   }, []);
