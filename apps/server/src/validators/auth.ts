@@ -38,6 +38,14 @@ export const loginSchema = z.object({
   // En login no se re-valida la fortaleza (podría romper cuentas
   // creadas antes de esta política); solo se exige que no esté vacía.
   password: z.string().min(1),
+  // Código TOTP de 2FA. Opcional: solo se exige si la cuenta tiene 2FA activo
+  // (el login responde twoFactorRequired si falta).
+  twoFactorCode: z.string().trim().optional(),
+});
+
+/** Código TOTP de 6 dígitos para los endpoints de 2FA. */
+export const twoFactorCodeSchema = z.object({
+  code: z.string().trim().regex(/^\d{6}$/, 'El código debe tener 6 dígitos'),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

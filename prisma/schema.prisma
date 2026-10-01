@@ -155,6 +155,10 @@ model User {
   failedLogins Int       @default(0)
   lockedUntil  DateTime?
   lastLoginAt  DateTime?
+  // 2FA (TOTP). El secreto se guarda cifrado (AES-256-GCM, ver lib/crypto.ts);
+  // twoFactorEnabled solo pasa a true una vez verificado el primer código.
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
   deletedAt    DateTime? // Borrado lógico (soft delete) para clientes
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

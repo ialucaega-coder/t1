@@ -6,7 +6,9 @@ import { authRateLimit } from '../middleware/rateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
-import { registerSchema, loginSchema, RegisterInput, LoginInput } from '../validators/auth';
+import { registerSchema, loginSchema, twoFactorCodeSchema, RegisterInput, LoginInput } from '../validators/auth';
+import { requireAuth } from '../middleware/auth';
+import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
 
 const updateMeSchema = z.object({
   name: z.string().max(100).optional(),
@@ -141,6 +143,25 @@ router.post(
       return;
     }
 
+    // Segundo factor (TOTP): si la cuenta lo tiene activo, la contraseña sola
+    // no alcanza. Sin código → pedirlo (200, sin token). Con código inválido →
+    // 401. La contraseña ya se validó, así que no revela existencia de la cuenta.
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      if (!data.twoFactorCode) {
+        res.json({ twoFactorRequired: true });
+        return;
+      }
+      if (!verifyTwoFactorToken(user.twoFactorSecret, data.twoFactorCode)) {
+        auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
+          userId: user.id,
+          businessId: user.businessId,
+          metadata: { reason: 'invalid_2fa_code' },
+        });
+        res.status(401).json({ error: 'Invalid 2FA code' });
+        return;
+      }
+    }
+
     await prisma.user.update({
       where: { id: user.id },
       data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() },
@@ -260,6 +281,99 @@ router.post(
     clearSessionCookie(res);
     auditAuthEvent('AUTH_LOGOUT', req, { userId: req.auth?.userId, businessId: req.auth?.businessId });
     res.status(204).send();
+  })
+);
+
+// ─── 2FA (TOTP) ──────────────────────────────────────────────────────
+
+/** Estado de 2FA del usuario autenticado. */
+router.get(
+  '/2fa/status',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorEnabled: true },
+    });
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    res.json({ enabled: user.twoFactorEnabled });
+  })
+);
+
+/**
+ * Inicia el alta de 2FA: genera un secreto (cifrado) y devuelve el QR/otpauth.
+ * Deja twoFactorEnabled en false hasta que se verifique el primer código.
+ */
+router.post(
+  '/2fa/setup',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { email: true, twoFactorEnabled: true },
+    });
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    if (user.twoFactorEnabled) { res.status(409).json({ error: '2FA ya está activo' }); return; }
+
+    const setup = await generateTwoFactorSetup(user.email);
+    await prisma.user.update({
+      where: { id: req.auth!.userId },
+      data: { twoFactorSecret: setup.encryptedSecret, twoFactorEnabled: false },
+    });
+
+    res.json({ otpauthUri: setup.otpauthUri, qrDataUrl: setup.qrDataUrl });
+  })
+);
+
+/** Confirma el alta de 2FA verificando el primer código TOTP. */
+router.post(
+  '/2fa/verify',
+  requireAuth,
+  validate(twoFactorCodeSchema),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorSecret: true, twoFactorEnabled: true },
+    });
+    if (!user?.twoFactorSecret) { res.status(400).json({ error: 'Primero iniciá el alta de 2FA' }); return; }
+    if (user.twoFactorEnabled) { res.status(409).json({ error: '2FA ya está activo' }); return; }
+
+    if (!verifyTwoFactorToken(user.twoFactorSecret, req.body.code)) {
+      res.status(400).json({ error: 'Código inválido' });
+      return;
+    }
+
+    await prisma.user.update({ where: { id: req.auth!.userId }, data: { twoFactorEnabled: true } });
+    auditAuthEvent('AUTH_2FA_ENABLED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
+    res.json({ enabled: true });
+  })
+);
+
+/** Desactiva 2FA (requiere un código TOTP válido vigente). */
+router.post(
+  '/2fa/disable',
+  requireAuth,
+  validate(twoFactorCodeSchema),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorSecret: true, twoFactorEnabled: true },
+    });
+    if (!user?.twoFactorEnabled || !user.twoFactorSecret) {
+      res.status(400).json({ error: '2FA no está activo' });
+      return;
+    }
+    if (!verifyTwoFactorToken(user.twoFactorSecret, req.body.code)) {
+      res.status(400).json({ error: 'Código inválido' });
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: req.auth!.userId },
+      data: { twoFactorEnabled: false, twoFactorSecret: null },
+    });
+    auditAuthEvent('AUTH_2FA_DISABLED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
+    res.json({ enabled: false });
   })
 );
 
