@@ -136,6 +136,24 @@ Config de producción a no olvidar (además de los secrets):
   hace falta tocar nada (corre por defecto). Si escalás horizontalmente a más de
   una instancia, poné **`RUN_SCHEDULER=false` en todas menos una**, o cada
   instancia disparará los jobs y duplicará las notificaciones diarias.
+- **`REDIS_URL`** — **opcional**, para escalado horizontal (ver abajo).
+
+### Escalado horizontal (múltiples instancias)
+
+Con **una sola instancia** no hace falta nada: todo funciona con los fallbacks
+en memoria. Al correr **2+ réplicas** detrás de un balanceador, seteá
+**`REDIS_URL`** (ej. Memorystore en GCP) en todas las instancias para que:
+
+- **Rate limiting** sea distribuido — el conteo por IP se comparte entre réplicas
+  (`INCR`/`PEXPIRE` en Redis). Sin Redis, cada proceso cuenta por separado, así
+  que el límite efectivo se multiplica por la cantidad de instancias. Si Redis se
+  cae, el limitador degrada *fail-open* (permite) para no tumbar la API.
+- **Socket.IO** replique los eventos en tiempo real entre réplicas (adaptador
+  Redis). Sin esto, un `emit` solo llega a los clientes conectados a la misma
+  instancia que lo emitió; con varias réplicas, se perderían notificaciones.
+
+Checklist multi-instancia: `REDIS_URL` en todas + `RUN_SCHEDULER=false` en todas
+menos una + `TRUST_PROXY_HOPS=1`.
 
 ### Base de datos y migraciones
 
