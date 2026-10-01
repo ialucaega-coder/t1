@@ -8,6 +8,7 @@ import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, Upd
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendBookingCreated, sendBookingConfirmed, sendBookingCancelled } from '../services/notifications';
+import { syncBookingToCalcom } from '../services/calcom/sync';
 
 const router = Router();
 
@@ -131,7 +132,7 @@ router.post(
           businessId: req.auth!.businessId,
         },
         include: {
-          client: { select: { name: true, phone: true } },
+          client: { select: { name: true, phone: true, email: true } },
           professional: { include: { user: { select: { name: true } } } },
           service: { select: { name: true, duration: true } },
         },
@@ -148,6 +149,14 @@ router.post(
     void sendBookingCreated(booking).catch((err) =>
       console.error('[Bookings] Error notificando alta de reserva:', err)
     );
+
+    // Sincroniza con Cal.com si el negocio lo tiene conectado. Best-effort:
+    // no bloquea ni afecta la respuesta si Cal.com no está configurado o falla.
+    void syncBookingToCalcom(req.auth!.businessId, {
+      start: new Date(`${data.date}T${data.startTime}:00`),
+      clientName: booking.client?.name,
+      clientEmail: booking.client?.email,
+    });
 
     res.status(201).json(booking);
   })
