@@ -9,7 +9,7 @@ interface AuthState {
   business: Business | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, twoFactorCode?: string) => Promise<{ twoFactorRequired?: boolean }>;
   register: (data: { email: string; password: string; name: string; businessName: string }) => Promise<void>;
   updateProfile: (data: { name?: string; currentPassword?: string; newPassword?: string }) => Promise<void>;
   logout: () => void;
@@ -51,10 +51,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false));
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const res = await authApi.login(email, password);
-    setUser(res.user);
-    setBusiness(res.business);
+  const login = async (email: string, password: string, twoFactorCode?: string) => {
+    const res = await authApi.login(email, password, twoFactorCode);
+    // La cuenta pide 2FA: no hay token ni user/business todavía, avisamos a la
+    // página para que muestre el segundo paso (input del código).
+    if (res.twoFactorRequired && !res.token) {
+      return { twoFactorRequired: true };
+    }
+    setUser(res.user ?? null);
+    setBusiness(res.business ?? null);
+    return {};
   };
 
   const register = async (data: { email: string; password: string; name: string; businessName: string }) => {

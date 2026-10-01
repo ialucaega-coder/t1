@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState, useCallback } from 'react';
-import { Save, Palette, Globe, Bot, Clock, Plus, Trash2, UserCog, Lock, CheckCircle, X, Eye, EyeOff, Key } from 'lucide-react';
+import { Save, Palette, Globe, Bot, Clock, Plus, Trash2, UserCog, Lock, CheckCircle, X, Eye, EyeOff, Key, ShieldCheck } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
 import { useAuth } from '@/lib/auth-context';
 import { THEME_OPTIONS } from '@/constants/settings';
@@ -9,6 +9,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import * as schedulesApi from '@/lib/api/schedules';
 import * as settingsApi from '@/lib/api/settings';
+import * as authApi from '@/lib/api/auth';
 import { useToast } from '@/components/common/Toast';
 import type { AiProviderInfo } from '@/lib/api/settings';
 import type { Schedule } from '@/types';
@@ -32,6 +33,13 @@ export default function ConfiguracionPage() {
   const [aiKey, setAiKey] = useState('');
   const [aiKeyVisible, setAiKeyVisible] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
+  // --- Estado 2FA ---
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [twoFactorLoading, setTwoFactorLoading] = useState(true);
+  const [twoFactorSetup, setTwoFactorSetup] = useState<{ otpauthUri: string; qrDataUrl: string } | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorBusy, setTwoFactorBusy] = useState(false);
+  const [disabling, setDisabling] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -87,6 +95,73 @@ export default function ConfiguracionPage() {
   }, []);
 
   useEffect(() => { fetchAiProviders(); }, [fetchAiProviders]);
+
+  // Lee el estado del 2FA al montar.
+  useEffect(() => {
+    let active = true;
+    authApi.getTwoFactorStatus()
+      .then((res) => { if (active) setTwoFactorEnabled(res.enabled); })
+      .catch(() => { /* ignore: queda como desactivado */ })
+      .finally(() => { if (active) setTwoFactorLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  // Inicia el alta: pide el QR y el otpauth URI al backend.
+  async function handleStartTwoFactorSetup() {
+    setTwoFactorBusy(true);
+    try {
+      const data = await authApi.setupTwoFactor();
+      setTwoFactorSetup(data);
+      setTwoFactorCode('');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'No se pudo iniciar la configuración de 2FA';
+      toast({ type: 'error', message: msg });
+    } finally {
+      setTwoFactorBusy(false);
+    }
+  }
+
+  // Verifica el código de 6 dígitos y activa el 2FA.
+  async function handleVerifyTwoFactor() {
+    if (twoFactorCode.length !== 6) return;
+    setTwoFactorBusy(true);
+    try {
+      await authApi.verifyTwoFactor(twoFactorCode);
+      setTwoFactorEnabled(true);
+      setTwoFactorSetup(null);
+      setTwoFactorCode('');
+      toast({ type: 'success', message: 'Autenticación en dos pasos activada' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Código inválido';
+      toast({ type: 'error', message: msg });
+    } finally {
+      setTwoFactorBusy(false);
+    }
+  }
+
+  // Cancela el alta en curso sin activar.
+  function handleCancelTwoFactorSetup() {
+    setTwoFactorSetup(null);
+    setTwoFactorCode('');
+  }
+
+  // Desactiva el 2FA pidiendo un código válido.
+  async function handleDisableTwoFactor() {
+    if (twoFactorCode.length !== 6) return;
+    setTwoFactorBusy(true);
+    try {
+      await authApi.disableTwoFactor(twoFactorCode);
+      setTwoFactorEnabled(false);
+      setDisabling(false);
+      setTwoFactorCode('');
+      toast({ type: 'success', message: 'Autenticación en dos pasos desactivada' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Código inválido';
+      toast({ type: 'error', message: msg });
+    } finally {
+      setTwoFactorBusy(false);
+    }
+  }
 
   function openAiModal(provider: AiProviderInfo) {
     setAiModal(provider);
@@ -224,6 +299,109 @@ export default function ConfiguracionPage() {
             <Save className="h-3.5 w-3.5" /> {profileSaving ? 'Guardando...' : 'Actualizar perfil'}
           </button>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <ShieldCheck className="h-5 w-5 text-brand-400" />
+          <h3 className="font-semibold text-white">Autenticación en dos pasos (2FA)</h3>
+          {twoFactorEnabled && <span className="badge-active">ACTIVO</span>}
+        </div>
+        <p className="text-sm text-slate-400 mb-4">
+          Agregá una capa extra de seguridad: al iniciar sesión te pediremos un código de tu app de
+          autenticación (Google Authenticator, Authy, etc.).
+        </p>
+
+        {twoFactorLoading ? (
+          <LoadingSpinner label="Cargando estado de 2FA..." />
+        ) : twoFactorEnabled ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
+              <CheckCircle className="h-3.5 w-3.5" />
+              La autenticación en dos pasos está activa en tu cuenta.
+            </div>
+            {!disabling ? (
+              <button type="button" onClick={() => { setDisabling(true); setTwoFactorCode(''); }}
+                className="btn-secondary text-xs">
+                <Lock className="h-3.5 w-3.5" /> Desactivar 2FA
+              </button>
+            ) : (
+              <div className="space-y-3 rounded-lg border border-slate-700/50 bg-slate-800/30 p-4">
+                <p className="text-xs text-slate-400">
+                  Ingresá un código de 6 dígitos de tu app para confirmar la desactivación.
+                </p>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={twoFactorCode}
+                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="input max-w-[180px] text-center tracking-[0.4em] font-mono"
+                  placeholder="000000"
+                  autoFocus
+                />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setDisabling(false); setTwoFactorCode(''); }}
+                    className="btn-secondary text-xs">
+                    Cancelar
+                  </button>
+                  <button type="button" onClick={handleDisableTwoFactor}
+                    disabled={twoFactorBusy || twoFactorCode.length !== 6}
+                    className="btn-primary text-xs disabled:opacity-40">
+                    {twoFactorBusy ? 'Desactivando...' : 'Confirmar desactivación'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : twoFactorSetup ? (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-4 items-start">
+              <div className="rounded-lg border border-slate-700/50 bg-white p-2 shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={twoFactorSetup.qrDataUrl} alt="Código QR para 2FA" className="h-40 w-40" />
+              </div>
+              <div className="flex-1 min-w-0 space-y-2">
+                <p className="text-xs text-slate-400">
+                  Escaneá el QR con tu app de autenticación. Si no podés escanear, copiá este código:
+                </p>
+                <code className="block break-all rounded-lg border border-slate-700/50 bg-slate-800/50 p-2 text-[10px] font-mono text-slate-300">
+                  {twoFactorSetup.otpauthUri}
+                </code>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Código de verificación</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                value={twoFactorCode}
+                onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="input max-w-[180px] text-center tracking-[0.4em] font-mono"
+                placeholder="000000"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={handleCancelTwoFactorSetup} className="btn-secondary text-xs">
+                Cancelar
+              </button>
+              <button type="button" onClick={handleVerifyTwoFactor}
+                disabled={twoFactorBusy || twoFactorCode.length !== 6}
+                className="btn-primary text-xs disabled:opacity-40">
+                <ShieldCheck className="h-3.5 w-3.5" /> {twoFactorBusy ? 'Verificando...' : 'Verificar y activar'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button type="button" onClick={handleStartTwoFactorSetup} disabled={twoFactorBusy}
+            className="btn-primary text-xs">
+            <ShieldCheck className="h-3.5 w-3.5" /> {twoFactorBusy ? 'Generando...' : 'Activar 2FA'}
+          </button>
+        )}
       </section>
 
       <section className="card">
