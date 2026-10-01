@@ -7,7 +7,9 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { initSocket } from './lib/socket';
+import { getRedis } from './lib/redis';
 import { authRouter } from './routes/auth';
 import { bookingsRouter } from './routes/bookings';
 import { servicesRouter } from './routes/services';
@@ -122,6 +124,16 @@ const corsOrigin: cors.CorsOptions['origin'] = (origin, callback) => {
 const io = new Server(httpServer, {
   cors: { origin: corsOrigin, credentials: true },
 });
+
+// Escalado horizontal de Socket.IO: con REDIS_URL, el adaptador replica los
+// eventos entre instancias (un emit desde cualquier réplica llega a todos los
+// clientes). Sin Redis, queda el adaptador en memoria (válido single-node).
+const redisForSockets = getRedis();
+if (redisForSockets) {
+  io.adapter(createAdapter(redisForSockets, redisForSockets.duplicate()));
+  console.log('[socket.io] Adaptador Redis habilitado (escalado multi-instancia).');
+}
+
 initSocket(io);
 
 app.use(helmet({
