@@ -30,6 +30,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import * as webhooksApi from '@/lib/api/webhooks';
 import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 import { MetaChannelCard } from './MetaChannelCard';
+import { CalcomCard } from './CalcomCard';
 
 // ────────────────────────────────────────────────────────────────
 // Canales de comunicación adicionales (proximamente)
@@ -41,7 +42,6 @@ const upcomingChannels = [
 
 const integrations = [
   { name: 'Google Calendar', category: 'Agenda', icon: CalendarIcon, status: 'available' },
-  { name: 'Cal.com', category: 'Agenda', icon: CalendarIcon, status: 'available' },
   { name: 'Calendly', category: 'Agenda', icon: CalendarIcon, status: 'available' },
   { name: 'Stripe', category: 'Pagos', icon: CreditCard, status: 'available' },
   { name: 'MercadoPago', category: 'Pagos', icon: CreditCard, status: 'available' },
@@ -692,6 +692,12 @@ export default function ConexionesPage() {
 
       <div>
         <h3 className="mono-label mb-4">INTEGRACIONES</h3>
+
+        {/* Cal.com — integración funcional (agenda externa) */}
+        <div className="mb-4">
+          <CalcomCard />
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {integrations.map((integration) => {
             const Icon = integration.icon;
