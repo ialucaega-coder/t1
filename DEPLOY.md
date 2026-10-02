@@ -12,6 +12,36 @@ Vercel / Cloud Run.
 
 ---
 
+## 0. Checklist de lanzamiento a BETA (orden de ejecución)
+
+Secuencia mínima para pasar de la rama al beta en vivo. Cada paso tiene su
+sección detallada más abajo.
+
+1. **Mergear la rama.** Abrir el PR `fix/dev-cors-autoport` → `main` (cuerpo en
+   `PR_BODY.md`), esperar CI verde y mergear.
+2. **Base de datos (una vez por entorno).** Contra `DIRECT_URL`:
+   `npx prisma migrate resolve --applied 0_init` y luego `npx prisma migrate deploy`
+   (aplica `add_two_factor`). Ver §3 "Base de datos y migraciones". ⚠️ No correr
+   `migrate dev` contra la base existente.
+3. **Secrets del backend** (Cloud Run / Secret Manager): `DATABASE_URL`,
+   `DIRECT_URL`, `NEXTAUTH_SECRET`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY` (o el
+   proveedor IA elegido), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`,
+   `TWILIO_*`, `RESEND_API_KEY`, `SENTRY_DSN`, `TRUST_PROXY_HOPS=1`,
+   `FRONTEND_URLS`. Opcional: `REDIS_URL` (solo si corrés 2+ instancias). Ver §3.
+4. **Secrets del frontend** (Vercel): `NEXT_PUBLIC_API_URL` (apuntando al backend),
+   `NEXTAUTH_SECRET` (mismo valor que el backend), `NEXT_PUBLIC_*` necesarios. Ver §2.
+5. **Deploy**: push a `main` dispara el CI → build + deploy de web (Vercel) y
+   server (Cloud Run). Verificar healthcheck del server (§3) y que la web carga.
+6. **Smoke QA en vivo** (flujos core): registro/login (+ activar y probar 2FA),
+   crear reserva, generar un cobro (Stripe), enviar/recibir un mensaje en un canal
+   conectado (Telegram es el más rápido), ver el dashboard/estadísticas.
+7. **Integraciones por negocio (cuando las tengas):** en el panel de Conexiones
+   cargar las credenciales de Cal.com, MercadoPago y/o ManyChat.
+
+> Mínimo imprescindible para un beta útil: pasos 1–6. El 7 es incremental.
+
+---
+
 ## 1. Integracion continua (CI)
 
 Workflow: `.github/workflows/ci.yml` — corre en cada **push a `main`** y en cada
