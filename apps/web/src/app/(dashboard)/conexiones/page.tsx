@@ -32,6 +32,7 @@ import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 import { MetaChannelCard } from './MetaChannelCard';
 import { CalcomCard } from './CalcomCard';
 import { MercadoPagoCard } from './MercadoPagoCard';
+import { ManyChatCard } from './ManyChatCard';
 
 // ────────────────────────────────────────────────────────────────
 // Canales de comunicación adicionales (proximamente)
@@ -693,10 +694,11 @@ export default function ConexionesPage() {
       <div>
         <h3 className="mono-label mb-4">INTEGRACIONES</h3>
 
-        {/* Cal.com + MercadoPago — integraciones funcionales */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        {/* Cal.com + MercadoPago + ManyChat — integraciones funcionales */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
           <CalcomCard />
           <MercadoPagoCard />
+          <ManyChatCard />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
