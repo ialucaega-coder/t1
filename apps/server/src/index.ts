@@ -52,6 +52,7 @@ import { brandRouter } from './routes/brand';
 import { galeriaRouter } from './routes/galeria';
 import { calcomRouter } from './routes/calcom';
 import { mercadopagoRouter } from './routes/mercadopago';
+import { manychatRouter } from './routes/manychat';
 import { restoreActiveBots } from './services/telegram/bot';
 import { startScheduler } from './services/scheduler';
 import { apiRateLimit } from './middleware/rateLimit';
@@ -233,6 +234,7 @@ app.use('/api/brand', brandRouter);
 app.use('/api/galeria', galeriaRouter);
 app.use('/api/calcom', calcomRouter);
 app.use('/api/mercadopago', mercadopagoRouter);
+app.use('/api/manychat', manychatRouter);
 app.use('/api/public', cors({ origin: true, credentials: false }), publicChatRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.
