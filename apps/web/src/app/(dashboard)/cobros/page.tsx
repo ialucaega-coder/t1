@@ -1,12 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CreditCard, Link2, Copy, Check, Loader2, AlertTriangle, MessageCircle, Sparkles } from 'lucide-react';
 import * as billingApi from '@/lib/api/billing';
+import { getMpStatus, createMpPaymentLink } from '@/lib/api/mercadopago';
 import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/common/Toast';
 
 const inputCls = 'w-full rounded-lg bg-slate-900/60 border border-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500/40 outline-none px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500';
+
+type Provider = 'stripe' | 'mercadopago';
 
 export default function CobrosPage() {
   const { business } = useAuth();
@@ -18,6 +21,15 @@ export default function CobrosPage() {
   const [loading, setLoading] = useState(false);
   const [link, setLink] = useState('');
   const [copied, setCopied] = useState(false);
+  // Pasarela elegida. Solo se ofrece MercadoPago si el negocio lo tiene conectado.
+  const [provider, setProvider] = useState<Provider>('stripe');
+  const [mpAvailable, setMpAvailable] = useState(false);
+
+  useEffect(() => {
+    getMpStatus()
+      .then((s) => setMpAvailable(s.enabled))
+      .catch(() => setMpAvailable(false));
+  }, []);
 
   const generate = async () => {
     const value = parseFloat(amount);
@@ -26,12 +38,20 @@ export default function CobrosPage() {
     setLoading(true);
     setLink('');
     try {
-      const { url } = await billingApi.createPaymentLink(value, description.trim(), currency);
+      const { url } = provider === 'mercadopago'
+        ? await createMpPaymentLink(value, description.trim(), currency)
+        : await billingApi.createPaymentLink(value, description.trim(), currency);
       setLink(url);
       toast({ type: 'success', message: 'Link de cobro generado.' });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'No se pudo generar el link';
-      toast({ type: 'error', message: msg.includes('STRIPE') || msg.includes('configurad') ? 'Falta configurar Stripe (STRIPE_SECRET_KEY).' : msg });
+      let friendly = msg;
+      if (provider === 'mercadopago' && (msg.includes('MercadoPago') || msg.includes('Conectá'))) {
+        friendly = 'Conectá MercadoPago en Conexiones para generar cobros.';
+      } else if (provider === 'stripe' && (msg.includes('STRIPE') || msg.includes('configurad'))) {
+        friendly = 'Falta configurar Stripe (STRIPE_SECRET_KEY).';
+      }
+      toast({ type: 'error', message: friendly });
     } finally {
       setLoading(false);
     }
@@ -64,6 +84,29 @@ export default function CobrosPage() {
       </div>
 
       <div className="rounded-2xl border border-slate-700/60 bg-slate-800/40 p-5 space-y-4">
+        {mpAvailable && (
+          <div>
+            <span className="block text-xs font-medium text-slate-300 mb-1.5">Pasarela de pago</span>
+            <div className="inline-flex rounded-lg border border-slate-700 bg-slate-900/60 p-1">
+              {([
+                { id: 'stripe' as Provider, label: 'Stripe' },
+                { id: 'mercadopago' as Provider, label: 'MercadoPago' },
+              ]).map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setProvider(p.id)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                    provider === p.id ? 'bg-brand-500 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid sm:grid-cols-[1fr_2fr] gap-3">
           <label className="block">
             <span className="block text-xs font-medium text-slate-300 mb-1">Monto ({currency})</span>
@@ -99,13 +142,16 @@ export default function CobrosPage() {
         <div className="flex items-center gap-2 text-slate-200 font-medium mb-2"><Sparkles className="w-4 h-4 text-brand-400" /> Cómo funciona</div>
         <ol className="text-sm text-slate-400 space-y-1.5 list-decimal list-inside">
           <li>Ponés el monto y una descripción del cobro.</li>
-          <li>Generás un link seguro de pago con tarjeta (Stripe).</li>
+          <li>Generás un link seguro de pago con {provider === 'mercadopago' ? 'MercadoPago' : 'tarjeta (Stripe)'}.</li>
           <li>Se lo mandás al cliente por WhatsApp o el canal que uses.</li>
           <li>El cliente paga y te queda registrado.</li>
         </ol>
         <p className="mt-3 text-xs text-amber-300/90 flex items-start gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-          Requiere configurar Stripe (STRIPE_SECRET_KEY) para generar cobros reales.
+          {provider === 'mercadopago'
+            ? 'Requiere conectar MercadoPago en Conexiones para generar cobros reales.'
+            : 'Requiere configurar Stripe (STRIPE_SECRET_KEY) para generar cobros reales.'}
+          {!mpAvailable && ' ¿Preferís MercadoPago? Conectalo en Conexiones y aparecerá como opción.'}
         </p>
       </div>
     </div>
