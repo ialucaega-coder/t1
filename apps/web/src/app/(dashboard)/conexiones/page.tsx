@@ -31,6 +31,7 @@ import * as webhooksApi from '@/lib/api/webhooks';
 import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 import { MetaChannelCard } from './MetaChannelCard';
 import { CalcomCard } from './CalcomCard';
+import { MercadoPagoCard } from './MercadoPagoCard';
 
 // ────────────────────────────────────────────────────────────────
 // Canales de comunicación adicionales (proximamente)
@@ -44,7 +45,6 @@ const integrations = [
   { name: 'Google Calendar', category: 'Agenda', icon: CalendarIcon, status: 'available' },
   { name: 'Calendly', category: 'Agenda', icon: CalendarIcon, status: 'available' },
   { name: 'Stripe', category: 'Pagos', icon: CreditCard, status: 'available' },
-  { name: 'MercadoPago', category: 'Pagos', icon: CreditCard, status: 'available' },
   { name: 'Clip.mx', category: 'Pagos', icon: CreditCard, status: 'available' },
   { name: 'Mailchimp', category: 'Email', icon: Mail, status: 'available' },
   { name: 'SendGrid', category: 'Email', icon: Mail, status: 'available' },
@@ -693,9 +693,10 @@ export default function ConexionesPage() {
       <div>
         <h3 className="mono-label mb-4">INTEGRACIONES</h3>
 
-        {/* Cal.com — integración funcional (agenda externa) */}
-        <div className="mb-4">
+        {/* Cal.com + MercadoPago — integraciones funcionales */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <CalcomCard />
+          <MercadoPagoCard />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
