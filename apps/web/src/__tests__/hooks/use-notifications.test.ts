@@ -146,4 +146,54 @@ describe('hooks/use-notifications', () => {
     expect(result.current.notifications.every((n) => n.isRead)).toBe(true);
     expect(result.current.unreadCount).toBe(0);
   });
+
+  it('pausa el polling cuando la pestaña se oculta y reanuda con fetch inmediato al volver', async () => {
+    vi.useFakeTimers();
+    mockGet.mockResolvedValue({ data: [], unreadCount: 0 });
+
+    const setVisibility = (state: 'hidden' | 'visible') => {
+      Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+
+    const { unmount } = renderHook(() => useNotifications());
+    try {
+
+      // fetch inicial al montar
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(mockGet).toHaveBeenCalledTimes(1);
+
+      // mientras esta visible, el polling sigue cada 30s
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(mockGet).toHaveBeenCalledTimes(2);
+
+      // al ocultar la pestaña, el polling se pausa (no hay nuevas llamadas)
+      act(() => setVisibility('hidden'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(mockGet).toHaveBeenCalledTimes(2);
+
+      // al volver a visible, hace un fetch inmediato...
+      act(() => setVisibility('visible'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(mockGet).toHaveBeenCalledTimes(3);
+
+      // ...y reanuda el polling cada 30s
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(mockGet).toHaveBeenCalledTimes(4);
+    } finally {
+      unmount();
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      vi.useRealTimers();
+    }
+  });
 });
