@@ -108,23 +108,44 @@ function timingSafeEqual(a: string, b: string): boolean {
 // reemplaza a la validación de esquema (Zod), pero reduce la
 // superficie de ataque para XSS almacenado/reflejado.
 
-const SCRIPT_TAG_RE = /<script[\s\S]*?>[\s\S]*?<\/script\s*>/gi;
-const HTML_TAG_RE = /<\/?[a-z][^>]*>/gi;
 const EVENT_HANDLER_RE = /\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 const JS_PROTOCOL_RE = /javascript\s*:/gi;
 const DATA_HTML_RE = /data\s*:\s*text\/html/gi;
 
 /**
+ * Quita secuencias tipo `<...>` (etiquetas HTML, incluido <script> y atributos
+ * como onerror=) en UNA sola pasada O(n). Reemplaza a las regex anteriores
+ * `<script[\s\S]*?>...` (O(n³)) y `<\/?[a-z][^>]*>` (O(n²)), que tenían
+ * backtracking catastrófico: un body con miles de `<script` o `<a` sin cierre
+ * bloqueaba el event loop por segundos/minutos (ReDoS, DoS sin autenticación).
+ * Un `<` sin su `>` de cierre se deja literal (React lo escapa al renderizar).
+ */
+function stripTagsLinear(value: string): string {
+  let out = '';
+  let i = 0;
+  const n = value.length;
+  while (i < n) {
+    const lt = value.indexOf('<', i);
+    if (lt === -1) { out += value.slice(i); break; }
+    out += value.slice(i, lt);
+    const gt = value.indexOf('>', lt + 1);
+    if (gt === -1) { out += value.slice(lt); break; }
+    i = gt + 1;
+  }
+  return out;
+}
+
+/**
  * Sanea una cadena de texto individual eliminando marcado peligroso.
  * Es intencionalmente conservador: no intenta ser un parser HTML
- * completo, solo elimina los vectores XSS más comunes.
+ * completo, solo elimina los vectores XSS más comunes. Todas las operaciones
+ * son de tiempo lineal (sin regex con backtracking catastrófico).
  */
 export function sanitizeString(value: string): string {
-  let out = value.replace(SCRIPT_TAG_RE, '');
+  let out = stripTagsLinear(value);
   out = out.replace(EVENT_HANDLER_RE, '');
   out = out.replace(JS_PROTOCOL_RE, '');
   out = out.replace(DATA_HTML_RE, '');
-  out = out.replace(HTML_TAG_RE, '');
   return out;
 }
 

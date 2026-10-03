@@ -12,6 +12,18 @@ function getSocket(): Socket {
     globalSocket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       autoConnect: true,
+      // El server exige el JWT en el handshake y deriva el negocio del token
+      // (no confía en el businessId que mande el cliente). Usamos la forma
+      // función para enviar SIEMPRE el token vigente en cada (re)conexión.
+      auth: (cb: (data: { token: string | null }) => void) => {
+        let token: string | null = null;
+        try {
+          token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        } catch {
+          token = null;
+        }
+        cb({ token });
+      },
     });
   }
   return globalSocket;

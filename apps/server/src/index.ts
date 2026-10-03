@@ -9,6 +9,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Redis } from 'ioredis';
+import jwt from 'jsonwebtoken';
 import { initSocket } from './lib/socket';
 import { getRedis, closeRedis } from './lib/redis';
 import { authRouter } from './routes/auth';
@@ -251,16 +252,36 @@ app.use('/api', notFoundHandler);
 Sentry.setupExpressErrorHandler(app);
 app.use(errorHandler);
 
-io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+// Autenticación del handshake de Socket.IO: sin esto cualquiera podía emitir
+// `join-business` con un businessId arbitrario (público vía /book/:slug) y
+// recibir en vivo los eventos de otro negocio (reservas con PII, mensajes de
+// chat). Ahora exigimos el JWT en handshake.auth.token y derivamos el negocio
+// del token, ignorando cualquier businessId que mande el cliente.
+io.use((socket, next) => {
+  try {
+    const token = (socket.handshake.auth?.token || socket.handshake.headers?.['x-auth-token']) as string | undefined;
+    if (!token) return next(new Error('unauthorized'));
+    const payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as { businessId?: string };
+    if (!payload?.businessId) return next(new Error('unauthorized'));
+    socket.data.businessId = payload.businessId;
+    next();
+  } catch {
+    next(new Error('unauthorized'));
+  }
+});
 
-  socket.on('join-business', (businessId: string) => {
+io.on('connection', (socket) => {
+  const businessId = socket.data.businessId as string;
+  // El socket ya está autenticado: lo unimos SOLO a la room de SU negocio.
+  socket.join(`business:${businessId}`);
+
+  // Compatibilidad: si el cliente emite 'join-business', ignoramos el argumento
+  // y usamos siempre el negocio del token (no se puede saltar a otro tenant).
+  socket.on('join-business', () => {
     socket.join(`business:${businessId}`);
   });
 
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
-  });
+  socket.on('disconnect', () => {});
 });
 
 const PORT = process.env.PORT || 4000;
