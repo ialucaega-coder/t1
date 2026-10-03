@@ -431,7 +431,9 @@ function WebhooksSection() {
     setEditing(w);
     setFormName(w.name);
     setFormUrl(w.url);
-    setFormSecret(w.secret || '');
+    // El secret ya no viene del backend (está cifrado): se deja vacío. Si no se
+    // reescribe, handleSave manda `undefined` y el secret guardado no se toca.
+    setFormSecret('');
     setFormEvents(w.events || []);
     setShowForm(true);
   }
@@ -544,7 +546,7 @@ function WebhooksSection() {
           <div>
             <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 block">Secret (opcional)</label>
             <input type="text" value={formSecret} onChange={(e) => setFormSecret(e.target.value)}
-              placeholder="Se enviará en el header X-Webhook-Secret" className="input w-full font-mono text-xs" />
+              placeholder="Dejá vacío para no cambiarlo" className="input w-full font-mono text-xs" />
           </div>
           <div>
             <label className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 block">Eventos *</label>

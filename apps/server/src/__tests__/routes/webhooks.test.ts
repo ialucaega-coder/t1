@@ -69,6 +69,16 @@ describe('routes/webhooks', () => {
         expect.objectContaining({ where: { businessId: 'biz_1', type: 'webhook' } })
       );
     });
+
+    it('NO expone el secret en el listado (solo hasSecret)', async () => {
+      mock(prisma.connection.findMany).mockResolvedValue([
+        { id: 'w1', name: 'Hook', isActive: true, config: { url: 'https://x.com', events: [], secret: 'enc:tag:ct' } },
+      ]);
+      const res = await request(app).get('/api/webhooks');
+      expect(res.status).toBe(200);
+      expect(res.body[0].secret).toBeUndefined();
+      expect(res.body[0].hasSecret).toBe(true);
+    });
   });
 
   describe('GET /events', () => {
@@ -89,6 +99,19 @@ describe('routes/webhooks', () => {
       expect(prisma.connection.create).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ type: 'webhook', businessId: 'biz_1' }) })
       );
+    });
+
+    it('cifra el secret al crear y no lo devuelve (hasSecret)', async () => {
+      mock(prisma.connection.create).mockImplementation(async (args: { data: { config: Record<string, unknown> } }) => ({
+        id: 'w1', name: 'Mi hook', isActive: true, config: args.data.config,
+      }));
+      const res = await request(app).post('/api/webhooks').send({ ...validPayload, secret: 'mi-secreto' });
+      expect(res.status).toBe(201);
+      const storedCfg = mock(prisma.connection.create).mock.calls[0][0].data.config;
+      expect(storedCfg.secret).not.toBe('mi-secreto'); // cifrado en reposo
+      expect(String(storedCfg.secret).split(':').length).toBe(3);
+      expect(res.body.secret).toBeUndefined();
+      expect(res.body.hasSecret).toBe(true);
     });
 
     it('rechaza (400) si falta la URL', async () => {
