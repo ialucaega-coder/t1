@@ -129,6 +129,37 @@ describe('routes/telegram', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true });
     });
+
+    it('autentica por secret_token en header (esquema nuevo, sin token en URL)', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1', businessId: 'biz_1', type: 'TELEGRAM', isActive: true,
+        config: { webhookSecret: 'sek_123', botTokenEnc: 'enc' },
+      });
+      mock(handleUpdate).mockResolvedValue(undefined);
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .set('x-telegram-bot-api-secret-token', 'sek_123')
+        .send({ update_id: 5 });
+
+      expect(res.status).toBe(200);
+      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 5 }));
+    });
+
+    it('rechaza 403 si el secret_token del header no coincide', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1', businessId: 'biz_1', type: 'TELEGRAM', isActive: true,
+        config: { webhookSecret: 'sek_123' },
+      });
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .set('x-telegram-bot-api-secret-token', 'mal')
+        .send({ update_id: 5 });
+
+      expect(res.status).toBe(403);
+      expect(handleUpdate).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/telegram/connect', () => {
@@ -176,8 +207,14 @@ describe('routes/telegram', () => {
         bot: { username: 'localb_bot', name: 'Local B' },
       });
       expect(res.body.webhookUrl).toContain('/api/telegram/webhook/biz_1');
+      expect(res.body.webhookUrl).not.toContain('token='); // el token ya no va en la URL
       expect(createBot).toHaveBeenCalledWith('123456789:ABCdefGHIjkl', 'biz_1');
-      expect(prisma.connection.create).toHaveBeenCalled();
+      // El webhook se configura con secret_token; config guarda el token CIFRADO.
+      expect(setWebhook).toHaveBeenCalledWith('biz_1', expect.not.stringContaining('token='), expect.any(String));
+      const createdConfig = mock(prisma.connection.create).mock.calls[0][0].data.config;
+      expect(createdConfig.botToken).toBeUndefined();
+      expect(typeof createdConfig.botTokenEnc).toBe('string');
+      expect(typeof createdConfig.webhookSecret).toBe('string');
       expect(prisma.connection.update).not.toHaveBeenCalled();
     });
 

@@ -1,8 +1,22 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { encrypt, safeDecrypt } from '../lib/crypto';
 import { createBot, stopBot, setWebhook, handleUpdate, getBotInfo } from '../services/telegram/bot';
+
+/** Comparación en tiempo constante de dos strings (evita timing attacks). */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  try {
+    return crypto.timingSafeEqual(ba, bb);
+  } catch {
+    return false;
+  }
+}
 
 // ────────────────────────────────────────────────────────────────
 // Rutas de Telegram
@@ -37,9 +51,27 @@ router.post(
       return;
     }
 
-    // Validar token del webhook contra el botToken almacenado
-    const config = connection.config as { botToken?: string } | null;
-    if (!queryToken || !config?.botToken || queryToken !== config.botToken) {
+    const config = connection.config as { botToken?: string; botTokenEnc?: string; webhookSecret?: string } | null;
+
+    // Autenticación del webhook. Esquema nuevo: Telegram reenvía el secret_token
+    // en el header X-Telegram-Bot-Api-Secret-Token (no se expone el botToken en la
+    // URL ni en logs). Fallback legado: token en query comparado (timing-safe)
+    // contra el botToken almacenado (descifrado si está cifrado), para conexiones
+    // creadas antes de este cambio.
+    let authed = false;
+    if (config?.webhookSecret) {
+      const headerSecret = req.header('x-telegram-bot-api-secret-token');
+      authed = !!headerSecret && timingSafeEqualStr(headerSecret, config.webhookSecret);
+    } else {
+      let stored: string | undefined;
+      try {
+        stored = config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
+      } catch {
+        stored = undefined;
+      }
+      authed = !!queryToken && !!stored && timingSafeEqualStr(queryToken, stored);
+    }
+    if (!authed) {
       res.status(403).json({ error: 'Invalid webhook token' });
       return;
     }
@@ -84,13 +116,16 @@ router.post(
       throw new AppError(400, 'Token de bot inválido. Verificá que el token sea correcto.');
     }
 
-    // Construir URL del webhook
+    // Secreto del webhook: se envía a Telegram como secret_token y vuelve en el
+    // header de cada update. Así NO ponemos el botToken en la URL (no se filtra
+    // en access logs / auditoría). URL sin query token.
+    const webhookSecret = crypto.randomBytes(32).toString('hex');
     const baseUrl = process.env.API_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:4000';
-    const webhookUrl = `${baseUrl}/api/telegram/webhook/${businessId}?token=${encodeURIComponent(botToken)}`;
+    const webhookUrl = `${baseUrl}/api/telegram/webhook/${businessId}`;
 
-    // Configurar webhook en Telegram
+    // Configurar webhook en Telegram (con secret_token)
     try {
-      await setWebhook(businessId, webhookUrl);
+      await setWebhook(businessId, webhookUrl, webhookSecret);
     } catch (error) {
       await stopBot(businessId);
       throw new AppError(500, 'No se pudo configurar el webhook. Verificá que la URL sea accesible públicamente.');
@@ -102,8 +137,11 @@ router.post(
     });
 
     const config = {
-      botToken,
+      // botToken CIFRADO en reposo (ya no en claro). webhookSecret autentica el
+      // webhook entrante vía header (ya no hay token en la URL).
+      botTokenEnc: encrypt(botToken),
       webhookUrl,
+      webhookSecret,
       botUsername: bot.botInfo.username,
       botName: bot.botInfo.first_name,
       connectedAt: new Date().toISOString(),

@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { encrypt } from '../lib/crypto';
 import { updateSettingsSchema, UpdateSettingsInput } from '../validators/settings';
 
 const updateAIProviderSchema = z.object({
@@ -143,7 +144,8 @@ router.put(
       if (apiKey !== undefined) {
         updateData.config = {
           provider: providerKey,
-          apiKey: apiKey || null,
+          // API key cifrada en reposo (solo se usa para marcar "configurado").
+          apiKey: apiKey ? encrypt(apiKey) : null,
         };
       }
       const updated = await prisma.connection.update({
@@ -163,7 +165,7 @@ router.put(
           name: provider.label,
           type: 'ai_provider',
           isActive: isActive ?? true,
-          config: { provider: providerKey, apiKey: apiKey || null },
+          config: { provider: providerKey, apiKey: apiKey ? encrypt(apiKey) : null },
           businessId,
         },
       });

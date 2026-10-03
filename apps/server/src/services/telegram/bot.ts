@@ -1,5 +1,6 @@
 import { Bot } from 'grammy';
 import { registerHandlers } from './handlers';
+import { safeDecrypt } from '../../lib/crypto';
 
 // ────────────────────────────────────────────────────────────────
 // Gestión de instancias de bots de Telegram.
@@ -62,14 +63,16 @@ export async function stopBot(businessId: string): Promise<void> {
  * Configura el webhook del bot en Telegram.
  * @param webhookUrl URL pública donde Telegram enviará los updates.
  */
-export async function setWebhook(businessId: string, webhookUrl: string): Promise<void> {
+export async function setWebhook(businessId: string, webhookUrl: string, secretToken?: string): Promise<void> {
   const bot = activeBots.get(businessId);
   if (!bot) {
     throw new Error(`No hay bot activo para el negocio ${businessId}`);
   }
 
-  await bot.api.setWebhook(webhookUrl);
-  console.log(`Webhook configurado para negocio ${businessId}: ${webhookUrl}`);
+  // secret_token: Telegram lo reenvía en el header X-Telegram-Bot-Api-Secret-Token
+  // en cada update, así autenticamos el webhook SIN poner el botToken en la URL.
+  await bot.api.setWebhook(webhookUrl, secretToken ? { secret_token: secretToken } : undefined);
+  console.log(`Webhook configurado para negocio ${businessId}`);
 }
 
 /**
@@ -107,13 +110,15 @@ export async function restoreActiveBots(): Promise<void> {
   });
 
   for (const conn of connections) {
-    const config = conn.config as { botToken?: string; webhookUrl?: string } | null;
-    if (!config?.botToken) continue;
+    const config = conn.config as { botToken?: string; botTokenEnc?: string; webhookUrl?: string; webhookSecret?: string } | null;
+    // botTokenEnc (cifrado, esquema nuevo) o botToken (legado en claro).
+    const token = config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
+    if (!token) continue;
 
     try {
-      await createBot(config.botToken, conn.businessId);
-      if (config.webhookUrl) {
-        await setWebhook(conn.businessId, config.webhookUrl);
+      await createBot(token, conn.businessId);
+      if (config?.webhookUrl) {
+        await setWebhook(conn.businessId, config.webhookUrl, config.webhookSecret);
       }
       console.log(`Bot restaurado para negocio ${conn.businessId}`);
     } catch (error) {
