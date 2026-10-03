@@ -4,8 +4,13 @@ const { withSentryConfig } = require('@sentry/nextjs/config');
 const nextConfig = {
   transpilePackages: ['shared'],
   images: {
+    // Acotado a Supabase Storage (único host remoto plausible para next/image).
+    // Antes era `hostname: '**'`, un proxy de imágenes ABIERTO vía /_next/image
+    // (cualquiera optimizaba imágenes de cualquier host a través de nuestro
+    // server) y el vector del DoS del Image Optimizer. Las imágenes de la app
+    // (galería, chat, config) usan <img> y no pasan por el optimizador.
     remotePatterns: [
-      { protocol: 'https', hostname: '**' },
+      { protocol: 'https', hostname: '**.supabase.co' },
     ],
   },
   async headers() {
