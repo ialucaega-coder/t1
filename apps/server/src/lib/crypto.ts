@@ -40,3 +40,30 @@ export function decrypt(payload: string): string {
   decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
   return Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64')), decipher.final()]).toString('utf8');
 }
+
+/**
+ * ¿`value` tiene el formato de un texto cifrado por `encrypt`? Valida que sean
+ * 3 partes base64 y que el IV y el authTag tengan el largo exacto (12 y 16
+ * bytes). Así un secreto legado en texto plano que contenga ":" (p. ej. el
+ * botToken de Telegram `123:ABC`) NO se confunde con un valor cifrado.
+ */
+export function isEncrypted(value: string): boolean {
+  const parts = value.split(':');
+  if (parts.length !== 3) return false;
+  try {
+    const iv = Buffer.from(parts[0], 'base64');
+    const tag = Buffer.from(parts[1], 'base64');
+    return iv.length === IV_BYTES && tag.length === 16;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Descifra si el valor está cifrado; si no (secreto legado en texto plano),
+ * lo devuelve tal cual. Permite migración perezosa: los valores viejos se leen
+ * sin romper y se re-cifran al guardarse la próxima vez.
+ */
+export function safeDecrypt(value: string): string {
+  return isEncrypted(value) ? decrypt(value) : value;
+}

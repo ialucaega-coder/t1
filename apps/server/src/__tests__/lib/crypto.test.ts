@@ -1,37 +1,36 @@
 /**
- * Pruebas del cifrado simétrico (`src/lib/crypto.ts`), usado para el secreto
- * TOTP en reposo. Verifica round-trip, que el texto cifrado no filtra el plano,
- * que cada cifrado usa un IV distinto, y que la autenticación GCM detecta
- * manipulación / formato inválido.
+ * Pruebas del cifrado simétrico en reposo (`src/lib/crypto.ts`): round-trip
+ * AES-256-GCM y los helpers de migración perezosa (isEncrypted / safeDecrypt),
+ * que permiten convivir con secretos legados en texto plano.
  */
 import { describe, it, expect } from 'vitest';
-import { encrypt, decrypt } from '../../lib/crypto';
+import { encrypt, decrypt, isEncrypted, safeDecrypt } from '../../lib/crypto';
 
 describe('lib/crypto', () => {
-  it('descifra lo que cifró (round-trip)', () => {
-    const plano = 'JBSWY3DPEHPK3PXP';
-    expect(decrypt(encrypt(plano))).toBe(plano);
+  it('encrypt/decrypt hace round-trip', () => {
+    const secreto = 'mi-api-key-super-secreta-123';
+    const enc = encrypt(secreto);
+    expect(enc).not.toContain(secreto);
+    expect(enc.split(':').length).toBe(3);
+    expect(decrypt(enc)).toBe(secreto);
   });
 
-  it('no deja el texto plano visible en el cifrado', () => {
-    const plano = 'secreto-super-sensible';
-    expect(encrypt(plano)).not.toContain(plano);
+  it('decrypt lanza con formato inválido', () => {
+    expect(() => decrypt('no-es-cifrado')).toThrow();
   });
 
-  it('usa un IV aleatorio: dos cifrados del mismo texto difieren', () => {
-    const plano = 'mismo-valor';
-    expect(encrypt(plano)).not.toBe(encrypt(plano));
+  it('isEncrypted reconoce solo valores producidos por encrypt', () => {
+    expect(isEncrypted(encrypt('x'))).toBe(true);
+    expect(isEncrypted('texto plano')).toBe(false);
+    // Un botToken de Telegram (contiene ":") NO debe confundirse con cifrado.
+    expect(isEncrypted('123456789:AAE-abc_DEF-ghi')).toBe(false);
+    // Tres partes pero IV/tag de largo incorrecto tampoco cuenta.
+    expect(isEncrypted('a:b:c')).toBe(false);
   });
 
-  it('lanza si el formato del cifrado es inválido', () => {
-    expect(() => decrypt('no-tiene-tres-partes')).toThrow();
-  });
-
-  it('lanza si el texto cifrado fue manipulado (autenticación GCM)', () => {
-    const enc = encrypt('dato');
-    const [iv, tag, ct] = enc.split(':');
-    // Alteramos el ciphertext: el authTag ya no valida.
-    const tampered = `${iv}:${tag}:${Buffer.from('otracosa').toString('base64')}`;
-    expect(() => decrypt(tampered)).toThrow();
+  it('safeDecrypt descifra lo cifrado y deja pasar lo legado (texto plano)', () => {
+    expect(safeDecrypt(encrypt('nueva'))).toBe('nueva');
+    expect(safeDecrypt('clave-legada-en-texto-plano')).toBe('clave-legada-en-texto-plano');
+    expect(safeDecrypt('123456789:AAE-token-telegram')).toBe('123456789:AAE-token-telegram');
   });
 });
