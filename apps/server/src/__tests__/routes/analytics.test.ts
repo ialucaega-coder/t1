@@ -13,6 +13,7 @@ vi.mock('../../lib/prisma', () => ({
     conversation: { count: vi.fn() },
     booking: { count: vi.fn() },
     message: { count: vi.fn(), aggregate: vi.fn(), findMany: vi.fn() },
+    $queryRaw: vi.fn(),
   },
 }));
 vi.mock('../../middleware/auth', () => ({
@@ -47,6 +48,7 @@ describe('routes/analytics', () => {
     mock(prisma.message.count).mockResolvedValue(0);
     mock(prisma.message.aggregate).mockResolvedValue({ _avg: { responseTime: null, tokens: null } });
     mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.$queryRaw).mockResolvedValue([{ total: 0n }]);
   });
 
   const endpoints = ['/kpi', '/conversations', '/satisfaction', '/improvements', '/costs', '/metrics'];

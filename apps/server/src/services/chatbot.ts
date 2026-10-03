@@ -611,13 +611,17 @@ async function getDefaultBotId(businessId: string): Promise<string> {
 }
 
 async function loadHistory(conversationId: string): Promise<ConversationTurn[]> {
+  // Traemos los ÚLTIMOS 50 mensajes (orden desc + take) y luego los revertimos a
+  // orden cronológico. Con `asc` + take 50 traíamos los PRIMEROS 50 de la charla:
+  // en conversaciones largas la IA recibía contexto viejo y perdía lo reciente.
   const messages = await prisma.message.findMany({
     where: { conversationId },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { createdAt: 'desc' },
     take: 50,
     select: { role: true, text: true },
   });
   return messages
+    .reverse()
     .filter((m) => m.role !== 'SYSTEM')
     .map((m) => ({
       role: m.role === 'USER' ? 'user' as const : 'assistant' as const,

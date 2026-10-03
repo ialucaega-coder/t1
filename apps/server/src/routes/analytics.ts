@@ -246,12 +246,18 @@ router.get(
     const businessId = req.auth!.businessId;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const botMessages = await prisma.message.findMany({
-      where: { role: 'BOT', createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
-      select: { text: true },
-    });
-
-    const totalChars = botMessages.reduce((sum, m) => sum + m.text.length, 0);
+    // Sumamos el largo de los textos EN LA DB (SUM(LENGTH)) en vez de traer todos
+    // los mensajes del bot a memoria: el findMany anterior crecía sin tope con el
+    // volumen del negocio (memoria + transferencia O(mensajes)).
+    const rows = await prisma.$queryRaw<{ total: bigint | null }[]>`
+      SELECT COALESCE(SUM(LENGTH(m."text")), 0)::bigint AS total
+      FROM "messages" m
+      JOIN "conversations" c ON c."id" = m."conversationId"
+      WHERE c."businessId" = ${businessId}
+        AND m."role" = 'BOT'::"MessageRole"
+        AND m."createdAt" >= ${thirtyDaysAgo}
+    `;
+    const totalChars = Number(rows[0]?.total ?? 0);
     const estimatedTokens = Math.round(totalChars / 4);
 
     const primaryTokens = Math.round(estimatedTokens * 0.7);
