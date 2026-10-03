@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "backfill:credentials": "tsx scripts/backfill-encrypt-credentials.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
