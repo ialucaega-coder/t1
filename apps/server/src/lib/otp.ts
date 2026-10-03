@@ -78,39 +78,49 @@ export type OtpResult = 'ok' | 'invalid' | 'expired' | 'too_many_attempts' | 'no
  * el contador de intentos en cada fallo y lo invalida al superar el tope.
  */
 export async function verifyOtp(businessId: string, phone: string, code: string): Promise<OtpResult> {
-  const row = await prisma.connection.findFirst({
-    where: { businessId, type: OTP_TYPE, config: { path: ['phone'], equals: phone } },
-    orderBy: { id: 'desc' },
-    select: { id: true, config: true },
-  });
-  if (!row) return 'not_found';
+  // Serializamos los intentos del mismo (negocio, teléfono) con un advisory lock
+  // transaccional. Antes el incremento de `attempts` era lee-luego-escribe: dos
+  // requests en paralelo leían attempts=0 y se saltaban el tope de 5 (brute-force
+  // del OTP de 6 dígitos). Con el lock + re-lectura dentro de la transacción, los
+  // intentos concurrentes se cuentan de a uno.
+  const lockKey = `otp:${businessId}:${phone}`;
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
-  const cfg = row.config as unknown as OtpConfig;
-
-  if (Date.now() > cfg.expiresAt) {
-    await prisma.connection.delete({ where: { id: row.id } });
-    return 'expired';
-  }
-  if ((cfg.attempts ?? 0) >= MAX_ATTEMPTS) {
-    await prisma.connection.delete({ where: { id: row.id } });
-    return 'too_many_attempts';
-  }
-
-  const expected = Buffer.from(cfg.codeHash, 'hex');
-  const actual = Buffer.from(hashCode(businessId, phone, String(code || '')), 'hex');
-  const match = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
-
-  if (!match) {
-    await prisma.connection.update({
-      where: { id: row.id },
-      data: { config: { ...cfg, attempts: (cfg.attempts ?? 0) + 1 } as unknown as Prisma.InputJsonObject },
+    const row = await tx.connection.findFirst({
+      where: { businessId, type: OTP_TYPE, config: { path: ['phone'], equals: phone } },
+      orderBy: { id: 'desc' },
+      select: { id: true, config: true },
     });
-    return 'invalid';
-  }
+    if (!row) return 'not_found';
 
-  // Éxito: consumimos el OTP (un solo uso).
-  await prisma.connection.delete({ where: { id: row.id } });
-  return 'ok';
+    const cfg = row.config as unknown as OtpConfig;
+
+    if (Date.now() > cfg.expiresAt) {
+      await tx.connection.delete({ where: { id: row.id } });
+      return 'expired';
+    }
+    if ((cfg.attempts ?? 0) >= MAX_ATTEMPTS) {
+      await tx.connection.delete({ where: { id: row.id } });
+      return 'too_many_attempts';
+    }
+
+    const expected = Buffer.from(cfg.codeHash, 'hex');
+    const actual = Buffer.from(hashCode(businessId, phone, String(code || '')), 'hex');
+    const match = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+
+    if (!match) {
+      await tx.connection.update({
+        where: { id: row.id },
+        data: { config: { ...cfg, attempts: (cfg.attempts ?? 0) + 1 } as unknown as Prisma.InputJsonObject },
+      });
+      return 'invalid';
+    }
+
+    // Éxito: consumimos el OTP (un solo uso).
+    await tx.connection.delete({ where: { id: row.id } });
+    return 'ok';
+  });
 }
 
 /**

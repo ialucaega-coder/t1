@@ -164,6 +164,11 @@ router.post(
           timestamp: new Date().toISOString(),
           data: { message: 'Webhook de prueba desde Local B' },
         }),
+        // Anti-SSRF: no seguimos redirects. assertSafePublicUrl valida la URL
+        // inicial, pero un 302 a http://169.254.169.254/ (metadata de la nube) o
+        // a la red interna la saltearía. Con 'manual', un redirect no se sigue
+        // (vuelve como respuesta opaca, que se reporta como fallo).
+        redirect: 'manual',
         signal: AbortSignal.timeout(10000),
       });
       res.json({ success: response.ok, status: response.status });

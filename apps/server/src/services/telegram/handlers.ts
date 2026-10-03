@@ -103,7 +103,9 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
   // ── /cancelar ───────────────────────────────────────────────
   bot.command('cancelar', async (ctx) => {
     const chatId = ctx.chat.id;
-    const telegramEmail = `telegram_${chatId}@localb.bot`;
+    // Email scopeado por negocio (mismo formato que el flujo de reserva), para
+    // no cruzar clientes entre tenants.
+    const telegramEmail = `telegram_${businessId}_${chatId}@localb.bot`;
 
     const client = await prisma.user.findUnique({ where: { email: telegramEmail } });
     if (!client) {
@@ -113,6 +115,7 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
 
     const bookings = await prisma.booking.findMany({
       where: {
+        businessId,
         clientId: client.id,
         status: { in: ['PENDING', 'CONFIRMED'] },
         date: { gte: new Date() },
@@ -213,14 +216,14 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
 
     if (data === 'action:cancelar') {
       const chatId = ctx.chat!.id;
-      const telegramEmail = `telegram_${chatId}@localb.bot`;
+      const telegramEmail = `telegram_${businessId}_${chatId}@localb.bot`;
       const client = await prisma.user.findUnique({ where: { email: telegramEmail } });
       if (!client) {
         await ctx.reply('No tenés reservas registradas.');
         return;
       }
       const bookings = await prisma.booking.findMany({
-        where: { clientId: client.id, status: { in: ['PENDING', 'CONFIRMED'] }, date: { gte: new Date() } },
+        where: { businessId, clientId: client.id, status: { in: ['PENDING', 'CONFIRMED'] }, date: { gte: new Date() } },
         include: { service: { select: { name: true } } },
         orderBy: { date: 'asc' },
       });

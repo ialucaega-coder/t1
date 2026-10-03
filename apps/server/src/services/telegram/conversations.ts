@@ -347,8 +347,11 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
       ? [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(' ')
       : 'Cliente Telegram';
 
-    // Buscar cliente existente por email generado para Telegram
-    const telegramEmail = `telegram_${chatId}@localb.bot`;
+    // Buscar cliente existente por email generado para Telegram. El email
+    // incluye el businessId: sin él, el mismo chatId de Telegram usado en dos
+    // negocios compartía el MISMO User (clientId de otro tenant), mezclando datos
+    // entre negocios. Scopeado por negocio, cada uno tiene su propio cliente.
+    const telegramEmail = `telegram_${state.businessId}_${chatId}@localb.bot`;
     let client = await prisma.user.findUnique({ where: { email: telegramEmail } });
 
     if (!client) {

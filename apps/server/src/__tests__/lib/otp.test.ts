@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
     connection: {
       deleteMany: vi.fn(),
       create: vi.fn(),
@@ -28,6 +30,10 @@ describe('lib/otp', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storedConfig = null;
+    // verifyOtp corre dentro de prisma.$transaction con un advisory lock: el
+    // mock ejecuta el callback con el mismo prisma mockeado como "tx".
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.$executeRaw).mockResolvedValue(0);
     mock(prisma.connection.deleteMany).mockResolvedValue({ count: 0 });
     mock(prisma.connection.create).mockImplementation(async (args: { data: { config: Record<string, unknown> } }) => {
       storedConfig = args.data.config;

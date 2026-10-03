@@ -167,10 +167,18 @@ router.post(
       });
 
       for (const item of data.items) {
-        await tx.product.update({
-          where: { id: item.productId },
+        // Descuento con guarda atómica: solo descuenta si hay stock suficiente
+        // (y el producto es del negocio). Evita vender en negativo / sobreventa
+        // con pedidos concurrentes. Si no afecta exactamente 1 fila, abortamos
+        // la transacción (rollback del pedido y la transacción de venta).
+        const updated = await tx.product.updateMany({
+          where: { id: item.productId, businessId, stock: { gte: item.quantity } },
           data: { stock: { decrement: item.quantity } },
         });
+        if (updated.count !== 1) {
+          const p = products.find((pp) => pp.id === item.productId);
+          throw new AppError(409, `Stock insuficiente para ${p?.name ?? 'el producto'}`);
+        }
       }
 
       // Registra la clave para deduplicar futuros reintentos.

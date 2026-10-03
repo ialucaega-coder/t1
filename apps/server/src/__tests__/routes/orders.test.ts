@@ -9,7 +9,7 @@ import request from 'supertest';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    product: { findMany: vi.fn(), update: vi.fn() },
+    product: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     user: { findFirst: vi.fn() },
     order: { create: vi.fn(), findFirst: vi.fn() },
     transaction: { create: vi.fn() },
@@ -62,6 +62,8 @@ describe('routes/orders — POST / (idempotencia)', () => {
     mock(prisma.$executeRaw).mockResolvedValue(undefined);
     mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
     mock(prisma.product.update).mockResolvedValue({});
+    // Guarda de stock: por defecto el descuento afecta 1 fila (hay stock).
+    mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
   });
 
   it('crea un pedido normalmente sin Idempotency-Key', async () => {
