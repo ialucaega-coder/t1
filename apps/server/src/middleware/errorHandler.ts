@@ -48,6 +48,20 @@ function handlePrismaError(err: Prisma.PrismaClientKnownRequestError, res: Respo
     case 'P2014':
       res.status(400).json({ error: 'La operación viola una relación requerida entre registros' });
       return;
+    case 'P2021': // la tabla no existe en la DB
+    case 'P2022': {
+      // La columna no existe en la DB: el cliente Prisma espera un
+      // campo que la base real no tiene → desfase schema↔DB por una migración
+      // sin aplicar (ej.: falta `prisma migrate deploy`). Es un problema de
+      // despliegue, no del request, así que 500 con mensaje claro en vez de
+      // enmascararlo como un 400 genérico. Se reporta a Sentry para alertarlo.
+      console.error('Prisma schema/DB drift:', err.code, err.meta);
+      Sentry.captureException(err);
+      res.status(500).json({
+        error: 'La base de datos no está actualizada (falta aplicar una migración). Contactá al administrador.',
+      });
+      return;
+    }
     default:
       res.status(400).json({ error: 'Error al procesar la solicitud en la base de datos' });
       return;
