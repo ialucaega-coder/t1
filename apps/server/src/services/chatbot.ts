@@ -103,11 +103,9 @@ function detectIntent(message: string): ChatIntent {
  * prompt personalizado guardado (BusinessSettings, futuro), se debería
  * usar ese en vez de este genérico.
  */
-async function buildSystemPrompt(businessId: string): Promise<string> {
+async function buildSystemPrompt(businessId: string, superpowers: Set<string>): Promise<string> {
   const business = await prisma.business.findUnique({ where: { id: businessId } });
   const businessName = business?.name || 'el negocio';
-
-  const superpowers = await getActiveSuperpowers(businessId);
 
   const lines = [
     `Sos el asistente virtual de "${businessName}". Respondé de forma breve, cálida y profesional.`,
@@ -299,6 +297,11 @@ export async function processMessage(
 
   const dbHistory = options.history || await loadHistory(conversation.id);
 
+  // Superpoderes del negocio: se consultan UNA sola vez por mensaje y se reusan
+  // (antes se consultaban hasta 3 veces: en buildSystemPrompt, en el gate de
+  // imágenes y al final — multiplicaba queries a DB y latencia en el hot-path).
+  const superpowers = await getActiveSuperpowers(businessId);
+
   let responseText: string;
   let actions: ChatAction[] = [];
 
@@ -333,7 +336,7 @@ export async function processMessage(
     responseText = result.text;
     actions = result.actions;
   } else {
-    let systemPrompt = await buildSystemPrompt(businessId);
+    let systemPrompt = await buildSystemPrompt(businessId, superpowers);
     if (options.systemPromptExtra?.trim()) {
       systemPrompt += '\n\n' + options.systemPromptExtra.trim();
     }
@@ -360,9 +363,8 @@ export async function processMessage(
     // activo para el negocio. Si no, se ignoran (aunque hayan venido en options).
     // Evitamos la consulta extra a la DB cuando el mensaje no trae imágenes.
     let images: ImageInput[] | undefined;
-    if (options.images?.length) {
-      const activeSuperpowers = await getActiveSuperpowers(businessId);
-      if (activeSuperpowers.has('Oído y vista')) images = options.images;
+    if (options.images?.length && superpowers.has('Oído y vista')) {
+      images = options.images;
     }
 
     try {
@@ -399,8 +401,6 @@ export async function processMessage(
     });
   } catch {}
 
-
-  const superpowers = await getActiveSuperpowers(businessId);
 
   if (superpowers.has('Vigilante')) {
     analyzeConversationSentiment(businessId, conversation.id, clientMessage).catch(() => {});
