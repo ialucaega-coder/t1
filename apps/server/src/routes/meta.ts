@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
+import { encrypt } from '../lib/crypto';
 import { processMessage, getActiveSuperpowers, type ChatChannel } from '../services/chatbot';
 import {
   isConfigured,
@@ -213,7 +214,10 @@ router.post(
     }
 
     const config = {
-      pageAccessToken,
+      // El Page Access Token (permite publicar/responder como la página de
+      // FB/IG del negocio) se guarda CIFRADO en reposo. Se descifra al usarlo
+      // en services/meta/client.ts (resolveBusinessByRecipient).
+      pageAccessToken: encrypt(pageAccessToken),
       ...(pageId ? { pageId } : {}),
       ...(igId ? { igId } : {}),
       pageName: pageName || label,

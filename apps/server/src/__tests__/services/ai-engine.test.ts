@@ -16,6 +16,7 @@ vi.mock('../../services/ai/factory', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
+import { safeDecrypt } from '../../lib/crypto';
 import { getDefaultAIProvider } from '../../services/ai/factory';
 import { AI_ENGINES, getEngineById, DEFAULT_ENGINE_ID } from '../../services/ai/catalog';
 import {
@@ -84,7 +85,9 @@ describe('engine config', () => {
     mock(prisma.connection.update).mockResolvedValue({ id: 'c1' });
 
     const withKey = await setEngineKey(biz, 'openai', 'sk-propia');
-    expect(withKey.keys.openai).toBe('sk-propia');
+    // La key se guarda CIFRADA en reposo (no en texto plano) y descifra a la original.
+    expect(withKey.keys.openai).not.toBe('sk-propia');
+    expect(safeDecrypt(withKey.keys.openai!)).toBe('sk-propia');
 
     mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1', config: withKey });
     const cleared = await setEngineKey(biz, 'openai', '');

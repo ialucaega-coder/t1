@@ -13,6 +13,7 @@
  */
 import crypto from 'crypto';
 import { prisma } from '../../lib/prisma';
+import { safeDecrypt } from '../../lib/crypto';
 import type { ImageInput } from '../ai';
 
 /** Plataforma concreta dentro del ecosistema Meta. */
@@ -167,7 +168,9 @@ export async function resolveBusinessByRecipient(
     const matches = cfg.pageId === id || cfg.igId === id;
     if (!matches) continue;
 
-    const pageAccessToken = typeof cfg.pageAccessToken === 'string' ? cfg.pageAccessToken : '';
+    // safeDecrypt: el token se guarda cifrado; si es legado en texto plano, pasa
+    // tal cual (migración perezosa). Downstream (sendMessage) recibe el plano.
+    const pageAccessToken = typeof cfg.pageAccessToken === 'string' ? safeDecrypt(cfg.pageAccessToken) : '';
     if (!pageAccessToken) return null;
 
     let botId = typeof cfg.botId === 'string' ? cfg.botId : '';

@@ -17,6 +17,7 @@ import { getDefaultAIProvider } from './factory';
 import { AI_ENGINES, DEFAULT_ENGINE_ID, getEngineById, type AIEngine, type ProviderFamily } from './catalog';
 import { prisma } from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
+import { encrypt, safeDecrypt } from '../../lib/crypto';
 
 const CONNECTION_TYPE = 'AI_ENGINE';
 
@@ -105,7 +106,10 @@ export async function setActiveEngine(businessId: string, engineId: string): Pro
 export async function setEngineKey(businessId: string, provider: ProviderFamily, apiKey: string): Promise<EngineConfig> {
   return upsertConfig(businessId, (cfg) => {
     const keys = { ...cfg.keys };
-    if (apiKey && apiKey.trim()) keys[provider] = apiKey.trim();
+    // La API key del proveedor de IA del negocio se guarda CIFRADA en reposo
+    // (antes quedaba en texto plano en Connection.config; un dump de DB exponía
+    // las keys de todos los negocios). Se descifra al resolverla (resolveKey).
+    if (apiKey && apiKey.trim()) keys[provider] = encrypt(apiKey.trim());
     else delete keys[provider];
     return { ...cfg, keys };
   });
@@ -114,7 +118,9 @@ export async function setEngineKey(businessId: string, provider: ProviderFamily,
 /** Resuelve la key efectiva para un motor: propia > relay (env) > local. */
 function resolveKey(engine: AIEngine, cfg: EngineConfig): string | null {
   const own = cfg.keys[engine.provider];
-  if (own) return own;
+  // safeDecrypt: descifra la key propia; si es un valor legado en texto plano,
+  // lo devuelve tal cual (migración perezosa — se re-cifra al re-guardarse).
+  if (own) return safeDecrypt(own);
   if (engine.keyEnv && process.env[engine.keyEnv]) return process.env[engine.keyEnv] as string;
   if (engine.keyless) return 'local'; // Ollama/LM Studio ignoran la key
   return null;
