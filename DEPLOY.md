@@ -19,10 +19,33 @@ sección detallada más abajo.
 
 1. **Mergear la rama.** Abrir el PR `fix/dev-cors-autoport` → `main` (cuerpo en
    `PR_BODY.md`), esperar CI verde y mergear.
-2. **Base de datos (una vez por entorno).** Contra `DIRECT_URL`:
-   `npx prisma migrate resolve --applied 0_init` y luego `npx prisma migrate deploy`
-   (aplica `add_two_factor`). Ver §3 "Base de datos y migraciones". ⚠️ No correr
-   `migrate dev` contra la base existente.
+2. **Base de datos (una vez por entorno).** La base real de Supabase se construyó
+   con `prisma db push`, así que **ya tiene todas las tablas**. Por eso
+   `prisma migrate deploy` **solo** (sin preparar) **FALLA**: intenta aplicar la
+   baseline `0_init` y Postgres corta con `ERROR: type "Role" already exists`
+   (Prisma `P3018`, SQLSTATE `42710`). Estos comandos los corre **el USUARIO**
+   (DB de producción), **no** un agente/CI automático. Secuencia CORRECTA, en
+   este orden, contra `DIRECT_URL` (puerto directo, no el pooler) y desde la raíz
+   del repo:
+
+   ```bash
+   # a) Marcar la baseline como YA aplicada — NO ejecuta su SQL (las tablas ya existen).
+   npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma
+
+   # b) Aplicar SOLO las migraciones pendientes (add_two_factor y futuras).
+   npx prisma migrate deploy --schema=prisma/schema.prisma
+   ```
+
+   - **Error esperado + recuperación:** si ejecutás el paso (b) **sin** el (a),
+     vas a ver `type "Role" already exists` (`P3018`/`42710`) y la migración
+     `0_init` quedará marcada como *failed*. Para recuperarte: corré
+     `npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma`
+     (la marca como aplicada sin correr el SQL) y volvé a correr
+     `npx prisma migrate deploy`. No hace falta tocar datos: `0_init` nunca llegó
+     a ejecutar nada sobre la base existente.
+   - Detalle completo en §3 "Base de datos y migraciones". ⚠️ **No** correr
+     `migrate dev` / `db:migrate` contra la base existente (detecta "drift" y
+     puede **resetear datos**).
 3. **Secrets del backend** (Cloud Run / Secret Manager): `DATABASE_URL`,
    `DIRECT_URL`, `NEXTAUTH_SECRET`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY` (o el
    proveedor IA elegido), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`,
@@ -191,9 +214,16 @@ El esquema vive en `prisma/schema.prisma`. Ya existe la **migración baseline
 versionada** en `prisma/migrations/0_init/` (generada desde el schema actual con
 `prisma migrate diff --from-empty`, representa TODO el esquema vigente).
 
-> ⚠️ **La base ya tiene las tablas** (se venían creando con `db push`). Por eso
+> ⚠️ **La base ya tiene las tablas** (se construyó con `db push`). Por eso
 > NO corras `db:migrate`/`migrate dev` contra una base existente: detectaría
 > "drift" y podría **resetear datos**. Hay que **baselinar** una sola vez.
+>
+> ⚠️ **Y por eso `migrate deploy` SOLO (sin baselinar primero) FALLA:** intenta
+> aplicar `0_init` sobre tablas que ya existen y Postgres corta con
+> `ERROR: type "Role" already exists` (Prisma `P3018`, SQLSTATE `42710`),
+> dejando `0_init` marcada como *failed*. Hay que correr el `resolve` **antes**.
+> En una DB de producción estos comandos los ejecuta **el usuario** (no un
+> agente/CI automático).
 
 **Adopción de migraciones sobre una base EXISTENTE (baseline, no destructivo):**
 
@@ -203,8 +233,14 @@ versionada** en `prisma/migrations/0_init/` (generada desde el schema actual con
 npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma
 
 # 2) De ahí en más, en cada deploy aplicar migraciones pendientes (idempotente):
-npm run db:migrate:deploy
+#    aplica add_two_factor y cualquier migración futura.
+npm run db:migrate:deploy   # = prisma migrate deploy --schema=prisma/schema.prisma
 ```
+
+> **Recuperación si ya corriste `deploy` sin baselinar** (viste el error
+> `type "Role" already exists`): corré el paso 1 (`migrate resolve --applied
+> 0_init`) y volvé a correr el paso 2. `0_init` no llegó a ejecutar SQL sobre la
+> base, así que no hay datos que reparar.
 
 **Base NUEVA/vacía (ej. staging desde cero):** `npm run db:migrate:deploy` aplica
 `0_init` directamente (crea todo el esquema).
