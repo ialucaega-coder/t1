@@ -3,13 +3,21 @@ import type { Redis } from 'ioredis';
 import { getRedis } from '../lib/redis';
 
 const windowMs = 15 * 60 * 1000;
-const maxRequests = 100;
+// Tope de la API general. 100/15min era muy bajo para un dashboard SPA (una
+// sesión normal lo supera y empieza a recibir 429). 300/15min da margen sin
+// dejar de frenar abuso masivo.
+const maxRequests = 300;
 const authMaxRequests = 10;
 
 const hits = new Map<string, { count: number; resetAt: number }>();
 
-function getKey(req: Request): string {
-  return req.ip || req.socket.remoteAddress || 'unknown';
+// La clave incluye un NAMESPACE para que los límites de auth y de API no
+// compartan el mismo contador: antes ambos usaban solo la IP, así que ~10
+// requests de API bloqueaban el login (y cada request de auth contaba doble,
+// porque pasa por el limitador global y por el de /auth).
+function getKey(req: Request, namespace: string): string {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  return `${namespace}:${ip}`;
 }
 
 const TOO_MANY = { error: 'Too many requests. Try again later.' };
@@ -19,11 +27,11 @@ const TOO_MANY = { error: 'Too many requests. Try again later.' };
  * sola instancia. El conteo vive en el proceso, por eso no sirve si hay varias
  * réplicas detrás de un balanceador (para eso está el modo Redis).
  */
-function inMemoryRateLimit(max: number) {
+function inMemoryRateLimit(max: number, namespace: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (process.env.NODE_ENV === 'development') return next();
 
-    const key = getKey(req);
+    const key = getKey(req, namespace);
     const now = Date.now();
     const entry = hits.get(key);
 
@@ -69,7 +77,7 @@ export async function redisAllow(client: Redis, key: string, max: number, ttlMs:
  * falla, degrada FAIL-OPEN (permite la petición) para no tumbar la API por un
  * problema de infraestructura del limitador.
  */
-function redisRateLimit(max: number) {
+function redisRateLimit(max: number, namespace: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (process.env.NODE_ENV === 'development') return next();
 
@@ -77,7 +85,7 @@ function redisRateLimit(max: number) {
     if (!client) return next(); // REDIS_URL se quitó en caliente: no bloqueamos.
 
     try {
-      const allowed = await redisAllow(client, `rl:${getKey(req)}`, max, windowMs);
+      const allowed = await redisAllow(client, `rl:${getKey(req, namespace)}`, max, windowMs);
       if (!allowed) {
         res.status(429).json(TOO_MANY);
         return;
@@ -94,12 +102,14 @@ function redisRateLimit(max: number) {
  * Construye el middleware de rate limiting. Usa Redis si REDIS_URL está
  * configurada (escalado multi-instancia), o el fallback in-memory si no.
  */
-export function rateLimit(max = maxRequests) {
-  return getRedis() ? redisRateLimit(max) : inMemoryRateLimit(max);
+export function rateLimit(max = maxRequests, namespace = 'api') {
+  return getRedis() ? redisRateLimit(max, namespace) : inMemoryRateLimit(max, namespace);
 }
 
-export const authRateLimit = rateLimit(authMaxRequests);
-export const apiRateLimit = rateLimit(maxRequests);
+// Buckets separados: 'auth' (login/register, estricto) y 'api' (resto). Así un
+// uso normal de la API no consume el cupo de autenticación ni al revés.
+export const authRateLimit = rateLimit(authMaxRequests, 'auth');
+export const apiRateLimit = rateLimit(maxRequests, 'api');
 
 // Limpieza periódica del mapa in-memory (no aplica al modo Redis, que usa TTL).
 setInterval(() => {

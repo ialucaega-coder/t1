@@ -187,11 +187,19 @@ app.use(sanitizeRequest);
 app.use(issueCsrfToken);
 app.use(csrfProtection);
 
-// El webhook entrante de ManyChat llega desde IPs compartidas de ManyChat; el
-// límite global por IP lo cortaría para todos los negocios. Queda fuera del
-// global y tiene su propio límite por negocio/suscriptor dentro de la ruta.
+// Webhooks de terceros: llegan desde IPs compartidas (ManyChat, Telegram, Meta,
+// Stripe, Twilio), así que el límite global POR IP los cortaría para todos los
+// negocios. Quedan fuera del límite global — ya están protegidos por su propia
+// firma/token (y ManyChat tiene además su rate limit por negocio/suscriptor).
+const RATE_LIMIT_EXEMPT_PREFIXES = [
+  '/api/manychat/webhook',
+  '/api/telegram/webhook',
+  '/api/meta/webhook',
+  '/api/billing/webhook',
+  '/api/voice/incoming',
+];
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/manychat/webhook')) return next();
+  if (RATE_LIMIT_EXEMPT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
   return apiRateLimit(req, res, next);
 });
 app.use(auditRateLimitViolations);
