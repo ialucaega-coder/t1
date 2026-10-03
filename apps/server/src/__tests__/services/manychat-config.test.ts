@@ -14,7 +14,14 @@ vi.mock('../../lib/prisma', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
-import { getMcStatus, saveMcConfig, loadMcConfig, disconnectMc } from '../../services/manychat/config';
+import {
+  getMcStatus,
+  saveMcConfig,
+  loadMcConfig,
+  disconnectMc,
+  verifyMcWebhookToken,
+  regenerateMcWebhookToken,
+} from '../../services/manychat/config';
 import { encrypt } from '../../lib/crypto';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -76,5 +83,63 @@ describe('services/manychat/config', () => {
     expect(prisma.connection.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { config: {}, isActive: false } })
     );
+  });
+
+  it('getMcStatus: expone el webhookToken cuando existe', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({
+      config: { apiKeyEnc: encrypt('t'), enabled: true, webhookToken: 'tok_abc' },
+    });
+    const status = await getMcStatus('biz_1');
+    expect(status).toEqual({ connected: true, enabled: true, webhookToken: 'tok_abc' });
+  });
+
+  it('saveMcConfig: genera un webhookToken al conectar', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    mock(prisma.connection.create).mockResolvedValue({ id: 'c1' });
+    mock(prisma.connection.findUnique).mockResolvedValue({ config: {} });
+
+    await saveMcConfig('biz_1', { apiKey: 'mc_secreto' });
+
+    const data = mock(prisma.connection.update).mock.calls[0][0].data.config;
+    expect(typeof data.webhookToken).toBe('string');
+    expect(data.webhookToken.length).toBeGreaterThan(10);
+  });
+
+  it('saveMcConfig: no regenera el webhookToken si ya existe', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(prisma.connection.findUnique).mockResolvedValue({ config: { apiKeyEnc: encrypt('t'), webhookToken: 'ya_existe' } });
+    await saveMcConfig('biz_1', { apiKey: 'nueva_key' });
+    const data = mock(prisma.connection.update).mock.calls[0][0].data.config;
+    expect(data.webhookToken).toBe('ya_existe');
+  });
+
+  it('verifyMcWebhookToken: true solo si coincide', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ config: { apiKeyEnc: encrypt('t'), webhookToken: 'secreto123' } });
+    expect(await verifyMcWebhookToken('biz_1', 'secreto123')).toBe(true);
+    expect(await verifyMcWebhookToken('biz_1', 'otro')).toBe(false);
+    expect(await verifyMcWebhookToken('biz_1', undefined)).toBe(false);
+  });
+
+  it('verifyMcWebhookToken: false si no hay token guardado', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ config: { apiKeyEnc: encrypt('t') } });
+    expect(await verifyMcWebhookToken('biz_1', 'cualquiera')).toBe(false);
+  });
+
+  it('regenerateMcWebhookToken: rota el token si está conectado', async () => {
+    mock(prisma.connection.findFirst)
+      .mockResolvedValueOnce({ id: 'c1' }) // dentro de la transacción
+      .mockResolvedValueOnce({ config: { apiKeyEnc: encrypt('t'), enabled: true, webhookToken: 'nuevo' } }); // getMcStatus final
+    mock(prisma.connection.findUnique).mockResolvedValue({ config: { apiKeyEnc: encrypt('t'), webhookToken: 'viejo' } });
+
+    const status = await regenerateMcWebhookToken('biz_1');
+    const data = mock(prisma.connection.update).mock.calls[0][0].data.config;
+    expect(data.webhookToken).not.toBe('viejo');
+    expect(typeof data.webhookToken).toBe('string');
+    expect(status.connected).toBe(true);
+  });
+
+  it('regenerateMcWebhookToken: lanza si no está conectado', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    await expect(regenerateMcWebhookToken('biz_1')).rejects.toThrow();
   });
 });

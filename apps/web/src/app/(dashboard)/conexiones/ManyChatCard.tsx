@@ -7,12 +7,18 @@ import {
   XCircle,
   Loader2,
   ExternalLink,
+  Copy,
+  Check,
+  RefreshCw,
 } from 'lucide-react';
 import { useToast } from '@/components/common/Toast';
+import { useAuth } from '@/lib/auth-context';
+import { API_URL } from '@/lib/api/http-client';
 import {
   getMcStatus,
   connectMc,
   disconnectMc,
+  regenerateMcToken,
   type McStatus,
 } from '@/lib/api/manychat';
 
@@ -23,14 +29,40 @@ import {
 
 export function ManyChatCard() {
   const { toast } = useToast();
+  const { business } = useAuth();
 
   const [status, setStatus] = useState<McStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [apiKey, setApiKey] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [copied, setCopied] = useState<'url' | 'token' | null>(null);
 
   const isConnected = status?.connected ?? false;
+
+  // URL pública que ManyChat debe llamar (External Request). API_URL ya termina
+  // en /api, así que sumamos la ruta del webhook con el id del negocio.
+  const webhookUrl = business?.id ? `${API_URL}/manychat/webhook/${business.id}` : '';
+
+  const copy = (value: string, which: 'url' | 'token') => {
+    if (!value) return;
+    navigator.clipboard.writeText(value);
+    setCopied(which);
+    setTimeout(() => setCopied((c) => (c === which ? null : c)), 2000);
+  };
+
+  const handleRegenerate = async () => {
+    setIsRegenerating(true);
+    try {
+      const newStatus = await regenerateMcToken();
+      setStatus(newStatus);
+      toast({ type: 'success', message: 'Token del webhook regenerado' });
+    } catch {
+      toast({ type: 'error', message: 'No se pudo regenerar el token' });
+    }
+    setIsRegenerating(false);
+  };
 
   const loadStatus = useCallback(async () => {
     try {
@@ -150,6 +182,51 @@ export function ManyChatCard() {
               Tus flujos de ManyChat ya pueden integrarse con el bot
             </p>
           </div>
+
+          {/* Webhook entrante: convierte a ManyChat en un canal real del bot.
+              El usuario configura en ManyChat una acción "External Request" con
+              esta URL (POST) y el token como header x-webhook-token. */}
+          {status?.webhookToken && (
+            <div className="bg-surface-100 rounded-lg p-4 space-y-3">
+              <div>
+                <p className="text-sm text-white font-medium">Webhook entrante (canal bidireccional)</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  En ManyChat creá una acción <span className="text-slate-300">External Request</span> (POST) con esta URL y el token.
+                  Las respuestas del bot vuelven en formato Dynamic Block.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">URL del webhook</label>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2">
+                  <code className="flex-1 text-xs text-slate-200 break-all">{webhookUrl}</code>
+                  <button onClick={() => copy(webhookUrl, 'url')} className="text-slate-400 hover:text-white transition shrink-0" title="Copiar URL" type="button">
+                    {copied === 'url' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Token (header <code>x-webhook-token</code>)</label>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2">
+                  <code className="flex-1 text-xs text-slate-200 break-all">{status.webhookToken}</code>
+                  <button onClick={() => copy(status.webhookToken!, 'token')} className="text-slate-400 hover:text-white transition shrink-0" title="Copiar token" type="button">
+                    {copied === 'token' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={handleRegenerate}
+                disabled={isRegenerating}
+                type="button"
+                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition disabled:opacity-50"
+              >
+                {isRegenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                Regenerar token
+              </button>
+            </div>
+          )}
 
           <button
             onClick={handleDisconnect}

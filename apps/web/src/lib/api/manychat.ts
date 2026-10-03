@@ -7,6 +7,8 @@ import { httpClient } from './http-client';
 export interface McStatus {
   connected: boolean;
   enabled: boolean;
+  // Token del webhook entrante (lo muestra el panel para pegarlo en ManyChat).
+  webhookToken?: string;
 }
 
 // Devuelve el estado actual de la conexión con ManyChat.
@@ -23,4 +25,9 @@ export function connectMc(apiKey: string) {
 // Desconecta ManyChat.
 export function disconnectMc() {
   return httpClient.post<McStatus>('/manychat/disconnect', {});
+}
+
+// Regenera el token del webhook entrante (invalida el anterior).
+export function regenerateMcToken() {
+  return httpClient.post<McStatus>('/manychat/regenerate-token', {});
 }
