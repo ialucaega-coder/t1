@@ -13,8 +13,11 @@ import type { Request, Response, NextFunction } from 'express';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
     business: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       update: vi.fn(),
     },
   },
@@ -72,6 +75,11 @@ describe('routes/whitelabel', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // El PATCH envuelve el update en una transacción con advisory lock (unicidad
+    // de número); el mock ejecuta el callback con el prisma mockeado como tx.
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.$executeRaw).mockResolvedValue(0);
+    mock(prisma.business.findFirst).mockResolvedValue(null); // por defecto, número libre
   });
 
   describe('GET /api/whitelabel', () => {
@@ -103,6 +111,23 @@ describe('routes/whitelabel', () => {
           where: { id: 'biz_1' },
           data: expect.objectContaining({ name: 'Nuevo Nombre', primaryColor: '#000000' }),
         })
+      );
+    });
+
+    it('rechaza (409) un whatsappNumber ya usado por otro negocio', async () => {
+      mock(prisma.business.findFirst).mockResolvedValue({ id: 'otro_biz' }); // número tomado
+      const res = await request(app).patch('/api/whitelabel').send({ name: 'X', whatsappNumber: '+5491122223333' });
+      expect(res.status).toBe(409);
+      expect(prisma.business.update).not.toHaveBeenCalled();
+    });
+
+    it('permite guardar un número libre (no tomado por otro negocio)', async () => {
+      mock(prisma.business.findFirst).mockResolvedValue(null);
+      mock(prisma.business.update).mockResolvedValue({ ...businessRow, whatsappNumber: '+5491122223333' });
+      const res = await request(app).patch('/api/whitelabel').send({ name: 'X', whatsappNumber: '+5491122223333' });
+      expect(res.status).toBe(200);
+      expect(prisma.business.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: { not: 'biz_1' } }) })
       );
     });
 

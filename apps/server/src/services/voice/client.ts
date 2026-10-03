@@ -67,6 +67,8 @@ export async function resolveBusinessByNumber(toNumber: string): Promise<string 
         isActive: true,
         OR: [{ phone: normalized }, { whatsappNumber: normalized }],
       },
+      // Determinista: el negocio más antiguo gana si hubiera un número repetido.
+      orderBy: { createdAt: 'asc' },
       select: { id: true },
     });
     if (byPhone) return byPhone.id;

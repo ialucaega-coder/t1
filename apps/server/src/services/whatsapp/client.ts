@@ -95,6 +95,10 @@ export async function resolveBusinessByNumber(toNumber: string): Promise<Resolve
         OR: [{ phone: normalized }, { whatsappNumber: normalized }],
       },
     },
+    // Orden determinista: si por un dato viejo dos negocios comparten el número,
+    // gana siempre el más antiguo (en vez de uno arbitrario). La unicidad al
+    // guardar (routes/whitelabel) evita que se creen nuevos duplicados.
+    orderBy: { createdAt: 'asc' },
     select: { id: true, businessId: true },
   });
 
