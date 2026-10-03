@@ -53,10 +53,18 @@ beforeEach(() => vi.clearAllMocks());
 describe('routes/manychat', () => {
   const app = buildApp();
 
-  it('GET /status devuelve el estado', async () => {
-    mock(getMcStatus).mockResolvedValue({ connected: true, enabled: true });
+  it('GET /status devuelve el estado (ADMIN ve el webhookToken)', async () => {
+    mock(getMcStatus).mockResolvedValue({ connected: true, enabled: true, webhookToken: 'tok_secreto' });
     const res = await request(app).get('/api/manychat/status').set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
+    expect(res.body).toEqual({ connected: true, enabled: true, webhookToken: 'tok_secreto' });
+  });
+
+  it('GET /status oculta el webhookToken a roles no-ADMIN', async () => {
+    mock(getMcStatus).mockResolvedValue({ connected: true, enabled: true, webhookToken: 'tok_secreto' });
+    const res = await request(app).get('/api/manychat/status').set('Authorization', `Bearer ${userToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.webhookToken).toBeUndefined();
     expect(res.body).toEqual({ connected: true, enabled: true });
   });
 
@@ -107,8 +115,8 @@ describe('routes/manychat', () => {
     expect(res.body.webhookToken).toBe('nuevo_tok');
   });
 
-  it('POST /regenerate-token da 400 si no está conectado', async () => {
-    mock(regenerateMcWebhookToken).mockRejectedValue(new Error('ManyChat no está conectado'));
+  it('POST /regenerate-token da 400 si no está conectado (null)', async () => {
+    mock(regenerateMcWebhookToken).mockResolvedValue(null);
     const res = await request(app).post('/api/manychat/regenerate-token').set('Authorization', `Bearer ${adminToken}`).send();
     expect(res.status).toBe(400);
   });
@@ -142,17 +150,54 @@ describe('routes/manychat — webhook entrante', () => {
     expect(processMessage).toHaveBeenCalledWith('biz_1', 'hola', 'MESSENGER', expect.objectContaining({ contactName: 'Ana' }));
   });
 
-  it('acepta el token por query string', async () => {
+  it('extrae last_input_text y user_id numérico (header)', async () => {
     mock(verifyMcWebhookToken).mockResolvedValue(true);
     mock(processMessage).mockResolvedValue({ text: 'ok', intent: 'FAQ', actions: [], conversationId: 'c1' });
 
     const res = await request(app)
-      .post('/api/manychat/webhook/biz_1?token=tok_q')
+      .post('/api/manychat/webhook/biz_hdr')
+      .set('x-webhook-token', 'tok_ok')
       .send({ last_input_text: 'consulta', user_id: 42 });
 
     expect(res.status).toBe(200);
-    expect(verifyMcWebhookToken).toHaveBeenCalledWith('biz_1', 'tok_q');
-    expect(processMessage).toHaveBeenCalledWith('biz_1', 'consulta', 'MESSENGER', expect.objectContaining({ contactName: 'ManyChat 42' }));
+    expect(processMessage).toHaveBeenCalledWith(
+      'biz_hdr',
+      'consulta',
+      'MESSENGER',
+      expect.objectContaining({ contactName: 'ManyChat 42', subscriberId: '42' }),
+    );
+  });
+
+  it('ignora el token en query string (solo acepta header)', async () => {
+    mock(verifyMcWebhookToken).mockResolvedValue(false); // undefined token → inválido
+    const res = await request(app)
+      .post('/api/manychat/webhook/biz_1?token=tok_q')
+      .send({ text: 'hola' });
+
+    expect(res.status).toBe(401);
+    // Se verifica con el token del header (ausente = undefined), nunca el de query.
+    expect(verifyMcWebhookToken).toHaveBeenCalledWith('biz_1', undefined);
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it('frena por rate limit respondiendo cortesía (no 429)', async () => {
+    mock(verifyMcWebhookToken).mockResolvedValue(true);
+    mock(processMessage).mockResolvedValue({ text: 'ok', intent: 'FAQ', actions: [], conversationId: 'c1' });
+
+    // El tope por suscriptor es 15/min: el 16º mensaje del mismo suscriptor
+    // debe responder cortesía (200) sin llamar al chatbot.
+    const send = () => request(app)
+      .post('/api/manychat/webhook/biz_rl')
+      .set('x-webhook-token', 'tok_ok')
+      .send({ text: 'hola', subscriberId: 'sub_rl' });
+
+    for (let i = 0; i < 15; i++) await send();
+    const blocked = await send();
+
+    expect(blocked.status).toBe(200);
+    expect(blocked.body.version).toBe('v2');
+    expect(blocked.body.content.messages[0].text).toContain('muchos mensajes');
+    expect(mock(processMessage).mock.calls.length).toBe(15);
   });
 
   it('rechaza token inválido con 401 y no llama al chatbot', async () => {

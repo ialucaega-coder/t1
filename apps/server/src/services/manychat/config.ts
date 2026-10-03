@@ -16,9 +16,10 @@ const MC_CONNECTION_NAME = 'ManyChat';
 interface StoredMcConfig {
   apiKeyEnc?: string;
   enabled?: boolean;
-  // Token del webhook entrante: secreto compartido que ManyChat debe enviar
-  // (header o query) para que aceptemos sus mensajes. Se genera al conectar.
-  webhookToken?: string;
+  // Token del webhook entrante (CIFRADO en reposo, igual que la API key):
+  // secreto compartido que ManyChat debe enviar en el header `x-webhook-token`
+  // para que aceptemos sus mensajes. Se genera al conectar.
+  webhookTokenEnc?: string;
 }
 
 /** Estado seguro para el panel: nunca expone la API key. */
@@ -53,10 +54,18 @@ export async function getMcStatus(businessId: string): Promise<McStatus> {
     select: { config: true },
   });
   const cfg = parse(conn?.config);
+  let webhookToken: string | undefined;
+  if (cfg.webhookTokenEnc) {
+    try {
+      webhookToken = decrypt(cfg.webhookTokenEnc);
+    } catch {
+      webhookToken = undefined;
+    }
+  }
   return {
     connected: Boolean(cfg.apiKeyEnc),
     enabled: Boolean(cfg.enabled && cfg.apiKeyEnc),
-    ...(cfg.webhookToken ? { webhookToken: cfg.webhookToken } : {}),
+    ...(webhookToken ? { webhookToken } : {}),
   };
 }
 
@@ -111,7 +120,10 @@ export async function saveMcConfig(
 
     // Al conectar (primera vez) generamos el token del webhook entrante si aún
     // no existe, para que ManyChat pueda mandarnos mensajes de forma autenticada.
-    if (patch.apiKey !== undefined && !next.webhookToken) next.webhookToken = newWebhookToken();
+    // Se guarda cifrado (igual que la API key).
+    if (patch.apiKey !== undefined && !next.webhookTokenEnc) {
+      next.webhookTokenEnc = encrypt(newWebhookToken());
+    }
 
     await tx.connection.update({
       where: { id: conn.id },
@@ -133,8 +145,15 @@ export async function verifyMcWebhookToken(businessId: string, token: string | u
     where: { businessId, type: MC_CONNECTION_TYPE },
     select: { config: true },
   });
-  const stored = parse(conn?.config).webhookToken;
-  if (!stored) return false;
+  const cfg = parse(conn?.config);
+  // Solo aceptamos si la conexión está activa (API key + enabled) y hay token.
+  if (!cfg.apiKeyEnc || !cfg.enabled || !cfg.webhookTokenEnc) return false;
+  let stored: string;
+  try {
+    stored = decrypt(cfg.webhookTokenEnc);
+  } catch {
+    return false;
+  }
   // timingSafeEqual exige buffers del mismo largo; si difieren, no coincide.
   const a = Buffer.from(stored);
   const b = Buffer.from(token);
@@ -147,26 +166,29 @@ export async function verifyMcWebhookToken(businessId: string, token: string | u
 }
 
 /**
- * Regenera el token del webhook (invalida el anterior). Requiere estar conectado.
- * Devuelve el estado actualizado (con el nuevo token).
+ * Regenera el token del webhook (invalida el anterior). Devuelve el estado
+ * actualizado, o `null` si ManyChat no está conectado (para que la ruta responda
+ * 400 sin enmascarar errores reales de DB, que se propagan al errorHandler).
  */
-export async function regenerateMcWebhookToken(businessId: string): Promise<McStatus> {
-  await prisma.$transaction(async (tx) => {
+export async function regenerateMcWebhookToken(businessId: string): Promise<McStatus | null> {
+  const ok = await prisma.$transaction(async (tx) => {
     const conn = await tx.connection.findFirst({
       where: { businessId, type: MC_CONNECTION_TYPE },
       select: { id: true },
     });
-    if (!conn) throw new Error('ManyChat no está conectado');
+    if (!conn) return false;
     await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${conn.id} FOR UPDATE`;
     const fresh = await tx.connection.findUnique({ where: { id: conn.id }, select: { config: true } });
     const next: StoredMcConfig = { ...parse(fresh?.config) };
-    if (!next.apiKeyEnc) throw new Error('ManyChat no está conectado');
-    next.webhookToken = newWebhookToken();
+    if (!next.apiKeyEnc) return false;
+    next.webhookTokenEnc = encrypt(newWebhookToken());
     await tx.connection.update({
       where: { id: conn.id },
       data: { config: next as unknown as object },
     });
+    return true;
   });
+  if (!ok) return null;
   return getMcStatus(businessId);
 }
 

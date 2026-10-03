@@ -185,7 +185,13 @@ app.use(sanitizeRequest);
 app.use(issueCsrfToken);
 app.use(csrfProtection);
 
-app.use(apiRateLimit);
+// El webhook entrante de ManyChat llega desde IPs compartidas de ManyChat; el
+// límite global por IP lo cortaría para todos los negocios. Queda fuera del
+// global y tiene su propio límite por negocio/suscriptor dentro de la ruta.
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/manychat/webhook')) return next();
+  return apiRateLimit(req, res, next);
+});
 app.use(auditRateLimitViolations);
 app.use(auditDataMutations);
 

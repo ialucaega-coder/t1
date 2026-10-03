@@ -55,6 +55,13 @@ export interface ProcessMessageOptions {
   contactName?: string;
   contactPhone?: string;
   /**
+   * Identificador del suscriptor en el canal externo (ej: subscriber_id de
+   * ManyChat). Si viene y no hay conversationId, reusamos la conversación
+   * OPEN más reciente de ese suscriptor para mantener el historial, y lo
+   * guardamos en metadata al crearla. No requiere cambios de schema.
+   */
+  subscriberId?: string;
+  /**
    * Texto extra que se agrega al final del prompt de sistema. Lo usan canales
    * específicos (ej: voz) para inyectar instrucciones propias (personalidad/tono)
    * sin duplicar la lógica de buildSystemPrompt.
@@ -532,6 +539,21 @@ async function getOrCreateConversation(
     if (existing) return existing;
   }
 
+  // Continuidad por suscriptor (canales externos tipo ManyChat): si no vino un
+  // conversationId explícito pero sí un subscriberId, reusamos su conversación
+  // OPEN más reciente en vez de abrir una nueva en cada mensaje.
+  if (!options.conversationId && options.subscriberId) {
+    const prev = await prisma.conversation.findFirst({
+      where: {
+        businessId,
+        status: 'OPEN',
+        metadata: { path: ['subscriberId'], equals: options.subscriberId },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (prev) return prev;
+  }
+
   const botId = options.botId || await getDefaultBotId(businessId);
 
   // Mapa al enum BotChannel del schema (TELEGRAM | WHATSAPP | WEBCHAT | INSTAGRAM).
@@ -556,6 +578,12 @@ async function getOrCreateConversation(
   };
   const realChannel = realChannelMap[channel];
 
+  // metadata guarda el canal real (cuando no tiene enum propio) y el
+  // subscriberId del canal externo, para poder reusar la conversación luego.
+  const metadata: Record<string, string> = {};
+  if (realChannel) metadata.realChannel = realChannel;
+  if (options.subscriberId) metadata.subscriberId = options.subscriberId;
+
   return prisma.conversation.create({
     data: {
       businessId,
@@ -564,7 +592,7 @@ async function getOrCreateConversation(
       contactName: options.contactName,
       contactPhone: options.contactPhone,
       status: 'OPEN',
-      ...(realChannel ? { metadata: { realChannel } } : {}),
+      ...(Object.keys(metadata).length ? { metadata } : {}),
     },
   });
 }
