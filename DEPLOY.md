@@ -213,6 +213,21 @@ npm run db:migrate:deploy
 `npm run db:migrate -- --name <cambio>` en un entorno de desarrollo (usa `DIRECT_URL`,
 no el pooler), la revisás, y se aplica en deploy con `db:migrate:deploy`.
 
+### Integraciones por negocio (Cal.com / MercadoPago / ManyChat)
+
+Las credenciales de los conectores de integración (API key de Cal.com, access token
+de MercadoPago, API key de ManyChat) **no** se cargan por `.env`: son **por negocio**
+y se administran desde el panel de **Conexiones**. Se validan contra el proveedor al
+conectar y se guardan **cifradas** (AES-256-GCM) en la base. Detalle de los endpoints
+en `docs/API.md` → "Integraciones (conectores por negocio)".
+
+> ⚠️ El **webhook entrante de ManyChat** (`POST /api/manychat/webhook/:businessId`)
+> requiere que el server sea **accesible públicamente**: ManyChat lo llama desde
+> afuera en cada mensaje del suscriptor. Asegurate de que la URL pública del backend
+> (la misma de `API_PUBLIC_URL`) sea alcanzable desde internet y usala como base para
+> armar la URL del webhook en la acción "External Request" de ManyChat. El token del
+> webhook se obtiene (y se rota) desde el panel; viaja en el header `x-webhook-token`.
+
 ### Probar la imagen localmente
 
 ```bash

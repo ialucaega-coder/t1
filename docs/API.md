@@ -389,6 +389,85 @@ Salvo el webhook, todas las rutas requieren autenticación **y** rol ADMIN (`rou
 | POST | /api/galeria | Sí | ADMIN | Agrega un ítem a la galería. Body: `url`, `tipo` (`image`/`video`/`audio`), `titulo?`, `descripcion?`. |
 | DELETE | /api/galeria/:itemId | Sí | ADMIN | Elimina un ítem de la galería. |
 
+## Integraciones (conectores por negocio)
+
+Conectores de servicios externos que cada negocio configura desde el panel de **Conexiones**. Comparten el mismo patrón: la credencial se valida contra el proveedor al conectar y se guarda **cifrada** (AES-256-GCM) por negocio en la tabla `Connection` (una fila por `(businessId, type)`); los endpoints de `status` nunca exponen la credencial. Conectar y desconectar requieren rol **ADMIN**; consultar estado y operar (generar links, etc.) basta con estar autenticado.
+
+> Las credenciales de integraciones **no** se cargan por `.env`: son por negocio y se administran desde el panel. Ver `DEPLOY.md`.
+
+### Cal.com (agenda externa) — `/api/calcom`
+
+| Método | Ruta | Auth | Rol | Descripción |
+|--------|------|------|-----|-------------|
+| GET | /api/calcom/status | Sí | — | Estado de la conexión (sin exponer la API key). Devuelve `{ connected, enabled, eventTypeId }`. |
+| GET | /api/calcom/event-types | Sí | — | Lista los tipos de evento de la cuenta conectada (requiere estar conectado). |
+| POST | /api/calcom/connect | Sí | ADMIN | Valida la API key contra Cal.com y la guarda (cifrada). Body: `apiKey`, `eventTypeId?` (entero). |
+| POST | /api/calcom/disconnect | Sí | ADMIN | Borra la conexión. Devuelve `{ connected: false, enabled: false, eventTypeId: null }`. |
+
+### MercadoPago (pagos) — `/api/mercadopago`
+
+| Método | Ruta | Auth | Rol | Descripción |
+|--------|------|------|-----|-------------|
+| GET | /api/mercadopago/status | Sí | — | Estado de la conexión (sin exponer el access token). Devuelve `{ connected, enabled, currency }`. |
+| POST | /api/mercadopago/connect | Sí | ADMIN | Valida el access token contra MercadoPago y lo guarda (cifrado). Body: `accessToken`, `currency?` (código ISO de 3 letras). |
+| POST | /api/mercadopago/disconnect | Sí | ADMIN | Borra la conexión. Devuelve `{ connected: false, enabled: false, currency: "ARS" }`. |
+| POST | /api/mercadopago/payment-link | Sí | — | Genera un link de cobro (preferencia de Checkout Pro). Requiere estar conectado. Body: `amount` (> 0), `description`, `currency?`. Devuelve `{ url, id }`. |
+
+### ManyChat (canal bidireccional) — `/api/manychat`
+
+ManyChat se usa como canal: los mensajes de los suscriptores entran al mismo cerebro del chatbot que el resto de los canales y la respuesta vuelve en formato **Dynamic Block v2**. La integración tiene dos partes: los endpoints de administración (autenticados, para conectar/configurar) y el **webhook entrante público** (autenticado por token compartido) que ManyChat llama en cada mensaje.
+
+#### Endpoints de administración
+
+| Método | Ruta | Auth | Rol | Descripción |
+|--------|------|------|-----|-------------|
+| GET | /api/manychat/status | Sí | — | Estado de la conexión. Devuelve `{ connected, enabled }`; el campo `webhookToken` (secreto para pegar en ManyChat) se incluye **solo para rol ADMIN**. |
+| POST | /api/manychat/connect | Sí | ADMIN | Valida la API key contra ManyChat y la guarda (cifrada); genera el token del webhook entrante en la primera conexión. Body: `apiKey`. |
+| POST | /api/manychat/disconnect | Sí | ADMIN | Borra la conexión. Devuelve `{ connected: false, enabled: false }`. |
+| POST | /api/manychat/regenerate-token | Sí | ADMIN | Rota el token del webhook (invalida el anterior). Responde `400` si ManyChat no está conectado. |
+
+#### Webhook entrante — `POST /api/manychat/webhook/:businessId`
+
+Endpoint **público** (sin `requireAuth`): ManyChat lo llama cuando un suscriptor escribe. Se autentica con el token compartido del negocio.
+
+- **Método y ruta:** `POST /api/manychat/webhook/:businessId`, donde `:businessId` es el ID del negocio. Queda **fuera del rate limit global por IP** (ManyChat llama desde IPs compartidas) y tiene su propio límite por negocio/suscriptor.
+- **Autenticación (por header):** header `x-webhook-token: <token>`, comparado de forma *timing-safe*. El token se obtiene en el panel de Conexiones → ManyChat (campo visible solo para ADMIN) o vía `POST /api/manychat/regenerate-token`. Se usa header (no query) para que el secreto no termine en los access logs. Si el token falta o es inválido, responde `401`. El webhook solo acepta mensajes si la conexión está activa (API key + `enabled`) y existe token.
+- **Body aceptado (tolerante):** ManyChat arma el cuerpo de la "External Request", así que se aceptan los nombres de campo más comunes y se toleran valores `null`/numéricos; las claves desconocidas se descartan. Campos:
+  - **Mensaje** (lo primero no vacío de): `text` | `message` | `last_input_text` (máx. 4000 caracteres).
+  - **Suscriptor** (lo primero no nulo de): `subscriberId` | `subscriber_id` | `user_id` (string o número).
+  - **Nombre** (opcional): `name` | `first_name`.
+  - **Continuidad** (opcional): `conversationId` — para mantener el hilo entre mensajes.
+- **Formato de respuesta (Dynamic Block v2):** siempre `200` con JSON que ManyChat renderiza al suscriptor:
+
+  ```json
+  {
+    "version": "v2",
+    "content": { "messages": [{ "type": "text", "text": "..." }] },
+    "conversationId": "..."
+  }
+  ```
+
+  El campo `conversationId` se incluye solo si hay hilo; ManyChat lo ignora al renderizar, pero una configuración con "External Request" puede mapearlo a un campo del suscriptor para darle continuidad en el próximo mensaje.
+- **Rate limits propios:** 120 mensajes/min por negocio y 15 mensajes/min por suscriptor (ventana de 1 minuto). Al exceder, responde un Dynamic Block de cortesía (no `429`).
+- **Nunca devuelve 400/429/500 a ManyChat** (lo reintentaría): ante body inesperado, falta de texto (p. ej. imagen/sticker), exceso de rate limit o error interno, responde siempre un Dynamic Block de cortesía con `200`. La única excepción es el `401` por token inválido.
+
+#### Cómo configurarlo en ManyChat (acción "External Request")
+
+1. Conectá ManyChat desde el panel (Conexiones → ManyChat) y copiá el **webhook token** (visible para ADMIN en `GET /api/manychat/status`).
+2. En el flujo de ManyChat, agregá una acción **External Request** con:
+   - **Method:** `POST`
+   - **URL:** `https://<URL-pública-del-server>/api/manychat/webhook/<businessId>`
+   - **Header:** `x-webhook-token: <token copiado>`
+   - **Body (JSON):** incluí al menos el texto del suscriptor y su ID, por ejemplo:
+
+     ```json
+     { "text": "{{last input}}", "subscriberId": "{{user id}}", "name": "{{first name}}" }
+     ```
+
+3. Mapeá la respuesta: mostrá `content.messages[0].text` al suscriptor y, si querés continuidad, guardá `conversationId` en un campo personalizado y reenvialo como `conversationId` en la próxima External Request.
+
+> El server debe ser **accesible públicamente** para que ManyChat pueda llamar al webhook. Ver `DEPLOY.md`.
+
 ## Chat y reservas públicas — `/api/public`
 
 Router montado con CORS abierto (`origin: true`, sin credenciales). Ningún endpoint requiere autenticación: son de cara al widget público / cliente final.
