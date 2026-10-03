@@ -52,6 +52,21 @@ const chatSchema = z.object({
   imageUrls: z.array(httpImageUrl).max(4).optional(),
 });
 
+// Validación de la reserva pública (endpoint anónimo). Tipar con zod evita el
+// "type confusion": sin esto, un `phone` como objeto ({"contains":""}) se
+// pasaba a Prisma como operador de filtro (asociaba la reserva a un cliente
+// cualquiera), y un `time` no-string hacía `time.split` → 500.
+const bookSchema = z.object({
+  serviceId: z.string().min(1).max(100),
+  professionalId: z.string().max(100).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}/, 'Fecha inválida (YYYY-MM-DD)'),
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Hora inválida (HH:MM)'),
+  name: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(1).max(30),
+  email: z.string().email().max(200).optional().or(z.literal('')),
+  otp: z.string().max(10).optional(),
+});
+
 router.get('/bot/demo', asyncHandler(async (_req, res) => {
   const bot = await prisma.bot.findFirst({
     where: { status: 'ACTIVE' },
@@ -351,12 +366,15 @@ router.post('/book/:slug/request-otp', asyncHandler(async (req, res) => {
 }));
 
 router.post('/book/:slug', asyncHandler(async (req, res) => {
-  const { serviceId, professionalId: reqProfId, date, time, name, phone, email, otp } = req.body;
-
-    if (!serviceId || !date || !time || !name || !phone) {
-      res.status(400).json({ error: 'Faltan campos obligatorios' });
+    const parsed = bookSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'Datos de reserva inválidos',
+        details: parsed.error.errors.map((e) => ({ field: e.path.join('.'), message: e.message })),
+      });
       return;
     }
+    const { serviceId, professionalId: reqProfId, date, time, name, phone, email, otp } = parsed.data;
 
     const business = await prisma.business.findUnique({
       where: { slug: String(req.params.slug) },
@@ -398,11 +416,18 @@ router.post('/book/:slug', asyncHandler(async (req, res) => {
     });
 
     if (!client) {
+      // User.email es requerido (@unique global). Si el cliente no da email,
+      // generamos uno sintético scopeado por negocio+teléfono (mismo criterio
+      // que Telegram), en vez de null (que fallaba). Un email real que colisione
+      // con otro tenant devuelve 409 vía el errorHandler (P2002), no 500.
+      const clientEmail = email && email.trim()
+        ? email.trim()
+        : `pub_${business.id}_${phone}@clients.localb.invalid`;
       client = await prisma.user.create({
         data: {
           name,
           phone,
-          email: email || null,
+          email: clientEmail,
           role: 'CLIENT',
           businessId: business.id,
           passwordHash: '',

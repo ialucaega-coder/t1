@@ -88,6 +88,18 @@ describe('routes/publicChat — POST /book/:slug', () => {
     expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
+  it('rechaza (400) un phone no-string (type confusion / inyección Prisma)', async () => {
+    const res = await request(app).post('/api/public/book/mi-negocio').send({ ...payload, phone: { contains: '' } });
+    expect(res.status).toBe(400);
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+  });
+
+  it('rechaza (400) un time con formato inválido', async () => {
+    const res = await request(app).post('/api/public/book/mi-negocio').send({ ...payload, time: 'tarde' });
+    expect(res.status).toBe(400);
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+  });
+
   it('rechaza (409) si el turno se solapa con una reserva existente', async () => {
     // Ya hay una reserva 10:00–10:30; el nuevo turno 10:00 se solapa.
     mock(prisma.booking.findMany).mockResolvedValue([{ startTime: '10:00', endTime: '10:30' }]);
