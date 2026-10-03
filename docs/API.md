@@ -468,6 +468,16 @@ Endpoint **público** (sin `requireAuth`): ManyChat lo llama cuando un suscripto
 
 > El server debe ser **accesible públicamente** para que ManyChat pueda llamar al webhook. Ver `DEPLOY.md`.
 
+### Composio (herramientas/apps para el bot) — `/api/composio`
+
+Conecta Composio (https://composio.dev), plataforma que expone cientos de apps/herramientas vía una API unificada. La API key se valida contra `backend.composio.dev` (header `x-api-key`) y se guarda cifrada por negocio.
+
+| Método | Ruta | Auth | Rol | Descripción |
+|--------|------|------|-----|-------------|
+| GET | /api/composio/status | Sí | — | Estado de la conexión (sin exponer la API key). Devuelve `{ connected, enabled }`. |
+| POST | /api/composio/connect | Sí | ADMIN | Valida la API key contra Composio y la guarda (cifrada). Body: `apiKey`. |
+| POST | /api/composio/disconnect | Sí | ADMIN | Borra la conexión. Devuelve `{ connected: false, enabled: false }`. |
+
 ## Chat y reservas públicas — `/api/public`
 
 Router montado con CORS abierto (`origin: true`, sin credenciales). Ningún endpoint requiere autenticación: son de cara al widget público / cliente final.
