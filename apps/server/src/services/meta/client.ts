@@ -170,7 +170,16 @@ export async function resolveBusinessByRecipient(
 
     // safeDecrypt: el token se guarda cifrado; si es legado en texto plano, pasa
     // tal cual (migración perezosa). Downstream (sendMessage) recibe el plano.
-    const pageAccessToken = typeof cfg.pageAccessToken === 'string' ? safeDecrypt(cfg.pageAccessToken) : '';
+    // En try/catch: una clave ilegible (p. ej. ENCRYPTION_KEY rotada) no debe
+    // tumbar la resolución; se trata como "sin token".
+    let pageAccessToken = '';
+    if (typeof cfg.pageAccessToken === 'string') {
+      try {
+        pageAccessToken = safeDecrypt(cfg.pageAccessToken);
+      } catch {
+        pageAccessToken = '';
+      }
+    }
     if (!pageAccessToken) return null;
 
     let botId = typeof cfg.botId === 'string' ? cfg.botId : '';

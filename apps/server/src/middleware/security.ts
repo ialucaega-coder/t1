@@ -127,10 +127,19 @@ function stripTagsLinear(value: string): string {
   while (i < n) {
     const lt = value.indexOf('<', i);
     if (lt === -1) { out += value.slice(i); break; }
-    out += value.slice(i, lt);
+    out += value.slice(i, lt); // texto antes del '<'
+    const next = value[lt + 1];
+    // Solo tratamos el '<' como inicio de etiqueta si lo sigue algo de etiqueta
+    // real (letra, '/', '!' o '?'). Así "x < 5 y > 3" o "<3" NO se corrompen
+    // (antes se borraba cualquier `<...>`, comiéndose texto y secretos legítimos).
+    if (!next || !/[a-zA-Z/!?]/.test(next)) {
+      out += '<';
+      i = lt + 1;
+      continue;
+    }
     const gt = value.indexOf('>', lt + 1);
-    if (gt === -1) { out += value.slice(lt); break; }
-    i = gt + 1;
+    if (gt === -1) { out += value.slice(lt); break; } // '<' sin cierre: literal
+    i = gt + 1; // saltar la etiqueta
   }
   return out;
 }

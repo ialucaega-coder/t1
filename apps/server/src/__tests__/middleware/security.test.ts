@@ -35,6 +35,12 @@ describe('middleware/security — sanitizeString', () => {
     expect(sanitizeString('a < b sin tag')).toContain('a < b sin tag');
   });
 
+  it('no corrompe texto con < y > que NO son etiquetas (regresión M3)', () => {
+    expect(sanitizeString('x < 5 y > 3')).toBe('x < 5 y > 3');
+    expect(sanitizeString('<3 me encanta, 5 > 4')).toBe('<3 me encanta, 5 > 4');
+    expect(sanitizeString('precio <= 100 >= 10')).toBe('precio <= 100 >= 10');
+  });
+
   // --- Regresión ReDoS: debe ser lineal (resolverse en ms, no en segundos) ---
   it('no se cuelga con miles de <script sin cerrar (ex-O(n³))', () => {
     const payload = '<script'.repeat(20000); // ~140 KB

@@ -167,12 +167,19 @@ router.post(
       });
 
       for (const item of data.items) {
-        // Descuento con guarda atómica: solo descuenta si hay stock suficiente
-        // (y el producto es del negocio). Evita vender en negativo / sobreventa
-        // con pedidos concurrentes. Si no afecta exactamente 1 fila, abortamos
-        // la transacción (rollback del pedido y la transacción de venta).
+        // Descuento con guarda atómica contra sobreventa concurrente. Permitimos
+        // la venta si hay stock suficiente (`stock >= qty`) O si el stock es <= 0,
+        // caso que tratamos como "sin control de inventario" (negocios de
+        // servicios o que no llevan stock venden igual — preserva el comportamiento
+        // previo). Solo bloqueamos cuando hay stock parcial insuficiente
+        // (0 < stock < qty). Scopeado por negocio. Si no afecta 1 fila, 409 y
+        // rollback del pedido + transacción de venta.
         const updated = await tx.product.updateMany({
-          where: { id: item.productId, businessId, stock: { gte: item.quantity } },
+          where: {
+            id: item.productId,
+            businessId,
+            OR: [{ stock: { lte: 0 } }, { stock: { gte: item.quantity } }],
+          },
           data: { stock: { decrement: item.quantity } },
         });
         if (updated.count !== 1) {

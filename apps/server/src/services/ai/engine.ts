@@ -119,8 +119,16 @@ export async function setEngineKey(businessId: string, provider: ProviderFamily,
 function resolveKey(engine: AIEngine, cfg: EngineConfig): string | null {
   const own = cfg.keys[engine.provider];
   // safeDecrypt: descifra la key propia; si es un valor legado en texto plano,
-  // lo devuelve tal cual (migración perezosa — se re-cifra al re-guardarse).
-  if (own) return safeDecrypt(own);
+  // lo devuelve tal cual (migración perezosa). En try/catch: si la clave de
+  // cifrado quedó ilegible (ENCRYPTION_KEY rotada), no lanzamos — seguimos con
+  // el relay/env o el default (getAIProviderForBusiness no se rompe).
+  if (own) {
+    try {
+      return safeDecrypt(own);
+    } catch {
+      /* clave ilegible: caemos al relay/env/default abajo */
+    }
+  }
   if (engine.keyEnv && process.env[engine.keyEnv]) return process.env[engine.keyEnv] as string;
   if (engine.keyless) return 'local'; // Ollama/LM Studio ignoran la key
   return null;

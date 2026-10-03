@@ -197,6 +197,7 @@ const RATE_LIMIT_EXEMPT_PREFIXES = [
   '/api/meta/webhook',
   '/api/billing/webhook',
   '/api/voice/incoming',
+  '/api/voice/respond',
 ];
 app.use((req, res, next) => {
   if (RATE_LIMIT_EXEMPT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
