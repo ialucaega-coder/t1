@@ -9,7 +9,7 @@ export const REQUEST_TIMEOUT_MS = 20000;
 // Nombre de la cookie "espejo" del token, en el dominio del propio
 // frontend (no es la cookie httpOnly que emite la API, que vive en
 // otro dominio/puerto y por lo tanto no es visible para Next.js).
-// El middleware de Next (apps/web/src/middleware.ts) solo puede leer
+// El proxy de Next (apps/web/src/proxy.ts, ex-middleware) solo puede leer
 // cookies, nunca localStorage, así que reflejamos aquí la presencia
 // del token para poder proteger rutas a nivel de edge/servidor. No
 // es una fuente de verdad de seguridad: la validación real del JWT

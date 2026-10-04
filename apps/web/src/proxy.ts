@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 /**
- * middleware.ts
+ * proxy.ts
  * ------------------------------------------------------------------
- * Middleware de Next.js (se ejecuta en el edge, antes de renderizar
+ * Proxy (ex-middleware) de Next.js (se ejecuta en el edge, antes de renderizar
  * cualquier página) responsable de:
  *
  *   1. Redirigir usuarios NO autenticados que intenten acceder a
@@ -90,7 +90,7 @@ function applySecurityHeaders(response: NextResponse, pathname: string): NextRes
   return response;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const authenticated = hasSessionCookie(request);
 
