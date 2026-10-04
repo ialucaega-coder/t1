@@ -69,8 +69,12 @@ DROP INDEX CONCURRENTLY IF EXISTS "bookings_businessId_date_idx";
 
 Los siguientes cambios **no** están en la migración de índices porque agregan restricciones de
 unicidad / CHECK que **fallarán si existen datos que las violan**. Antes de aplicarlos hay que
-**deduplicar / corregir** los datos. Se documentan aquí con el SQL de dedup necesario, pero
-**sin aplicarlos** (van en otra tanda, con su propia migración gated).
+**deduplicar / corregir** los datos.
+
+> ✅ **SQL runnable listo:** `prisma/manual/gated-dedup.sql` — hace detección → dedup/merge
+> transaccional → restricciones, en orden y con los nombres de tipos/columnas reales. Lo corre
+> el usuario contra `DIRECT_URL` (backup primero; correr la sección 0 de detección antes).
+> Las secciones de abajo quedan como referencia conceptual.
 
 ### A. `Connection` singleton por `(businessId, type)` (excluyendo tipos multi-registro)
 
@@ -81,15 +85,17 @@ Como Prisma no soporta índices únicos parciales de forma nativa, iría como í
 Dedup previo (detectar duplicados a resolver manualmente):
 
 ```sql
--- 1) Detectar negocios con más de una conexión del mismo type (fuera de los exentos)
+-- 1) Detectar negocios con más de una conexión del mismo type (fuera de los exentos).
+--    Tipos multi-fila REALES (exentos): webhook, BOOKING_OTP, ORDER_IDEMPOTENCY,
+--    TRANSACTION_IDEMPOTENCY (el resto son singleton).
 SELECT "businessId", "type", COUNT(*) AS n
 FROM "connections"
-WHERE "type" NOT IN ('webhook', 'idempotency', 'otp')
+WHERE "type" NOT IN ('webhook', 'BOOKING_OTP', 'ORDER_IDEMPOTENCY', 'TRANSACTION_IDEMPOTENCY')
 GROUP BY "businessId", "type"
 HAVING COUNT(*) > 1;
 
--- 2) (Tras revisión manual) conservar la más reciente/activa y borrar el resto.
---    Revisar cada caso antes de ejecutar un DELETE.
+-- 2) La resolución (conservar la activa/con-config y borrar el resto) está
+--    automatizada y transaccional en prisma/manual/gated-dedup.sql (sección 1).
 ```
 
 Restricción propuesta (NO aplicar aún — índice único parcial):
@@ -97,7 +103,7 @@ Restricción propuesta (NO aplicar aún — índice único parcial):
 ```sql
 CREATE UNIQUE INDEX "connections_businessId_type_singleton_uidx"
   ON "connections" ("businessId", "type")
-  WHERE "type" NOT IN ('webhook', 'idempotency', 'otp');
+  WHERE "type" NOT IN ('webhook', 'BOOKING_OTP', 'ORDER_IDEMPOTENCY', 'TRANSACTION_IDEMPOTENCY');
 ```
 
 ### B. `Promotion` código único por negocio `(businessId, code)`
