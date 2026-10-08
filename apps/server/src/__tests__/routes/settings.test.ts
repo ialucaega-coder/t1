@@ -1,8 +1,8 @@
 /**
  * Pruebas de integracion para las rutas de configuracion
  * (`src/routes/settings.ts`): lectura de settings del negocio (scope por
- * businessId), actualizacion (200 + validacion 400), y proveedores de IA
- * (listar + crear/actualizar + validacion de provider invalido).
+ * businessId) y actualizacion (200 + validacion 400). La configuracion de IA
+ * ya no vive aca (se movio al Motor de IA real en /api/ai); ver ai.test.ts.
  *
  * Se mockean Prisma y el middleware de auth (requireAuth + requireRole).
  */
@@ -124,78 +124,6 @@ describe('routes/settings', () => {
 
       expect(res.status).toBe(400);
       expect(prisma.business.update).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /api/settings/ai-providers', () => {
-    it('lista los proveedores con su estado de configuracion (scope por businessId)', async () => {
-      mock(prisma.connection.findMany).mockResolvedValue([
-        { id: 'conn_1', isActive: true, config: { provider: 'anthropic' } },
-      ]);
-
-      const res = await request(app).get('/api/settings/ai-providers');
-
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      const anthropic = res.body.find((p: { key: string }) => p.key === 'anthropic');
-      expect(anthropic).toMatchObject({ configured: true, isActive: true, id: 'conn_1' });
-      expect(prisma.connection.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { businessId: 'biz_1', type: 'ai_provider' } })
-      );
-    });
-  });
-
-  describe('PUT /api/settings/ai-providers/:providerKey', () => {
-    it('crea la conexion del proveedor cuando no existe', async () => {
-      mock(prisma.connection.findFirst).mockResolvedValue(null);
-      mock(prisma.connection.create).mockResolvedValue({ id: 'conn_1', isActive: true, config: { provider: 'anthropic', apiKey: 'sk-x' } });
-
-      const res = await request(app)
-        .put('/api/settings/ai-providers/anthropic')
-        .send({ apiKey: 'sk-x', isActive: true });
-
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ key: 'anthropic', configured: true, id: 'conn_1' });
-      expect(prisma.connection.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ type: 'ai_provider', businessId: 'biz_1' }),
-        })
-      );
-    });
-
-    it('devuelve 400 si el providerKey no es valido', async () => {
-      const res = await request(app)
-        .put('/api/settings/ai-providers/no-existe')
-        .send({ apiKey: 'sk-x' });
-
-      expect(res.status).toBe(400);
-      expect(prisma.connection.create).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('DELETE /api/settings/ai-providers/:providerKey', () => {
-    it('elimina la conexion cuando existe (scope por businessId)', async () => {
-      mock(prisma.connection.findFirst).mockResolvedValue({ id: 'conn_1' });
-      mock(prisma.connection.delete).mockResolvedValue({});
-
-      const res = await request(app).delete('/api/settings/ai-providers/anthropic');
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true });
-      expect(prisma.connection.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ businessId: 'biz_1', type: 'ai_provider' }),
-        })
-      );
-    });
-
-    it('devuelve 404 si el proveedor no esta configurado', async () => {
-      mock(prisma.connection.findFirst).mockResolvedValue(null);
-
-      const res = await request(app).delete('/api/settings/ai-providers/anthropic');
-
-      expect(res.status).toBe(404);
-      expect(prisma.connection.delete).not.toHaveBeenCalled();
     });
   });
 });

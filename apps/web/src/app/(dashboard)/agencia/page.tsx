@@ -1,22 +1,99 @@
 'use client';
 
 import { useState } from 'react';
-import { Building2, Users, Bot, DollarSign, Plus, Copy, Check, Eye, Settings, BarChart3, Link2 } from 'lucide-react';
+import { Building2, Users, Bot, DollarSign, Plus, Copy, Check, Eye, Settings, BarChart3, Link2, Pencil, Trash2, X } from 'lucide-react';
 import { useAgency } from '@/hooks/use-agency';
 import { AGENCY_STATS } from '@/constants/agency';
+import type { AgencyClient } from '@/constants/agency';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
+
+const PLAN_OPTIONS: AgencyClient['plan'][] = ['Free', 'Local B+'];
+const STATUS_OPTIONS: { value: AgencyClient['status']; label: string }[] = [
+  { value: 'active', label: 'Activo' },
+  { value: 'trial', label: 'Trial' },
+  { value: 'inactive', label: 'Inactivo' },
+];
 
 export default function AgenciaPage() {
-  const { stats, clients, isLoading, error, refetch } = useAgency();
+  const { stats, clients, isLoading, error, refetch, createClient, updateClient, deleteClient } = useAgency();
+  const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Alta/edición de negocio (antes el botón "Agregar negocio" no hacía nada).
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<AgencyClient | null>(null);
+  const [formName, setFormName] = useState('');
+  const [formPlan, setFormPlan] = useState<AgencyClient['plan']>('Free');
+  const [formStatus, setFormStatus] = useState<AgencyClient['status']>('trial');
+  const [submitting, setSubmitting] = useState(false);
+  const [toDelete, setToDelete] = useState<AgencyClient | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  usePageCounter(isLoading ? null : fmtCounter(clients.length, 'NEGOCIO', 'NEGOCIOS'));
 
   const filtered = clients.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()),
   );
+
+  function openCreate() {
+    setEditing(null);
+    setFormName('');
+    setFormPlan('Free');
+    setFormStatus('trial');
+    setShowForm(true);
+  }
+
+  function openEdit(client: AgencyClient) {
+    setEditing(client);
+    setFormName(client.name);
+    setFormPlan(client.plan);
+    setFormStatus(client.status);
+    setShowForm(true);
+  }
+
+  async function handleSubmit() {
+    const name = formName.trim();
+    if (!name) {
+      toast({ type: 'error', message: 'El nombre del negocio es obligatorio' });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (editing) {
+        await updateClient(editing.id, { name, plan: formPlan, status: formStatus });
+        toast({ type: 'success', message: 'Negocio actualizado' });
+      } else {
+        await createClient({ name, plan: formPlan, status: formStatus });
+        toast({ type: 'success', message: 'Negocio agregado' });
+      }
+      setShowForm(false);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo guardar el negocio' });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      await deleteClient(toDelete.id);
+      toast({ type: 'success', message: 'Negocio eliminado' });
+      setToDelete(null);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo eliminar' });
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const handleCopy = () => {
     navigator.clipboard.writeText(stats.referralLink || AGENCY_STATS.referralLink);
@@ -86,7 +163,7 @@ export default function AgenciaPage() {
           <h3 className="mono-label">TUS CLIENTES</h3>
           <div className="flex items-center gap-3">
             <SearchInput value={search} onChange={setSearch} placeholder="Buscar negocio..." className="max-w-[220px]" />
-            <button className="btn-primary text-xs">
+            <button onClick={openCreate} className="btn-primary text-xs">
               <Plus className="h-3.5 w-3.5" /> Agregar negocio
             </button>
           </div>
@@ -102,6 +179,7 @@ export default function AgenciaPage() {
                 <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Estado</th>
                 <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Ingreso</th>
                 <th className="text-left px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500">Actividad</th>
+                <th className="px-4 py-3 text-right text-[10px] font-mono uppercase tracking-wider text-slate-500">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -126,10 +204,28 @@ export default function AgenciaPage() {
                   </td>
                   <td className="px-4 py-3 text-sm font-mono text-slate-300">{client.revenue}</td>
                   <td className="px-4 py-3 text-xs text-slate-500">{client.lastActivity}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEdit(client)}
+                        className="rounded-lg p-1.5 text-slate-500 hover:text-white hover:bg-surface-100 transition-colors"
+                        title="Editar negocio"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setToDelete(client)}
+                        className="rounded-lg p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                        title="Eliminar negocio"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">No se encontraron negocios</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">No se encontraron negocios</td></tr>
               )}
             </tbody>
           </table>
@@ -154,6 +250,66 @@ export default function AgenciaPage() {
           </button>
         </div>
       </div>
+
+      {/* Modal alta/edición de negocio */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={submitting ? undefined : () => setShowForm(false)} />
+          <div className="relative z-10 w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-white">{editing ? 'Editar negocio' : 'Agregar negocio'}</h2>
+              <button onClick={() => setShowForm(false)} disabled={submitting} className="rounded-lg p-1 text-slate-500 hover:text-white hover:bg-surface-100 transition-colors disabled:opacity-50">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Nombre del negocio</label>
+                <input
+                  type="text"
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+                  placeholder="Ej: Barbería Don Juan"
+                  autoFocus
+                  className="input"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Plan</label>
+                  <select value={formPlan} onChange={(e) => setFormPlan(e.target.value as AgencyClient['plan'])} className="input">
+                    {PLAN_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Estado</label>
+                  <select value={formStatus} onChange={(e) => setFormStatus(e.target.value as AgencyClient['status'])} className="input">
+                    {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button onClick={() => setShowForm(false)} disabled={submitting} className="btn-secondary text-xs disabled:opacity-50">Cancelar</button>
+              <button onClick={handleSubmit} disabled={submitting} className="btn-primary text-xs disabled:opacity-50">
+                {submitting ? 'Guardando...' : editing ? 'Guardar cambios' : 'Agregar negocio'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        isOpen={toDelete !== null}
+        onClose={() => setToDelete(null)}
+        onConfirm={handleDelete}
+        title="Eliminar negocio"
+        message={toDelete ? `¿Seguro que querés eliminar "${toDelete.name}"? Esta acción no se puede deshacer.` : ''}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting}
+      />
     </div>
   );
 }

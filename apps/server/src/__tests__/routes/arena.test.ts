@@ -236,6 +236,32 @@ describe('routes/arena', () => {
     });
   });
 
+  describe('POST /api/arena/builders/:id/vote', () => {
+    it('incrementa los votos cuando el builder pertenece al negocio', async () => {
+      mock(prisma.arenaBuilder.updateMany).mockResolvedValue({ count: 1 });
+      mock(prisma.arenaBuilder.findFirst).mockResolvedValue({ id: 'b1', votes: 5 });
+
+      const res = await request(app).post('/api/arena/builders/b1/vote');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: 'b1', votes: 5 });
+      expect(prisma.arenaBuilder.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'b1', businessId: 'biz_1' },
+          data: { votes: { increment: 1 } },
+        })
+      );
+    });
+
+    it('devuelve 404 si el builder no pertenece al negocio (anti cross-tenant)', async () => {
+      mock(prisma.arenaBuilder.updateMany).mockResolvedValue({ count: 0 });
+
+      const res = await request(app).post('/api/arena/builders/de-otro-negocio/vote');
+
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('POST /api/arena/chat', () => {
     it('devuelve una respuesta de prueba con el mensaje enviado (200)', async () => {
       const res = await request(app)

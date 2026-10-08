@@ -15,6 +15,8 @@ import { statsApi } from '@/lib/api/index';
 import type { DashboardStats } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { OnboardingChecklist } from '@/components/dashboard/OnboardingChecklist';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 const CHANNEL_LABELS: Record<string, { label: string; color: string }> = {
   TELEGRAM: { label: 'Telegram', color: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
@@ -93,6 +95,9 @@ export default function DashboardPage() {
     statsApi.getDashboard().then(setDashboard).catch(() => {});
   }, []);
 
+  // Contador vivo del header: cantidad real de bots (antes era '0 BOTS' fijo).
+  usePageCounter(botsLoading ? null : fmtCounter(bots.length, 'BOT', 'BOTS'));
+
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
@@ -131,6 +136,9 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       {error && <ErrorAlert message={error} onRetry={() => { refetchStats(); refetchBots(); }} />}
+
+      {/* Checklist de puesta en marcha (se auto-oculta al completarse o al descartarlo) */}
+      <OnboardingChecklist />
 
       {/* Quick Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

@@ -16,6 +16,31 @@ export const ROLE_CONFIG: Record<TeamRole, { label: string; class: string }> = {
   Viewer: { label: 'VIEWER', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
 };
 
+// El backend persiste el rol como enum (ADMIN | PROFESSIONAL | VIEWER), pero la
+// UI usa etiquetas en español (Admin | Profesional | Viewer). Estos mapas evitan
+// el desajuste que rompía invitar/actualizar (el backend rechaza 'Profesional').
+export const ROLE_TO_ENUM: Record<TeamRole, 'ADMIN' | 'PROFESSIONAL' | 'VIEWER'> = {
+  Admin: 'ADMIN',
+  Profesional: 'PROFESSIONAL',
+  Viewer: 'VIEWER',
+};
+
+const ENUM_TO_ROLE: Record<string, TeamRole> = {
+  ADMIN: 'Admin',
+  PROFESSIONAL: 'Profesional',
+  VIEWER: 'Viewer',
+  // Tolerar valores que ya vengan en formato display.
+  Admin: 'Admin',
+  Profesional: 'Profesional',
+  Viewer: 'Viewer',
+};
+
+// Normaliza cualquier representación de rol (enum del backend o display) a la
+// etiqueta de UI; cae a 'Viewer' ante un valor desconocido.
+export function normalizeRole(role: string): TeamRole {
+  return ENUM_TO_ROLE[role] ?? 'Viewer';
+}
+
 export const MOCK_TEAM_MEMBERS: TeamMember[] = [
   {
     id: '1',

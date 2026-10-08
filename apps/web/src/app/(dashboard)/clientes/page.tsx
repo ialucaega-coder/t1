@@ -4,15 +4,18 @@ import { useState } from 'react';
 import {
   Search, UserPlus, Users, ChevronLeft, ChevronRight,
   Calendar, ShoppingBag, Mail, Phone, Clock, Trash2,
-  Edit3, X, User, Flame, Thermometer, Snowflake, Download,
+  Edit3, X, User, Flame, Thermometer, Snowflake, Download, Tag as TagIcon,
 } from 'lucide-react';
 import { useClients, useClientDetail } from '@/hooks/use-clients';
 import * as clientsApi from '@/lib/api/clients';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ClientFormModal } from '@/components/clients/ClientFormModal';
+import { TagChip, TagManager, ClientTagEditor } from '@/components/clients/ClientTags';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { useToast } from '@/components/common/Toast';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
+import type { ClientTag } from '@/types';
 
 type Interest = 'hot' | 'warm' | 'cold';
 
@@ -46,17 +49,27 @@ function formatDate(dateStr: string): string {
 
 export default function ClientesPage() {
   const [search, setSearch] = useState('');
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
+  const [showTagManager, setShowTagManager] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
   const { toast } = useToast();
 
-  const { clients, total, totalPages, isLoading, error, refetch } = useClients({
+  const { clients, tagCatalog, total, totalPages, isLoading, error, refetch } = useClients({
     search: search || undefined,
+    tagId: tagFilter || undefined,
     page,
   });
   const { detail, isLoading: detailLoading, refetchDetail } = useClientDetail(selectedId);
+
+  // Mapa id→etiqueta del catálogo, para pintar los chips de cada cliente.
+  const tagById = new Map<string, ClientTag>(tagCatalog.map((t) => [t.id, t]));
+
+  // Contador vivo del header: total real de clientes.
+  usePageCounter(isLoading ? null : fmtCounter(total, 'CLIENTE', 'CLIENTES'));
 
   async function handleCreate(data: { name: string; email: string; phone: string; notes: string }) {
     try {
@@ -65,6 +78,19 @@ export default function ClientesPage() {
       toast({ type: 'success', message: 'Cliente creado correctamente' });
     } catch {
       toast({ type: 'error', message: 'Error al crear cliente' });
+    }
+  }
+
+  async function handleUpdate(data: { name: string; email: string; phone: string; notes: string }) {
+    if (!detail) return;
+    // El backend solo acepta name/phone en update (email es identidad del cliente).
+    try {
+      await clientsApi.updateClient(detail.id, { name: data.name, phone: data.phone || undefined });
+      refetch();
+      refetchDetail();
+      toast({ type: 'success', message: 'Cliente actualizado correctamente' });
+    } catch {
+      toast({ type: 'error', message: 'Error al actualizar cliente' });
     }
   }
 
@@ -98,6 +124,13 @@ export default function ClientesPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setShowTagManager((v) => !v)}
+            className={`btn-secondary text-xs ${showTagManager ? 'text-brand-400 border-brand-400/40' : ''}`}
+            title="Gestionar etiquetas"
+          >
+            <TagIcon className="h-3.5 w-3.5" /> Etiquetas
+          </button>
+          <button
             onClick={() => clientsApi.exportCsv().catch(console.error)}
             className="btn-secondary text-xs"
             title="Exportar CSV"
@@ -110,6 +143,13 @@ export default function ClientesPage() {
         </div>
       </div>
 
+      {/* Gestor de catálogo de etiquetas (colapsable) */}
+      {showTagManager && (
+        <div className="card">
+          <TagManager tags={tagCatalog} onSaved={() => { refetch(); refetchDetail(); }} />
+        </div>
+      )}
+
       {/* Search */}
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
@@ -121,6 +161,30 @@ export default function ClientesPage() {
           className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-1.5 pl-9 text-sm text-white placeholder:text-slate-600 focus:border-brand-400/50 focus:outline-none"
         />
       </div>
+
+      {/* Filtro por etiqueta (segmentación tipo respond.io) */}
+      {tagCatalog.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Filtrar:</span>
+          <button
+            onClick={() => { setTagFilter(null); setPage(1); }}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-all ${
+              tagFilter === null ? 'border-brand-400/50 bg-brand-400/10 text-brand-400' : 'border-slate-700 text-slate-400 hover:text-white'
+            }`}
+          >
+            Todos
+          </button>
+          {tagCatalog.map((tag) => (
+            <button
+              key={tag.id}
+              onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(1); }}
+              className="focus:outline-none"
+            >
+              <TagChip tag={tag} active={tagFilter === tag.id || tagFilter === null} />
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Split pane */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" style={{ minHeight: '30rem' }}>
@@ -175,6 +239,14 @@ export default function ClientesPage() {
                       </>
                     )}
                   </div>
+                  {(client.tags?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {client.tags!.map((tagId) => {
+                        const tag = tagById.get(tagId);
+                        return tag ? <TagChip key={tagId} tag={tag} /> : null;
+                      })}
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -249,6 +321,13 @@ export default function ClientesPage() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
+                      onClick={() => setEditOpen(true)}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-surface-100 transition-colors"
+                      title="Editar cliente"
+                    >
+                      <Edit3 className="h-4 w-4" />
+                    </button>
+                    <button
                       onClick={() => handleDelete(detail.id)}
                       disabled={deleting === detail.id}
                       className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
@@ -282,6 +361,15 @@ export default function ClientesPage() {
 
               {/* Tabs content */}
               <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+                {/* CRM: etiquetas asignadas + nota interna */}
+                <ClientTagEditor
+                  clientId={detail.id}
+                  catalog={tagCatalog}
+                  assigned={detail.tags ?? []}
+                  note={detail.note ?? ''}
+                  onChanged={() => { refetch(); refetchDetail(); }}
+                />
+
                 {/* Recent bookings */}
                 <div>
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -392,6 +480,14 @@ export default function ClientesPage() {
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
         onSave={handleCreate}
+      />
+
+      <ClientFormModal
+        isOpen={editOpen}
+        onClose={() => setEditOpen(false)}
+        onSave={handleUpdate}
+        title="Editar cliente"
+        initial={detail ? { name: detail.name, email: detail.email, phone: detail.phone ?? '', notes: '' } : undefined}
       />
     </div>
   );

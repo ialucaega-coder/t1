@@ -35,14 +35,15 @@ describe('hooks/use-team', () => {
     expect(result.current.members).toEqual([]);
   });
 
-  it('carga los miembros del equipo', async () => {
-    const fake = [{ id: 'm1', email: 'a@b.com', role: 'ADMIN' }];
-    mockGet.mockResolvedValue(fake);
+  it('carga los miembros del equipo y normaliza el rol del backend', async () => {
+    // El backend devuelve el rol como enum (ADMIN); el hook lo normaliza a la
+    // etiqueta de UI (Admin) para que ROLE_CONFIG y los selects matcheen.
+    mockGet.mockResolvedValue([{ id: 'm1', email: 'a@b.com', role: 'ADMIN' }]);
 
     const { result } = renderHook(() => useTeam());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(result.current.members).toEqual(fake);
+    expect(result.current.members).toEqual([{ id: 'm1', email: 'a@b.com', role: 'Admin' }]);
     expect(result.current.error).toBeNull();
   });
 

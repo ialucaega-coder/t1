@@ -8,6 +8,7 @@ import { CommandRow } from '@/components/commands/CommandRow';
 import { CommandGroup } from '@/components/commands/CommandGroup';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 export default function ComandosPage() {
   const { commands, isLoading, error, refetch } = useCommands();
@@ -17,6 +18,9 @@ export default function ComandosPage() {
   const copyToClipboard = (cmd: string) => copy(cmd, cmd);
 
   const allCommands = commands.flatMap(c => c.items.map(i => ({ ...i, category: c.category })));
+
+  // Contador vivo del header: cantidad real de comandos disponibles.
+  usePageCounter(isLoading ? null : fmtCounter(allCommands.length, 'COMANDO', 'COMANDOS'));
   const filtered = search
     ? allCommands.filter(c => c.name.includes(search) || c.desc.toLowerCase().includes(search.toLowerCase()))
     : null;

@@ -9,14 +9,14 @@
  * Formato del texto cifrado: `iv:authTag:ciphertext`, cada parte en base64.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
+import { getEncryptionSecret } from './secrets';
 
 const ALGO = 'aes-256-gcm';
 const IV_BYTES = 12; // recomendado para GCM
 
 /** Deriva una clave de 32 bytes a partir del secreto de entorno. */
 function getKey(): Buffer {
-  const secret = process.env.ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET || 'dev-secret';
-  return createHash('sha256').update(secret).digest();
+  return createHash('sha256').update(getEncryptionSecret()).digest();
 }
 
 /** Cifra un texto plano y devuelve `iv:authTag:ciphertext` (base64). */

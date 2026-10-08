@@ -108,6 +108,8 @@ describe('routes/auth', () => {
         id: 'user_1',
         email: 'test@example.com',
         passwordHash,
+        isActive: true,
+        deletedAt: null,
         failedLogins: 0,
         lockedUntil: null,
         businessId: 'biz_1',
@@ -136,6 +138,8 @@ describe('routes/auth', () => {
         id: 'user_1',
         email: 'test@example.com',
         passwordHash,
+        isActive: true,
+        deletedAt: null,
         failedLogins: 4,
         lockedUntil: null,
         businessId: 'biz_1',
@@ -162,6 +166,8 @@ describe('routes/auth', () => {
         id: 'user_1',
         email: 'test@example.com',
         passwordHash: 'hash',
+        isActive: true,
+        deletedAt: null,
         failedLogins: 5,
         lockedUntil: new Date(Date.now() + 60_000),
         businessId: 'biz_1',
@@ -184,6 +190,8 @@ describe('routes/auth', () => {
         id: 'user_1',
         email: 'test@example.com',
         passwordHash,
+        isActive: true,
+        deletedAt: null,
         failedLogins: 2,
         lockedUntil: null,
         businessId: 'biz_1',
@@ -204,6 +212,30 @@ describe('routes/auth', () => {
           data: expect.objectContaining({ failedLogins: 0, lockedUntil: null }),
         })
       );
+    });
+
+    it('rechaza (401) una cuenta inactiva aun con la contrasena correcta', async () => {
+      const passwordHash = await bcrypt.hash('correcta123', 12);
+      (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'user_1',
+        email: 'test@example.com',
+        passwordHash,
+        isActive: false,
+        deletedAt: null,
+        failedLogins: 0,
+        lockedUntil: null,
+        businessId: 'biz_1',
+        role: 'ADMIN',
+        business: { id: 'biz_1', name: 'Negocio', slug: 'negocio' },
+      });
+
+      const res = await request(app).post('/api/auth/login').send({
+        email: 'test@example.com',
+        password: 'correcta123',
+      });
+
+      expect(res.status).toBe(401);
+      expect(res.body).not.toHaveProperty('token');
     });
   });
 });

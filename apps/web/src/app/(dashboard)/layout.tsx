@@ -2,6 +2,7 @@ import { Sidebar } from '@/components/dashboard/Sidebar';
 import { Header } from '@/components/dashboard/Header';
 import { WebChat } from '@/components/chat/WebChat';
 import { ToastProvider } from '@/components/common/Toast';
+import { RouteGuard } from '@/components/dashboard/RouteGuard';
 
 export default function DashboardLayout({
   children,
@@ -15,7 +16,7 @@ export default function DashboardLayout({
         <main className="lg:ml-60">
           <Header />
           <div className="p-4 pt-16 lg:p-8 lg:pt-8 animate-fade-in">
-            {children}
+            <RouteGuard>{children}</RouteGuard>
           </div>
         </main>
         <WebChat />

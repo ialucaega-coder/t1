@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, DollarSign, Package, Pencil, Trash2, ToggleLeft, ToggleRight, Search, ShoppingBag } from 'lucide-react';
 import { useProducts } from '@/hooks/use-products';
+import { categoriesApi } from '@/lib/api/index';
+import type { Category } from '@/types';
 import { ProductFormModal } from '@/components/products/ProductFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -20,6 +22,11 @@ export default function ProductosPage() {
   const [toggling, setToggling] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  useEffect(() => {
+    categoriesApi.getCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const filtered = products.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -28,21 +35,19 @@ export default function ProductosPage() {
 
   const activeCount = products.filter((p) => p.isActive).length;
 
-  async function handleSave(data: { name: string; description: string; price: number; stock: number; category: string; sku: string }) {
+  async function handleSave(data: { name: string; description: string; price: number; stock: number; categoryId: string }) {
+    const payload = {
+      name: data.name,
+      description: data.description.trim() || undefined,
+      price: data.price,
+      stock: data.stock,
+      categoryId: data.categoryId || undefined,
+    };
     if (editing) {
-      await updateProduct(editing.id, {
-        name: data.name,
-        price: data.price,
-        stock: data.stock,
-        isActive: editing.isActive,
-      });
+      await updateProduct(editing.id, { ...payload, isActive: editing.isActive });
       toast({ type: 'success', message: 'Producto actualizado correctamente' });
     } else {
-      await createProduct({
-        name: data.name,
-        price: data.price,
-        stock: data.stock,
-      });
+      await createProduct(payload);
       toast({ type: 'success', message: 'Producto creado correctamente' });
     }
     setEditing(null);
@@ -174,11 +179,13 @@ export default function ProductosPage() {
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditing(null); }}
         onSave={handleSave}
+        categories={categories}
         initial={editing ? {
           name: editing.name,
+          description: editing.description || '',
           price: editing.price,
           stock: editing.stock,
-          category: editing.category?.name || '',
+          categoryId: editing.category?.id || '',
         } : undefined}
         title={editing ? 'Editar producto' : 'Nuevo producto'}
       />

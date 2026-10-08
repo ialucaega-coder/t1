@@ -28,6 +28,13 @@ vi.mock('../../services/brand/config', () => ({
   loadBrandVoice: vi.fn(async () => null),
   buildBrandVoicePrompt: vi.fn(() => ''),
 }));
+vi.mock('../../services/faq/config', () => ({
+  loadFaqItems: vi.fn(async () => []),
+  buildFaqPrompt: vi.fn(() => ''),
+}));
+vi.mock('../../services/ai/system-prompt', () => ({
+  loadSystemPrompt: vi.fn(async () => ''),
+}));
 
 import { prisma } from '../../lib/prisma';
 import { getAIProviderForBusiness } from '../../services/ai/engine';

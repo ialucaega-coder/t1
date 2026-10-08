@@ -11,6 +11,9 @@ import { prisma } from '../lib/prisma';
 import { getAIProviderForBusiness } from './ai/engine';
 import type { ConversationTurn, ImageInput } from './ai';
 import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
+import { loadFaqItems, buildFaqPrompt } from './faq/config';
+import { loadSystemPrompt } from './ai/system-prompt';
+import { hasParams, resolveSuperpowerParams, type SuperpowerParams } from '../constants/superpowerParams';
 
 export async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
   const skills = await prisma.skill.findMany({
@@ -22,6 +25,26 @@ export async function getActiveSuperpowers(businessId: string): Promise<Set<stri
     return cfg?.kind === 'superpower';
   });
   return new Set(superpowers.map((s) => s.name));
+}
+
+/**
+ * Carga los parámetros configurables (resueltos con defaults) de los
+ * superpoderes activos que los tienen. Devuelve un Map name→params para que
+ * buildSystemPrompt ajuste el texto inyectado según la personalización.
+ */
+async function loadSuperpowerParams(businessId: string): Promise<Map<string, SuperpowerParams>> {
+  const skills = await prisma.skill.findMany({
+    where: { businessId, isActive: true },
+    select: { name: true, config: true },
+  });
+  const map = new Map<string, SuperpowerParams>();
+  for (const s of skills) {
+    const cfg = s.config as Record<string, unknown> | null;
+    if (cfg?.kind === 'superpower' && hasParams(s.name)) {
+      map.set(s.name, resolveSuperpowerParams(s.name, cfg.params));
+    }
+  }
+  return map;
 }
 
 /** Canales por los que puede llegar un mensaje al bot. */
@@ -106,6 +129,8 @@ function detectIntent(message: string): ChatIntent {
 async function buildSystemPrompt(businessId: string, superpowers: Set<string>): Promise<string> {
   const business = await prisma.business.findUnique({ where: { id: businessId } });
   const businessName = business?.name || 'el negocio';
+  // Parámetros configurables de los superpoderes (vacío si ninguno los tiene).
+  const params = await loadSuperpowerParams(businessId);
 
   const lines = [
     `Sos el asistente virtual de "${businessName}". Respondé de forma breve, cálida y profesional.`,
@@ -119,6 +144,23 @@ async function buildSystemPrompt(businessId: string, superpowers: Set<string>): 
   const brandPrompt = buildBrandVoicePrompt(brandVoice, superpowers.has('Voz de marca'));
   if (brandPrompt) {
     lines.push(brandPrompt);
+  }
+
+  // --- Base de conocimiento / FAQ (respuestas a preguntas frecuentes del negocio) ---
+  // Lista estructurada P→R que el dueño gestiona (ver services/faq). Se inyecta
+  // como fuente de verdad para las consultas más comunes; si está vacía no suma nada.
+  const faqItems = await loadFaqItems(businessId);
+  const faqPrompt = buildFaqPrompt(faqItems);
+  if (faqPrompt) {
+    lines.push(faqPrompt);
+  }
+
+  // --- Prompt de sistema personalizado del negocio ---
+  // Se inyecta ANTES de las reglas de seguridad (anti-invento / modo seguro)
+  // que vienen más abajo, para que esas reglas mantengan prioridad.
+  const customPrompt = await loadSystemPrompt(businessId);
+  if (customPrompt.trim()) {
+    lines.push('INSTRUCCIONES PERSONALIZADAS DEL NEGOCIO (seguilas salvo que contradigan las reglas de seguridad):\n' + customPrompt.trim());
   }
 
   if (superpowers.has('Blindaje anti-invento')) {
@@ -135,25 +177,30 @@ async function buildSystemPrompt(businessId: string, superpowers: Set<string>): 
     );
   }
 
-  // --- Cazador de ventas: cierre proactivo ---
+  // --- Cazador de ventas: cierre proactivo (intensidad configurable) ---
   if (superpowers.has('Cazador de ventas')) {
-    lines.push(
-      'CAZADOR DE VENTAS: Si el cliente muestra interés en un servicio/producto pero no concreta, ofrecé proactivamente el siguiente paso concreto (agendar un turno o cerrar la compra) con una pregunta clara. No seas insistente ni agresivo: un solo empujón cálido por respuesta.',
-    );
+    const intensidad = params.get('Cazador de ventas')?.intensidad ?? 'media';
+    const cierrePorIntensidad: Record<string, string> = {
+      suave: 'Limitate a sugerir con suavidad el siguiente paso (agendar o comprar) y dejá que el cliente decida; nunca presiones.',
+      media: 'Ofrecé proactivamente el siguiente paso concreto (agendar un turno o cerrar la compra) con una pregunta clara. No seas insistente ni agresivo: un solo empujón cálido por respuesta.',
+      directa: 'Proponé cerrar la operación ahora mismo con una llamada a la acción clara y directa (por ejemplo, ofrecé el horario o el link de pago en el momento). Sé proactivo sin ser grosero.',
+    };
+    lines.push(`CAZADOR DE VENTAS: ${cierrePorIntensidad[String(intensidad)] ?? cierrePorIntensidad.media}`);
   }
 
-  // --- Encuestas de satisfacción ---
+  // --- Encuestas de satisfacción (escala configurable) ---
   if (superpowers.has('Encuestas de satisfaccion')) {
+    const escalaMax = String(params.get('Encuestas de satisfaccion')?.escalaMax ?? '5');
     lines.push(
-      'ENCUESTAS DE SATISFACCION: Cuando resolviste la consulta del cliente o antes de despedirte, pedile amablemente que califique la atención del 1 al 5 (1 = muy mala, 5 = excelente). Agradecé la respuesta sin importar el puntaje.',
+      `ENCUESTAS DE SATISFACCION: Cuando resolviste la consulta del cliente o antes de despedirte, pedile amablemente que califique la atención del 1 al ${escalaMax} (1 = muy mala, ${escalaMax} = excelente). Agradecé la respuesta sin importar el puntaje.`,
     );
   }
 
-  // --- Pide reseñas en Google ---
+  // --- Pide reseñas en Google (enlace configurable, con fallback al sitio) ---
   if (superpowers.has('Pide resenas Google')) {
-    const reviewHint = business?.websiteUrl
-      ? ` Podés orientarlos con este enlace del negocio: ${business.websiteUrl}.`
-      : '';
+    const enlaceResenas = String(params.get('Pide resenas Google')?.enlaceResenas ?? '').trim();
+    const enlace = enlaceResenas || business?.websiteUrl || '';
+    const reviewHint = enlace ? ` Compartí este enlace para dejar la reseña: ${enlace}.` : '';
     lines.push(
       `PIDE RESEÑAS GOOGLE: Si el cliente quedó conforme o te agradece, invitalo con calidez a dejar una reseña en Google para ayudar al negocio.${reviewHint} Hacelo una sola vez y sin insistir.`,
     );
@@ -168,10 +215,11 @@ async function buildSystemPrompt(businessId: string, superpowers: Set<string>): 
     lines.push('Detectá el idioma del mensaje del cliente y respondé en ese mismo idioma.');
   }
 
-  // --- Turbo respuesta: respuestas cortas y directas (estilo de redacción) ---
+  // --- Turbo respuesta: respuestas cortas y directas (largo configurable) ---
   if (superpowers.has('Turbo respuesta')) {
+    const maxOraciones = Number(params.get('Turbo respuesta')?.maxOraciones ?? 3);
     lines.push(
-      'TURBO RESPUESTA: Priorizá respuestas cortas y directas, de 2 o 3 oraciones como máximo, sin rodeos ni saludos largos. Andá directo a lo que el cliente necesita. Si hace falta explicar varios pasos, usá una lista breve. Evitá texto de relleno y repeticiones.',
+      `TURBO RESPUESTA: Priorizá respuestas cortas y directas, de ${maxOraciones} ${maxOraciones === 1 ? 'oración' : 'oraciones'} como máximo, sin rodeos ni saludos largos. Andá directo a lo que el cliente necesita. Si hace falta explicar varios pasos, usá una lista breve. Evitá texto de relleno y repeticiones.`,
     );
   }
 

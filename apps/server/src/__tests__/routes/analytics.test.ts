@@ -10,7 +10,7 @@ import request from 'supertest';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    conversation: { count: vi.fn() },
+    conversation: { count: vi.fn(), findMany: vi.fn() },
     booking: { count: vi.fn() },
     message: { count: vi.fn(), aggregate: vi.fn(), findMany: vi.fn() },
     $queryRaw: vi.fn(),
@@ -44,6 +44,7 @@ describe('routes/analytics', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mock(prisma.conversation.count).mockResolvedValue(0);
+    mock(prisma.conversation.findMany).mockResolvedValue([]);
     mock(prisma.booking.count).mockResolvedValue(0);
     mock(prisma.message.count).mockResolvedValue(0);
     mock(prisma.message.aggregate).mockResolvedValue({ _avg: { responseTime: null, tokens: null } });
@@ -68,6 +69,38 @@ describe('routes/analytics', () => {
     for (const [arg] of calls) {
       expect(arg.where.businessId).toBe('biz_1');
     }
+  });
+
+  it('/conversations usa una sola consulta (sin N+1) acotada por businessId', async () => {
+    mock(prisma.conversation.findMany).mockResolvedValue([]);
+
+    const res = await request(app).get('/api/analytics/conversations');
+
+    expect(res.status).toBe(200);
+    // Antes hacía 7 count() en un loop; ahora: un único findMany.
+    expect(mock(prisma.conversation.findMany).mock.calls.length).toBe(1);
+    expect(mock(prisma.conversation.count).mock.calls.length).toBe(0);
+    const [arg] = mock(prisma.conversation.findMany).mock.calls[0];
+    expect(arg.where.businessId).toBe('biz_1');
+    // Siempre devuelve una serie de 7 días.
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(7);
+  });
+
+  it('/conversations agrupa por día las conversaciones de la ventana', async () => {
+    const today = new Date();
+    mock(prisma.conversation.findMany).mockResolvedValue([
+      { createdAt: today },
+      { createdAt: today },
+    ]);
+
+    const res = await request(app).get('/api/analytics/conversations');
+
+    expect(res.status).toBe(200);
+    const total = res.body.reduce((sum: number, d: { count: number }) => sum + d.count, 0);
+    expect(total).toBe(2);
+    // El último bucket (hoy) debe contener las 2 conversaciones.
+    expect(res.body[res.body.length - 1].count).toBe(2);
   });
 
   it('requiere autenticación (el router monta requireAuth)', async () => {

@@ -1,15 +1,49 @@
 import { httpClient } from './http-client';
-import type { Client, ClientDetail } from '@/types';
+import type { Client, ClientDetail, ClientTag } from '@/types';
 
-export function getClients(params?: { search?: string; page?: number; pageSize?: number }) {
+export function getClients(params?: { search?: string; tagId?: string; page?: number; pageSize?: number }) {
   const qs = new URLSearchParams();
   if (params?.search) qs.set('search', params.search);
+  if (params?.tagId) qs.set('tagId', params.tagId);
   if (params?.page) qs.set('page', String(params.page));
   if (params?.pageSize) qs.set('pageSize', String(params.pageSize));
   const query = qs.toString();
-  return httpClient.get<{ data: Client[]; total: number; page: number; pageSize: number; totalPages: number }>(
-    `/clients${query ? `?${query}` : ''}`
-  );
+  return httpClient.get<{
+    data: Client[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+    tagCatalog: ClientTag[];
+  }>(`/clients${query ? `?${query}` : ''}`);
+}
+
+/** Anotación del CRM de un cliente (etiquetas asignadas + nota interna). */
+export interface ClientAnnotation {
+  tags: string[];
+  note: string;
+}
+
+/** Estado completo del CRM del negocio. */
+export interface ClientCrm {
+  tags: ClientTag[];
+  byClient: Record<string, ClientAnnotation>;
+}
+
+export function getClientCrm() {
+  return httpClient.get<ClientCrm>('/clients/crm');
+}
+
+export function saveClientTags(tags: Array<{ id?: string; label: string; color?: string }>) {
+  return httpClient.put<ClientCrm>('/clients/crm/tags', { tags });
+}
+
+export function setClientTags(id: string, tags: string[]) {
+  return httpClient.put<ClientAnnotation>(`/clients/${id}/tags`, { tags });
+}
+
+export function setClientNote(id: string, note: string) {
+  return httpClient.put<ClientAnnotation>(`/clients/${id}/note`, { note });
 }
 
 export function getClient(id: string) {

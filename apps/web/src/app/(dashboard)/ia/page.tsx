@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { Sparkles, Send, Loader2, Copy, Check } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Sparkles, Send, Loader2, Copy, Check, Save } from 'lucide-react';
 import * as aiApi from '@/lib/api/ai';
 import type { ChatTurn } from '@/types';
+import { useToast } from '@/components/common/Toast';
 import { MotorDeIA } from './MotorDeIA';
 
 export default function IAPage() {
@@ -27,11 +28,22 @@ export default function IAPage() {
 
 /** Sección: editor del prompt de sistema, con generación automática desde los datos del negocio. */
 function PromptEditorSection() {
+  const { toast } = useToast();
   const [prompt, setPrompt] = useState('');
   const [tone, setTone] = useState<'formal' | 'amigable' | 'directo'>('amigable');
   const [generating, setGenerating] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Carga el prompt de sistema guardado del negocio al montar.
+  useEffect(() => {
+    let cancelled = false;
+    aiApi.getSystemPrompt()
+      .then((res) => { if (!cancelled) setPrompt(res.prompt); })
+      .catch(() => { /* sin prompt guardado todavía: queda vacío */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -43,6 +55,21 @@ function PromptEditorSection() {
       setError(err instanceof Error ? err.message : 'No se pudo generar el prompt');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await aiApi.saveSystemPrompt(prompt);
+      toast({ type: 'success', message: 'Prompt de sistema guardado — tu bot ya lo usa' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'No se pudo guardar el prompt';
+      setError(msg);
+      toast({ type: 'error', message: msg });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -70,9 +97,13 @@ function PromptEditorSection() {
             <option value="formal">Tono formal</option>
             <option value="directo">Tono directo</option>
           </select>
-          <button className="btn-primary text-xs py-1.5" onClick={handleGenerate} disabled={generating}>
+          <button className="btn-secondary text-xs py-1.5" onClick={handleGenerate} disabled={generating}>
             {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             Generar desde mi negocio
+          </button>
+          <button className="btn-primary text-xs py-1.5" onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Guardar
           </button>
         </div>
       </div>

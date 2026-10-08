@@ -1,9 +1,10 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { Save, Sparkles, Info, Lock } from 'lucide-react';
-import { brandApi } from '@/lib/api/index';
+import { Save, Sparkles, Info, Lock, Plus, Trash2, HelpCircle } from 'lucide-react';
+import { brandApi, faqApi } from '@/lib/api/index';
 import type { BrandVoice } from '@/lib/api/brand';
+import { MAX_FAQ_ITEMS, MAX_QUESTION_LEN, MAX_ANSWER_LEN, type FaqItem } from '@/lib/api/faq';
 import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -23,9 +24,11 @@ export default function VozDeMarcaPage() {
   const isAdmin = user?.role === 'ADMIN';
 
   const [form, setForm] = useState<BrandVoice>(EMPTY);
+  const [faq, setFaq] = useState<FaqItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingFaq, setIsSavingFaq] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
@@ -34,8 +37,14 @@ export default function VozDeMarcaPage() {
       setIsLoading(true);
       setError(null);
       try {
-        const data = await brandApi.getBrandVoice();
-        if (!cancelled) setForm(data);
+        const [brand, faqData] = await Promise.all([
+          brandApi.getBrandVoice(),
+          faqApi.getFaq(),
+        ]);
+        if (!cancelled) {
+          setForm(brand);
+          setFaq(faqData.items);
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Error al cargar la Voz de Marca');
       } finally {
@@ -49,6 +58,36 @@ export default function VozDeMarcaPage() {
   const updateField = <K extends keyof BrandVoice>(field: K, value: BrandVoice[K]) => {
     setForm((current) => ({ ...current, [field]: value }));
   };
+
+  const updateFaqItem = (index: number, field: 'question' | 'answer', value: string) => {
+    setFaq((current) => current.map((it, i) => (i === index ? { ...it, [field]: value } : it)));
+  };
+
+  const addFaqItem = () => {
+    setFaq((current) => (current.length >= MAX_FAQ_ITEMS ? current : [...current, { question: '', answer: '' }]));
+  };
+
+  const removeFaqItem = (index: number) => {
+    setFaq((current) => current.filter((_, i) => i !== index));
+  };
+
+  async function handleSaveFaq() {
+    // Descarta filas vacías antes de mandar (el backend igual sanea, pero así la UI no guarda basura).
+    const clean = faq
+      .map((it) => ({ ...it, question: it.question.trim(), answer: it.answer.trim() }))
+      .filter((it) => it.question && it.answer);
+    setIsSavingFaq(true);
+    try {
+      const saved = await faqApi.saveFaq(clean);
+      setFaq(saved.items);
+      toast({ type: 'success', message: 'Base de conocimiento guardada correctamente' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error al guardar la base de conocimiento';
+      toast({ type: 'error', message: msg });
+    } finally {
+      setIsSavingFaq(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -180,6 +219,80 @@ export default function VozDeMarcaPage() {
           </button>
         </div>
       )}
+
+      {/* Base de conocimiento / FAQ estructurada. Guardado independiente (endpoint propio). */}
+      <section className="card space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <HelpCircle className="h-5 w-5 text-brand-400" />
+            <div>
+              <h3 className="font-semibold text-white">Preguntas frecuentes</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Cargá pares de pregunta y respuesta. El bot los usa como fuente de verdad para las consultas más comunes.
+              </p>
+            </div>
+          </div>
+          <span className="shrink-0 text-[11px] text-slate-500">{faq.length}/{MAX_FAQ_ITEMS}</span>
+        </div>
+
+        {faq.length === 0 && (
+          <p className="rounded-lg border border-dashed border-slate-700 bg-slate-800/30 px-4 py-6 text-center text-sm text-slate-500">
+            Todavía no cargaste preguntas frecuentes. Agregá la primera para que el bot responda al toque las consultas típicas.
+          </p>
+        )}
+
+        <div className="space-y-3">
+          {faq.map((item, index) => (
+            <div key={item.id ?? index} className="rounded-lg border border-slate-700 bg-slate-800/40 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-500">#{index + 1}</span>
+                <input
+                  className="input flex-1"
+                  value={item.question}
+                  disabled={!isAdmin}
+                  maxLength={MAX_QUESTION_LEN}
+                  onChange={(e) => updateFaqItem(index, 'question', e.target.value)}
+                  placeholder="Pregunta — ej: ¿Cuál es el horario de atención?"
+                />
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => removeFaqItem(index)}
+                    className="shrink-0 rounded-lg p-2 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                    aria-label={`Eliminar pregunta ${index + 1}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <textarea
+                className="input min-h-[70px] resize-y"
+                value={item.answer}
+                disabled={!isAdmin}
+                maxLength={MAX_ANSWER_LEN}
+                onChange={(e) => updateFaqItem(index, 'answer', e.target.value)}
+                placeholder="Respuesta — ej: Atendemos de lunes a viernes de 9 a 18 hs."
+              />
+            </div>
+          ))}
+        </div>
+
+        {isAdmin && (
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={addFaqItem}
+              disabled={faq.length >= MAX_FAQ_ITEMS}
+              className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Plus className="h-4 w-4" /> Agregar pregunta
+            </button>
+            <button type="button" onClick={handleSaveFaq} disabled={isSavingFaq} className="btn-primary text-sm">
+              <Save className="h-4 w-4" /> {isSavingFaq ? 'Guardando...' : 'Guardar preguntas'}
+            </button>
+          </div>
+        )}
+      </section>
     </form>
   );
 }

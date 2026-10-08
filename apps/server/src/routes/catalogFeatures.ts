@@ -9,6 +9,7 @@ import { updateCatalogItemSchema, UpdateCatalogItemInput } from '../validators/c
 import { generateDailyReport, generateReminders } from '../services/superpowers/report';
 import { analyzeConversation, detectKnowledgeGaps } from '../services/superpowers/analysis';
 import { ensureDefaultFeatures, readFeatureConfig as readConfig, type FeatureKind } from '../services/catalog';
+import { SUPERPOWER_PARAM_SPECS, resolveSuperpowerParams, sanitizeSuperpowerParams } from '../constants/superpowerParams';
 
 function mapFeature(row: {
   name: string;
@@ -18,12 +19,17 @@ function mapFeature(row: {
   config: Prisma.JsonValue | null;
 }) {
   const config = readConfig(row.config);
+  const paramSpecs = SUPERPOWER_PARAM_SPECS[row.name] ?? [];
   return {
     name: row.name,
     subtitle: config.subtitle ?? '',
     description: row.description ?? '',
     iconName: config.iconName ?? row.icon ?? 'Zap',
     isActive: row.isActive,
+    // Params configurables (resueltos con defaults) + su spec, para que el
+    // front renderice los controles. Vacíos si el feature no tiene params.
+    params: paramSpecs.length ? resolveSuperpowerParams(row.name, config.params) : {},
+    paramSpecs,
   };
 }
 
@@ -131,6 +137,15 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
       if (!existing || readConfig(existing.config).kind !== kind) throw new AppError(404, missingMessage);
 
       const currentConfig = readConfig(existing.config);
+
+      // Params: si vienen en el parche, los normalizamos contra el spec del
+      // superpoder (descarta claves/valores inválidos); si no, conservamos los
+      // guardados. Solo aplica a superpoderes con spec; el resto quedan en {}.
+      const specs = SUPERPOWER_PARAM_SPECS[name];
+      const nextParams = specs
+        ? sanitizeSuperpowerParams(name, data.params !== undefined ? data.params : currentConfig.params)
+        : undefined;
+
       const updated = await prisma.skill.update({
         where: { id: existing.id },
         data: {
@@ -141,6 +156,7 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
             kind,
             subtitle: data.subtitle ?? currentConfig.subtitle ?? '',
             iconName: data.iconName ?? currentConfig.iconName ?? existing.icon ?? 'Zap',
+            ...(nextParams ? { params: nextParams } : {}),
           },
         },
       });

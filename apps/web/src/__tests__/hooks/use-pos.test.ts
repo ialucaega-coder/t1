@@ -1,8 +1,7 @@
 /**
  * Pruebas del hook `usePos` (`src/hooks/use-pos.ts`): carga los ítems vendibles
- * del POS (servicios + productos), maneja el estado de carga/error y hace
- * fallback a los ítems mock (QUICK_ITEMS) cuando la API no está disponible, para
- * que el punto de venta siga usable aunque el backend falle.
+ * del POS (servicios + productos), maneja el estado de carga/error y, ante un
+ * error, deja la lista vacía y expone el mensaje (sin inventar ítems falsos).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
@@ -13,7 +12,6 @@ vi.mock('@/lib/api/index', () => ({
 
 import { usePos } from '@/hooks/use-pos';
 import { posApi } from '@/lib/api/index';
-import { QUICK_ITEMS } from '@/constants/pos';
 
 const mockGet = posApi.getPosItems as ReturnType<typeof vi.fn>;
 
@@ -41,14 +39,14 @@ describe('hooks/use-pos', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('ante error setea el mensaje y hace fallback a QUICK_ITEMS', async () => {
+  it('ante error setea el mensaje y deja la lista vacía (sin datos falsos)', async () => {
     mockGet.mockRejectedValue(new Error('API caída'));
 
     const { result } = renderHook(() => usePos());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('API caída');
-    expect(result.current.items).toEqual(QUICK_ITEMS);
+    expect(result.current.items).toEqual([]);
   });
 
   it('usa mensaje genérico cuando el error no es Error', async () => {
@@ -58,7 +56,7 @@ describe('hooks/use-pos', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('Error al cargar productos POS');
-    expect(result.current.items).toEqual(QUICK_ITEMS);
+    expect(result.current.items).toEqual([]);
   });
 
   it('refetch vuelve a pedir los ítems a la API', async () => {

@@ -18,6 +18,7 @@ export interface UseArenaResult {
   refetch: () => void;
   createBuilder: (data: CreateBuilderInput) => Promise<void>;
   voteIdea: (id: string) => Promise<void>;
+  voteBuilder: (id: string) => Promise<void>;
   createIdea: (data: CreateIdeaInput) => Promise<void>;
   sendChat: (message: string) => Promise<ArenaChatResponse>;
 }
@@ -71,6 +72,11 @@ export function useArena(): UseArenaResult {
     refetch();
   }, [refetch]);
 
+  const voteBuilder = useCallback(async (id: string) => {
+    await arenaApi.voteBuilder(id);
+    refetch();
+  }, [refetch]);
+
   const createIdea = useCallback(async (data: CreateIdeaInput) => {
     await arenaApi.createIdea(data);
     refetch();
@@ -80,5 +86,5 @@ export function useArena(): UseArenaResult {
     return arenaApi.sendChat(message);
   }, []);
 
-  return { builders, ideas, isLoading, error, refetch, createBuilder, voteIdea, createIdea, sendChat };
+  return { builders, ideas, isLoading, error, refetch, createBuilder, voteIdea, voteBuilder, createIdea, sendChat };
 }

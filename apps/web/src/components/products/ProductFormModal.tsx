@@ -8,8 +8,7 @@ interface ProductFormData {
   description: string;
   price: number;
   stock: number;
-  category: string;
-  sku: string;
+  categoryId: string;
 }
 
 interface ProductFormModalProps {
@@ -17,18 +16,16 @@ interface ProductFormModalProps {
   onClose: () => void;
   onSave: (data: ProductFormData) => Promise<void>;
   initial?: Partial<ProductFormData>;
+  categories?: { id: string; name: string }[];
   title?: string;
 }
 
-const CATEGORIES = ['Cabello', 'Barba', 'Uñas', 'Skincare', 'Accesorios', 'Otro'];
-
-export function ProductFormModal({ isOpen, onClose, onSave, initial, title }: ProductFormModalProps) {
+export function ProductFormModal({ isOpen, onClose, onSave, initial, categories = [], title }: ProductFormModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState(0);
   const [stock, setStock] = useState(0);
-  const [category, setCategory] = useState('Cabello');
-  const [sku, setSku] = useState('');
+  const [categoryId, setCategoryId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,9 +33,9 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, title }: Pr
     if (isOpen && initial) {
       setName(initial.name ?? ''); setDescription(initial.description ?? '');
       setPrice(initial.price ?? 0); setStock(initial.stock ?? 0);
-      setCategory(initial.category ?? 'Cabello'); setSku(initial.sku ?? '');
+      setCategoryId(initial.categoryId ?? '');
     } else if (isOpen) {
-      setName(''); setDescription(''); setPrice(0); setStock(0); setCategory('Cabello'); setSku('');
+      setName(''); setDescription(''); setPrice(0); setStock(0); setCategoryId('');
     }
     setError('');
   }, [isOpen, initial]);
@@ -49,7 +46,7 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, title }: Pr
     if (price <= 0) { setError('El precio debe ser mayor a 0'); return; }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, price, stock, category, sku });
+      await onSave({ name: name.trim(), description, price, stock, categoryId });
       onClose();
     } catch { setError('Error al guardar'); } finally { setSaving(false); }
   };
@@ -76,17 +73,12 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, title }: Pr
             <input type="number" value={stock} onChange={(e) => setStock(Number(e.target.value))} className="input" min={0} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Categoría</label>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className="input">
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">SKU</label>
-            <input value={sku} onChange={(e) => setSku(e.target.value)} className="input" placeholder="SKU-001" />
-          </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Categoría</label>
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
+            <option value="">Sin categoría</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="btn-secondary text-xs">Cancelar</button>

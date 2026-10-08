@@ -8,7 +8,7 @@ interface ServiceFormData {
   description: string;
   duration: number;
   price: number;
-  category: string;
+  categoryId: string;
 }
 
 interface ServiceFormModalProps {
@@ -16,17 +16,16 @@ interface ServiceFormModalProps {
   onClose: () => void;
   onSave: (data: ServiceFormData) => Promise<void>;
   initial?: Partial<ServiceFormData>;
+  categories?: { id: string; name: string }[];
   title?: string;
 }
 
-const CATEGORIES = ['Cortes', 'Color', 'Barbería', 'Uñas', 'Tratamientos', 'Otro'];
-
-export function ServiceFormModal({ isOpen, onClose, onSave, initial, title }: ServiceFormModalProps) {
+export function ServiceFormModal({ isOpen, onClose, onSave, initial, categories = [], title }: ServiceFormModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState(0);
-  const [category, setCategory] = useState('Cortes');
+  const [categoryId, setCategoryId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,9 +35,9 @@ export function ServiceFormModal({ isOpen, onClose, onSave, initial, title }: Se
       setDescription(initial.description ?? '');
       setDuration(initial.duration ?? 30);
       setPrice(initial.price ?? 0);
-      setCategory(initial.category ?? 'Cortes');
+      setCategoryId(initial.categoryId ?? '');
     } else if (isOpen) {
-      setName(''); setDescription(''); setDuration(30); setPrice(0); setCategory('Cortes');
+      setName(''); setDescription(''); setDuration(30); setPrice(0); setCategoryId('');
     }
     setError('');
   }, [isOpen, initial]);
@@ -50,7 +49,7 @@ export function ServiceFormModal({ isOpen, onClose, onSave, initial, title }: Se
     if (duration <= 0) { setError('La duración debe ser mayor a 0'); return; }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, duration, price, category });
+      await onSave({ name: name.trim(), description, duration, price, categoryId });
       onClose();
     } catch { setError('Error al guardar'); } finally { setSaving(false); }
   };
@@ -78,8 +77,9 @@ export function ServiceFormModal({ isOpen, onClose, onSave, initial, title }: Se
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Categoría</label>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className="input">
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
+              <option value="">Sin categoría</option>
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
         </div>

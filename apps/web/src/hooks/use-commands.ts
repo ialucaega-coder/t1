@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { commandsApi } from '@/lib/api/index';
 import type { CommandGroup } from '@/constants/commands';
-import { COMMANDS } from '@/constants/commands';
 
 export interface UseCommandsResult {
   commands: CommandGroup[];
@@ -30,8 +29,9 @@ export function useCommands(): UseCommandsResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar comandos');
-          // Fallback a datos mock cuando la API no está disponible.
-          setCommands(COMMANDS);
+          // Sin datos falsos: ante un error mostramos el ErrorAlert y lista vacía,
+          // no comandos simulados.
+          setCommands([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

@@ -7,11 +7,15 @@ import * as skillsApi from '@/lib/api/skills';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 export default function HabilidadesPage() {
   const { toast } = useToast();
   const { skills, isLoading, error, refetch } = useSkills();
   const [toggling, setToggling] = useState<string | null>(null);
+
+  // Contador vivo del header: habilidades activas (reacciona al togglear).
+  usePageCounter(isLoading ? null : fmtCounter(skills.filter((s) => s.isActive).length, 'ACTIVA', 'ACTIVAS'));
 
   async function handleToggle(name: string, currentActive: boolean) {
     setToggling(name);

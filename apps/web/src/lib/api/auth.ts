@@ -36,7 +36,15 @@ export function updateProfile(data: { name?: string; currentPassword?: string; n
   return httpClient.patch<{ user: User; business: Business }>('/auth/me', data);
 }
 
-export function logout() {
+export async function logout() {
+  // Avisamos al server para que revoque la sesión (best-effort): aunque el
+  // token siga sin expirar, queda inutilizable. Si la llamada falla (red caída,
+  // token ya inválido), igual limpiamos localmente para no trabar el logout.
+  try {
+    await httpClient.post('/auth/logout', {});
+  } catch {
+    // Ignorado a propósito: el logout local no debe depender del server.
+  }
   httpClient.setToken(null);
 }
 

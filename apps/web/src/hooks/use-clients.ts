@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import * as clientsApi from '@/lib/api/clients';
-import type { Client, ClientDetail } from '@/types';
+import type { Client, ClientDetail, ClientTag } from '@/types';
 
-export function useClients(params?: { search?: string; page?: number }) {
+export function useClients(params?: { search?: string; tagId?: string; page?: number }) {
   const [clients, setClients] = useState<Client[]>([]);
+  const [tagCatalog, setTagCatalog] = useState<ClientTag[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,12 +22,14 @@ export function useClients(params?: { search?: string; page?: number }) {
       try {
         const res = await clientsApi.getClients({
           search: params?.search,
+          tagId: params?.tagId,
           page: params?.page,
         });
         if (!cancelled) {
           setClients(res.data);
           setTotal(res.total);
           setTotalPages(res.totalPages);
+          setTagCatalog(res.tagCatalog ?? []);
         }
       } catch (err) {
         if (!cancelled) {
@@ -40,11 +43,11 @@ export function useClients(params?: { search?: string; page?: number }) {
 
     load();
     return () => { cancelled = true; };
-  }, [params?.search, params?.page, reloadToken]);
+  }, [params?.search, params?.tagId, params?.page, reloadToken]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  return { clients, total, totalPages, isLoading, error, refetch };
+  return { clients, tagCatalog, total, totalPages, isLoading, error, refetch };
 }
 
 export function useClientDetail(id: string | null) {

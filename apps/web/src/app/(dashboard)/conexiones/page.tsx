@@ -28,20 +28,14 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import * as webhooksApi from '@/lib/api/webhooks';
+import { integrationsApi } from '@/lib/api/index';
 import type { Webhook as WebhookType } from '@/lib/api/webhooks';
 import { MetaChannelCard } from './MetaChannelCard';
+import { WhatsAppCard } from './WhatsAppCard';
 import { CalcomCard } from './CalcomCard';
 import { MercadoPagoCard } from './MercadoPagoCard';
 import { ManyChatCard } from './ManyChatCard';
 import { ComposioCard } from './ComposioCard';
-
-// ────────────────────────────────────────────────────────────────
-// Canales de comunicación adicionales (proximamente)
-// ────────────────────────────────────────────────────────────────
-
-const upcomingChannels = [
-  { name: 'WhatsApp', icon: MessageCircle, color: 'text-green-400', description: 'Conecta WhatsApp Business API' },
-];
 
 const integrations = [
   { name: 'Google Calendar', category: 'Agenda', icon: CalendarIcon, status: 'available' },
@@ -647,6 +641,73 @@ function WebhooksSection() {
 // Pagina principal de Conexiones
 // ────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────
+// Grilla de integraciones del catálogo. Las que aún no están implementadas
+// se pueden "Solicitar" (queda registrado el interés del negocio, persistido).
+// ────────────────────────────────────────────────────────────────
+
+function IntegrationsGrid() {
+  const { toast } = useToast();
+  const [requested, setRequested] = useState<Set<string>>(new Set());
+  const [pending, setPending] = useState<string | null>(null);
+
+  useEffect(() => {
+    integrationsApi.getIntegrationRequests()
+      .then((r) => setRequested(new Set(r.requested)))
+      .catch(() => {});
+  }, []);
+
+  const toggle = async (name: string) => {
+    const nowRequested = !requested.has(name);
+    setPending(name);
+    try {
+      const res = await integrationsApi.setIntegrationRequest(name, nowRequested);
+      setRequested(new Set(res.requested));
+      toast({
+        type: 'success',
+        message: nowRequested
+          ? `Pedido registrado: te avisamos cuando ${name} esté lista`
+          : `Quitaste la solicitud de ${name}`,
+      });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo registrar la solicitud' });
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+      {integrations.map((integration) => {
+        const Icon = integration.icon;
+        const isRequested = requested.has(integration.name);
+        const isPending = pending === integration.name;
+        return (
+          <div key={integration.name} className="card flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-100">
+              <Icon className="h-5 w-5 text-brand-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-white">{integration.name}</p>
+              <p className="text-[10px] font-mono text-slate-500 uppercase">{integration.category}</p>
+            </div>
+            <button
+              onClick={() => toggle(integration.name)}
+              disabled={isPending}
+              className={`text-xs py-1 px-2 rounded-lg disabled:opacity-50 ${isRequested ? 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-400' : 'btn-secondary'}`}
+              title={isRequested ? 'Ya la solicitaste — clic para cancelar' : 'Avisarnos que la querés'}
+            >
+              {isPending ? '...' : isRequested ? (
+                <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Solicitada</span>
+              ) : 'Solicitar'}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ConexionesPage() {
   return (
     <div className="space-y-8">
@@ -663,6 +724,11 @@ export default function ConexionesPage() {
           <TelegramCard />
         </div>
 
+        {/* WhatsApp (Twilio) — funcional */}
+        <div className="mb-4">
+          <WhatsAppCard />
+        </div>
+
         {/* Instagram + Messenger (Meta) — funcionales */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <MetaChannelCard platform="instagram" />
@@ -672,23 +738,6 @@ export default function ConexionesPage() {
         {/* Web Chat Widget */}
         <div className="mb-4">
           <WebChatWidgetCard />
-        </div>
-
-        {/* Otros canales — proximamente */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {upcomingChannels.map((channel) => {
-            const Icon = channel.icon;
-            return (
-              <div key={channel.name} className="card-accent text-center opacity-60">
-                <Icon className={`h-8 w-8 ${channel.color} mx-auto mb-3`} />
-                <h4 className="font-medium text-white mb-1">{channel.name}</h4>
-                <p className="text-[10px] text-slate-500 mb-3">{channel.description}</p>
-                <span className="inline-block text-[10px] font-mono uppercase tracking-wider text-slate-600 bg-surface-100 px-2 py-1 rounded">
-                  Proximamente
-                </span>
-              </div>
-            );
-          })}
         </div>
       </div>
 
@@ -705,25 +754,7 @@ export default function ConexionesPage() {
           <ComposioCard />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {integrations.map((integration) => {
-            const Icon = integration.icon;
-            return (
-              <div key={integration.name} className="card flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-100">
-                  <Icon className="h-5 w-5 text-brand-400" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-white">{integration.name}</p>
-                  <p className="text-[10px] font-mono text-slate-500 uppercase">{integration.category}</p>
-                </div>
-                <button className="btn-secondary text-xs py-1 px-2">
-                  Conectar
-                </button>
-              </div>
-            );
-          })}
-        </div>
+        <IntegrationsGrid />
       </div>
     </div>
   );

@@ -43,6 +43,12 @@ vi.mock('../../middleware/auth', () => ({
     },
 }));
 
+// El gating por plan/capacidad se prueba en el middleware y el servicio; acá lo
+// dejamos pasar para testear el ruteo/scoping de agencia.
+vi.mock('../../middleware/capability', () => ({
+  requireCapability: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+}));
+
 import { prisma } from '../../lib/prisma';
 import { agencyRouter } from '../../routes/agency';
 import { errorHandler } from '../../middleware/errorHandler';

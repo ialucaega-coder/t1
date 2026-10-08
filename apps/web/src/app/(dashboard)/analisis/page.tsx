@@ -1,12 +1,18 @@
 'use client';
 
-import { useState } from 'react';
-import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock, CheckCircle2 } from 'lucide-react';
 import { useAnalytics } from '@/hooks/use-analytics';
 import { useCampaigns } from '@/hooks/use-campaigns';
+import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+
+// Clave de localStorage para recordar qué mejoras se aplicaron/ignoraron. Son
+// sugerencias heurísticas con id posicional (no estable), así que las guardamos
+// por título. Es una conveniencia por-dispositivo del admin, no estado del negocio.
+const RESOLVED_IMPROVEMENTS_KEY = 'localb_analytics_improvements_resolved';
 
 const TABS = [
   { id: 'insights', label: 'Insights', icon: Brain },
@@ -88,11 +94,35 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
 export default function AnalisisPage() {
   const { kpi, conversations, satisfaction, improvements, costs, metrics, isLoading, error, refetch } = useAnalytics();
   const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [campaignName, setCampaignName] = useState('');
   const [campaignDesc, setCampaignDesc] = useState('');
   const [creatingCampaign, setCreatingCampaign] = useState(false);
+
+  // Mejoras ya resueltas (aplicadas/ignoradas), recordadas entre recargas.
+  const [resolved, setResolved] = useState<Record<string, 'aplicada' | 'ignorada'>>({});
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(RESOLVED_IMPROVEMENTS_KEY);
+      if (raw) setResolved(JSON.parse(raw));
+    } catch { /* localStorage no disponible */ }
+  }, []);
+
+  const resolveImprovement = (title: string, kind: 'aplicada' | 'ignorada') => {
+    setResolved((prev) => {
+      const next = { ...prev, [title]: kind };
+      try { localStorage.setItem(RESOLVED_IMPROVEMENTS_KEY, JSON.stringify(next)); } catch { /* noop */ }
+      return next;
+    });
+    toast({
+      type: 'success',
+      message: kind === 'aplicada' ? 'Mejora marcada como aplicada' : 'Sugerencia ignorada',
+    });
+  };
+
+  const visibleImprovements = improvements.filter((i) => !resolved[i.title]);
 
   if (isLoading) return <LoadingSpinner label="Cargando análisis..." />;
 
@@ -156,7 +186,7 @@ export default function AnalisisPage() {
 
       {activeTab === 'mejoras' && (
         <div className="space-y-3">
-          {improvements.map((item) => (
+          {visibleImprovements.map((item) => (
             <div key={item.id} className="card-accent">
               <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                 <div className="flex items-center gap-2">
@@ -170,11 +200,20 @@ export default function AnalisisPage() {
               </div>
               <p className="text-xs text-slate-400 mb-3">{item.description}</p>
               <div className="flex gap-2">
-                <button className="btn-primary text-xs py-1">Aplicar mejora</button>
-                <button className="btn-secondary text-xs py-1">Ignorar</button>
+                <button onClick={() => resolveImprovement(item.title, 'aplicada')} className="btn-primary text-xs py-1">Aplicar mejora</button>
+                <button onClick={() => resolveImprovement(item.title, 'ignorada')} className="btn-secondary text-xs py-1">Ignorar</button>
               </div>
             </div>
           ))}
+          {visibleImprovements.length === 0 && (
+            <EmptyState
+              icon={CheckCircle2}
+              title="Todo al día"
+              description={improvements.length > 0
+                ? 'Ya revisaste todas las sugerencias. Volverán a aparecer si la situación cambia.'
+                : 'No hay sugerencias de mejora por ahora. Buen trabajo.'}
+            />
+          )}
         </div>
       )}
 

@@ -16,7 +16,7 @@ import {
   isTwilioMediaUrl,
 } from '../services/whatsapp/client';
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireStaff } from '../middleware/auth';
 
 const sendMessageSchema = z.object({
   to: z.string().min(1),
@@ -157,6 +157,7 @@ router.post(
 router.post(
   '/send',
   requireAuth,
+  requireStaff,
   validate(sendMessageSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const { to, message } = req.body;

@@ -1,6 +1,7 @@
 /**
  * Pruebas unitarias para el hook `useBookings` (`src/hooks/use-bookings.ts`):
- * carga de datos, estados de loading/error, fallback a mock y operaciones CRUD.
+ * carga de datos, estados de loading/error (calendario vacío, sin datos falsos)
+ * y operaciones CRUD.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -16,7 +17,6 @@ vi.mock('@/lib/api/index', () => ({
 
 import { useBookings } from '@/hooks/use-bookings';
 import { bookingsApi } from '@/lib/api/index';
-import { MOCK_BOOKINGS } from '@/constants/bookings';
 
 const mockGetBookings = bookingsApi.getBookings as ReturnType<typeof vi.fn>;
 const mockCreateBooking = bookingsApi.createBooking as ReturnType<typeof vi.fn>;
@@ -48,7 +48,7 @@ describe('hooks/use-bookings', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('usa datos mock como fallback cuando la API falla', async () => {
+  it('ante error setea el mensaje y deja el calendario vacío (sin datos falsos)', async () => {
     mockGetBookings.mockRejectedValue(new Error('Network error'));
 
     const { result } = renderHook(() => useBookings());
@@ -56,7 +56,7 @@ describe('hooks/use-bookings', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('Network error');
-    expect(result.current.bookings.length).toBe(MOCK_BOOKINGS.length);
+    expect(result.current.bookings).toEqual([]);
   });
 
   it('pasa la fecha como parametro a la API', async () => {

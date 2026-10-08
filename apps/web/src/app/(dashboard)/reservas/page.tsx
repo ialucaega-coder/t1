@@ -15,6 +15,7 @@ import { BookingDetailModal } from '@/components/bookings/BookingDetailModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { useToast } from '@/components/common/Toast';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 type ViewMode = 'calendar' | 'list';
 
@@ -55,6 +56,9 @@ export default function ReservasPage() {
   useSocket(business?.id ?? null);
   useSocketEvent('booking:created', () => refetch());
   useSocketEvent('booking:updated', () => refetch());
+
+  // Contador vivo del header: reservas del día seleccionado.
+  usePageCounter(isLoading ? null : fmtCounter(bookings.length, 'RESERVA', 'RESERVAS'));
 
   const legacyBookings = bookings.map(toLegacyBooking);
   const filteredBookings = statusFilter === 'all'

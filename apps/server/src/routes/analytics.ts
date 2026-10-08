@@ -83,18 +83,39 @@ router.get(
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const days = 7;
+
+    // Ventana de 7 días: desde el inicio del día más antiguo hasta ahora.
+    const oldestDayStart = new Date();
+    oldestDayStart.setDate(oldestDayStart.getDate() - (days - 1));
+    oldestDayStart.setHours(0, 0, 0, 0);
+
+    // Una sola consulta (evita el N+1 de 1 count por día): traemos sólo el
+    // createdAt de las conversaciones de la ventana y las agrupamos por día
+    // en memoria, conservando las etiquetas y el día local de antes.
+    const conversations = await prisma.conversation.findMany({
+      where: { businessId, createdAt: { gte: oldestDayStart } },
+      select: { createdAt: true },
+    });
+
+    const counts = new Map<string, number>();
+    for (const { createdAt } of conversations) {
+      const dayStart = new Date(
+        createdAt.getFullYear(),
+        createdAt.getMonth(),
+        createdAt.getDate()
+      );
+      const key = dayStart.toISOString();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+
     const result = [];
     for (let i = days - 1; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
       const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
-      const count = await prisma.conversation.count({
-        where: { businessId, createdAt: { gte: dayStart, lt: dayEnd } },
-      });
       result.push({
         day: dayStart.toLocaleDateString('es-AR', { weekday: 'short' }),
-        count,
+        count: counts.get(dayStart.toISOString()) ?? 0,
       });
     }
     res.json(result);

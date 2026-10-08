@@ -27,12 +27,27 @@ export interface UseAnalyticsResult {
   refetch: () => void;
 }
 
+// Valores vacíos/en cero: son el estado honesto antes de cargar y ante un error
+// de la API. Antes el hook arrancaba (y caía) con datos de ejemplo, que hacían
+// ver números inventados como si fueran reales.
+const EMPTY_KPI: typeof KPI_SUMMARY = {
+  totalConversations: 0,
+  conversationsChange: 0,
+  avgSatisfaction: 0,
+  satisfactionChange: 0,
+  monthlyAiCost: 0,
+  aiCostChange: 0,
+  conversionRate: 0,
+  conversionChange: 0,
+  monthlyBudget: KPI_SUMMARY.monthlyBudget,
+};
+
 export function useAnalytics(): UseAnalyticsResult {
-  const [kpi, setKpi] = useState(KPI_SUMMARY);
-  const [conversations, setConversations] = useState(DAILY_CONVERSATIONS);
-  const [satisfaction, setSatisfaction] = useState(SATISFACTION_DISTRIBUTION);
-  const [improvements, setImprovements] = useState(SUGGESTED_IMPROVEMENTS);
-  const [costs, setCosts] = useState(AI_COSTS);
+  const [kpi, setKpi] = useState<typeof KPI_SUMMARY>(EMPTY_KPI);
+  const [conversations, setConversations] = useState<typeof DAILY_CONVERSATIONS>([]);
+  const [satisfaction, setSatisfaction] = useState<typeof SATISFACTION_DISTRIBUTION>([]);
+  const [improvements, setImprovements] = useState<typeof SUGGESTED_IMPROVEMENTS>([]);
+  const [costs, setCosts] = useState<typeof AI_COSTS>([]);
   const [metrics, setMetrics] = useState<MetricItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,11 +79,13 @@ export function useAnalytics(): UseAnalyticsResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar análisis');
-          setKpi(KPI_SUMMARY);
-          setConversations(DAILY_CONVERSATIONS);
-          setSatisfaction(SATISFACTION_DISTRIBUTION);
-          setImprovements(SUGGESTED_IMPROVEMENTS);
-          setCosts(AI_COSTS);
+          // Sin datos falsos: ante un error dejamos todo en cero/vacío y mostramos
+          // el ErrorAlert, en vez de simular métricas que no son reales.
+          setKpi(EMPTY_KPI);
+          setConversations([]);
+          setSatisfaction([]);
+          setImprovements([]);
+          setCosts([]);
           setMetrics([]);
         }
       } finally {

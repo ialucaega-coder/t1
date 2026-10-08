@@ -12,6 +12,7 @@
  */
 import crypto from 'crypto';
 import { prisma } from './prisma';
+import { getEncryptionSecret } from './secrets';
 import type { Prisma } from '@prisma/client';
 
 const OTP_TYPE = 'BOOKING_OTP';
@@ -25,13 +26,9 @@ interface OtpConfig {
   attempts: number;
 }
 
-function secret(): string {
-  return process.env.NEXTAUTH_SECRET || 'dev-secret';
-}
-
 /** Hash HMAC del código, atado al negocio + teléfono (no reutilizable). */
 function hashCode(businessId: string, phone: string, code: string): string {
-  return crypto.createHmac('sha256', secret()).update(`${businessId}:${phone}:${code}`).digest('hex');
+  return crypto.createHmac('sha256', getEncryptionSecret()).update(`${businessId}:${phone}:${code}`).digest('hex');
 }
 
 /** Genera un código numérico de 6 dígitos (con ceros a la izquierda). */

@@ -8,6 +8,18 @@ import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import {
+  loadClientCrm,
+  saveTags,
+  setClientTags,
+  setClientNote,
+  MAX_TAGS,
+  MAX_TAG_LABEL_LEN,
+  MAX_NOTE_LEN,
+  MAX_TAGS_PER_CLIENT,
+  TAG_COLORS,
+} from '../services/clients/crm';
 
 const router = Router();
 
@@ -47,6 +59,24 @@ router.get(
       ];
     }
 
+    // CRM (etiquetas + notas) del negocio. Se usa para (a) filtrar por etiqueta
+    // y (b) adjuntar las etiquetas de cada cliente a la respuesta.
+    const crm = await loadClientCrm(req.auth!.businessId);
+
+    // Filtro por etiqueta: restringimos los ids ANTES de la query para que la
+    // paginación y el total sean correctos (no post-filtramos la página).
+    if (query.tagId) {
+      const taggedIds = Object.entries(crm.byClient)
+        .filter(([, a]) => a.tags.includes(query.tagId as string))
+        .map(([id]) => id);
+      where.id = { in: taggedIds };
+    }
+
+    const withTags = <T extends { id: string }>(client: T) => ({
+      ...client,
+      tags: crm.byClient[client.id]?.tags ?? [],
+    });
+
     // Nueva paginación (?limit / ?offset): devuelve la forma estándar { ...limit... }.
     // No usamos ?page como disparador para no cambiar la respuesta actual, que ya
     // usa ?page + ?pageSize y expone `pageSize`.
@@ -62,7 +92,7 @@ router.get(
         }),
         prisma.user.count({ where }),
       ]);
-      return res.json(buildPaginatedResponse(clients, total, pagination));
+      return res.json(buildPaginatedResponse(clients.map(withTags), total, pagination));
     }
 
     const [clients, total] = await Promise.all([
@@ -76,11 +106,13 @@ router.get(
     ]);
 
     res.json({
-      data: clients,
+      data: clients.map(withTags),
       total,
       page: query.page,
       pageSize: query.pageSize,
       totalPages: Math.ceil(total / query.pageSize),
+      // Catálogo de etiquetas del negocio (para pintar chips y poblar el filtro).
+      tagCatalog: crm.tags,
     });
   })
 );
@@ -129,6 +161,88 @@ router.get(
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="clientes.csv"');
     res.send('﻿' + header + rows);
+  })
+);
+
+// --- CRM: catálogo de etiquetas + notas por cliente (respond.io / SalesMartly) ---
+
+/** GET /api/clients/crm → catálogo de etiquetas + todas las anotaciones del negocio. */
+router.get(
+  '/crm',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const crm = await loadClientCrm(req.auth!.businessId);
+    res.json(crm);
+  })
+);
+
+const tagColorEnum = z.enum(TAG_COLORS);
+const saveTagsSchema = z.object({
+  tags: z
+    .array(
+      z.object({
+        id: z.string().max(64).optional(),
+        label: z.string().min(1).max(MAX_TAG_LABEL_LEN),
+        color: tagColorEnum.optional(),
+      })
+    )
+    .max(MAX_TAGS),
+});
+
+/** PUT /api/clients/crm/tags → reemplaza el catálogo de etiquetas (solo staff). */
+router.put(
+  '/crm/tags',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const data = saveTagsSchema.parse(req.body);
+    const crm = await saveTags(req.auth!.businessId, data.tags);
+    res.json(crm);
+  })
+);
+
+const setClientTagsSchema = z.object({
+  tags: z.array(z.string().max(64)).max(MAX_TAGS_PER_CLIENT),
+});
+const setClientNoteSchema = z.object({
+  note: z.string().max(MAX_NOTE_LEN),
+});
+
+/** Verifica que el cliente exista y sea del negocio (scope multi-tenant). */
+async function assertClientInBusiness(businessId: string, clientId: string): Promise<boolean> {
+  const client = await prisma.user.findFirst({
+    where: { id: clientId, businessId, role: 'CLIENT', deletedAt: null },
+    select: { id: true },
+  });
+  return Boolean(client);
+}
+
+/** PUT /api/clients/:id/tags → setea las etiquetas de un cliente. */
+router.put(
+  '/:id/tags',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const clientId = req.params.id as string;
+    const data = setClientTagsSchema.parse(req.body);
+    if (!(await assertClientInBusiness(req.auth!.businessId, clientId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    const annotation = await setClientTags(req.auth!.businessId, clientId, data.tags);
+    res.json(annotation);
+  })
+);
+
+/** PUT /api/clients/:id/note → setea la nota interna de un cliente. */
+router.put(
+  '/:id/note',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const clientId = req.params.id as string;
+    const data = setClientNoteSchema.parse(req.body);
+    if (!(await assertClientInBusiness(req.auth!.businessId, clientId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    const annotation = await setClientNote(req.auth!.businessId, clientId, data.note);
+    res.json(annotation);
   })
 );
 
@@ -185,7 +299,10 @@ router.get(
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
 
-    res.json(client);
+    // Adjunta la anotación del CRM (etiquetas asignadas + nota interna).
+    const crm = await loadClientCrm(req.auth!.businessId);
+    const annotation = crm.byClient[client.id] ?? { tags: [], note: '' };
+    res.json({ ...client, tags: annotation.tags, note: annotation.note });
   })
 );
 
@@ -213,7 +330,11 @@ router.post(
       return res.status(409).json({ error: 'Ya existe un cliente con ese email' });
     }
 
-    const tempPassword = await bcrypt.hash('client_' + Date.now(), 12);
+    // Password aleatorio e imposible de adivinar. Antes era `'client_' + Date.now()`,
+    // cuyo valor es predecible (timestamp acotado): un atacante podía fijar la
+    // contraseña de un cliente recién creado y loguearse con rol CLIENT. Estos
+    // clientes se crean para el portal/reservas y no fijan su propia clave acá.
+    const tempPassword = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
 
     const client = await prisma.user.create({
       data: {

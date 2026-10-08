@@ -3,19 +3,21 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireRole } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
+import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { listAvailableProviders, getDefaultAIProvider } from '../services/ai';
 import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../services/ai/engine';
+import { loadSystemPrompt, saveSystemPrompt, MAX_SYSTEM_PROMPT_LENGTH } from '../services/ai/system-prompt';
 import type { ProviderFamily } from '../services/ai/catalog';
 
 const router = Router();
 
 const PROVIDER_FAMILIES: ProviderFamily[] = [
-  'openai', 'anthropic', 'gemini', 'groq', 'deepseek', 'mistral',
-  'together', 'perplexity', 'cohere', 'ollama', 'lmstudio',
+  'openai', 'anthropic', 'gemini', 'groq', 'xai', 'deepseek', 'mistral',
+  'together', 'perplexity', 'cohere', 'openrouter', 'ollama', 'lmstudio',
 ];
 
 const chatSchema = z.object({
@@ -111,6 +113,29 @@ router.post('/generate-prompt', requireAuth, asyncHandler(async (req, res) => {
     '- Si no sabés algo, decilo con honestidad y ofrecé derivar a un humano.',
   ].join('\n');
 
+  res.json({ prompt });
+}));
+
+/**
+ * GET /api/ai/system-prompt
+ * Devuelve el prompt de sistema personalizado guardado del negocio ('' si no hay).
+ */
+router.get('/system-prompt', requireAuth, asyncHandler(async (req, res) => {
+  const prompt = await loadSystemPrompt(req.auth!.businessId);
+  res.json({ prompt });
+}));
+
+const systemPromptSchema = z.object({
+  prompt: z.string().max(MAX_SYSTEM_PROMPT_LENGTH),
+});
+
+/**
+ * PUT /api/ai/system-prompt
+ * Guarda el prompt de sistema personalizado (solo ADMIN). Se inyecta en el
+ * prompt del chatbot en todos los canales.
+ */
+router.put('/system-prompt', requireAuth, requireRole('ADMIN'), validate(systemPromptSchema), asyncHandler(async (req, res) => {
+  const prompt = await saveSystemPrompt(req.auth!.businessId, req.body.prompt);
   res.json({ prompt });
 }));
 

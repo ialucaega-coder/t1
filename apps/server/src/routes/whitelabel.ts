@@ -4,6 +4,12 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import {
+  WHITELABEL_THEMES,
+  WHITELABEL_SECTIONS,
+  loadWhitelabelUi,
+  saveWhitelabelUi,
+} from '../services/whitelabel/config';
 
 const updateWhitelabelSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -18,6 +24,9 @@ const updateWhitelabelSchema = z.object({
   instagramUrl: z.string().url().max(500).optional().nullable(),
   facebookUrl: z.string().url().max(500).optional().nullable(),
   websiteUrl: z.string().url().max(500).optional().nullable(),
+  // Config de UI del panel (se persiste aparte, en Connection type='WHITELABEL_UI').
+  theme: z.enum(WHITELABEL_THEMES).optional(),
+  hiddenSections: z.array(z.enum(WHITELABEL_SECTIONS)).max(WHITELABEL_SECTIONS.length).optional(),
 });
 
 const router = Router();
@@ -45,7 +54,8 @@ router.get(
         websiteUrl: true,
       },
     });
-    res.json(business);
+    const ui = await loadWhitelabelUi(req.auth!.businessId);
+    res.json({ ...business, theme: ui.theme, hiddenSections: ui.hiddenSections });
   })
 );
 
@@ -55,7 +65,7 @@ router.patch(
   requireRole('ADMIN'),
   validate(updateWhitelabelSchema),
   asyncHandler(async (req, res) => {
-    const { name, description, logo, primaryColor, secondaryColor, accentColor, customDomain, phone, whatsappNumber, instagramUrl, facebookUrl, websiteUrl } = req.body;
+    const { name, description, logo, primaryColor, secondaryColor, accentColor, customDomain, phone, whatsappNumber, instagramUrl, facebookUrl, websiteUrl, theme, hiddenSections } = req.body;
     const businessId = req.auth!.businessId;
     const data = { name, description, logo, primaryColor, secondaryColor, accentColor, customDomain, phone, whatsappNumber, instagramUrl, facebookUrl, websiteUrl };
 
@@ -82,7 +92,19 @@ router.patch(
       }
       return tx.business.update({ where: { id: businessId }, data });
     });
-    res.json(business);
+
+    // La config de UI del panel (tema / secciones ocultas) se persiste aparte,
+    // en Connection type='WHITELABEL_UI'. Solo la tocamos si vino en el parche.
+    let ui = { theme: undefined as string | undefined, hiddenSections: undefined as string[] | undefined };
+    if (theme !== undefined || hiddenSections !== undefined) {
+      const saved = await saveWhitelabelUi(businessId, { theme, hiddenSections });
+      ui = saved;
+    } else {
+      const loaded = await loadWhitelabelUi(businessId);
+      ui = loaded;
+    }
+
+    res.json({ ...business, theme: ui.theme, hiddenSections: ui.hiddenSections });
   })
 );
 

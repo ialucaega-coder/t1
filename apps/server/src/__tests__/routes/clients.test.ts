@@ -38,8 +38,24 @@ vi.mock('../../middleware/auth', () => ({
     },
 }));
 
+// El CRM (etiquetas/notas) pega a prisma.connection; acá lo mockeamos para
+// aislar las rutas de clientes de su persistencia. Los tests del servicio en sí
+// viven en __tests__/services/client-crm.test.ts.
+vi.mock('../../services/clients/crm', () => ({
+  loadClientCrm: vi.fn(async () => ({ tags: [], byClient: {} })),
+  saveTags: vi.fn(async (_b: string, tags: unknown) => ({ tags, byClient: {} })),
+  setClientTags: vi.fn(async (_b: string, _c: string, tags: string[]) => ({ tags, note: '' })),
+  setClientNote: vi.fn(async (_b: string, _c: string, note: string) => ({ tags: [], note })),
+  MAX_TAGS: 50,
+  MAX_TAG_LABEL_LEN: 40,
+  MAX_NOTE_LEN: 2000,
+  MAX_TAGS_PER_CLIENT: 20,
+  TAG_COLORS: ['slate', 'red', 'blue', 'green'],
+}));
+
 import { prisma } from '../../lib/prisma';
 import { clientsRouter } from '../../routes/clients';
+import { loadClientCrm, saveTags, setClientTags, setClientNote } from '../../services/clients/crm';
 import { errorHandler } from '../../middleware/errorHandler';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -223,6 +239,88 @@ describe('routes/clients', () => {
 
       expect(res.status).toBe(404);
       expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('CRM: etiquetas y notas', () => {
+    it('adjunta las etiquetas de cada cliente y el catálogo en el listado', async () => {
+      mock(loadClientCrm).mockResolvedValueOnce({
+        tags: [{ id: 't1', label: 'VIP', color: 'blue' }],
+        byClient: { c1: { tags: ['t1'], note: 'cliente fiel' } },
+      });
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'c1', name: 'Ana' }]);
+      mock(prisma.user.count).mockResolvedValue(1);
+
+      const res = await request(app).get('/api/clients');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0]).toMatchObject({ id: 'c1', tags: ['t1'] });
+      expect(res.body.tagCatalog).toEqual([{ id: 't1', label: 'VIP', color: 'blue' }]);
+    });
+
+    it('filtra por ?tagId restringiendo los ids ANTES de la query (paginación correcta)', async () => {
+      mock(loadClientCrm).mockResolvedValueOnce({
+        tags: [{ id: 't1', label: 'VIP', color: 'blue' }],
+        byClient: { c1: { tags: ['t1'], note: '' }, c2: { tags: [], note: 'x' } },
+      });
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'c1', name: 'Ana' }]);
+      mock(prisma.user.count).mockResolvedValue(1);
+
+      await request(app).get('/api/clients').query({ tagId: 't1' });
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: { in: ['c1'] } }),
+        })
+      );
+    });
+
+    it('GET /crm devuelve el catálogo + anotaciones del negocio', async () => {
+      mock(loadClientCrm).mockResolvedValueOnce({
+        tags: [{ id: 't1', label: 'VIP', color: 'blue' }],
+        byClient: {},
+      });
+      const res = await request(app).get('/api/clients/crm');
+      expect(res.status).toBe(200);
+      expect(res.body.tags).toHaveLength(1);
+      expect(loadClientCrm).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('PUT /crm/tags reemplaza el catálogo (200)', async () => {
+      const res = await request(app)
+        .put('/api/clients/crm/tags')
+        .send({ tags: [{ label: 'Nuevo', color: 'green' }] });
+      expect(res.status).toBe(200);
+      expect(saveTags).toHaveBeenCalledWith('biz_1', [{ label: 'Nuevo', color: 'green' }]);
+    });
+
+    it('PUT /crm/tags devuelve 400 con un color fuera del enum', async () => {
+      const res = await request(app)
+        .put('/api/clients/crm/tags')
+        .send({ tags: [{ label: 'X', color: 'fucsia' }] });
+      expect(res.status).toBe(400);
+      expect(saveTags).not.toHaveBeenCalled();
+    });
+
+    it('PUT /:id/tags setea etiquetas cuando el cliente es del negocio', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+      const res = await request(app).put('/api/clients/c1/tags').send({ tags: ['t1'] });
+      expect(res.status).toBe(200);
+      expect(setClientTags).toHaveBeenCalledWith('biz_1', 'c1', ['t1']);
+    });
+
+    it('PUT /:id/tags devuelve 404 si el cliente no es del negocio (anti cross-tenant)', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue(null);
+      const res = await request(app).put('/api/clients/ajeno/tags').send({ tags: ['t1'] });
+      expect(res.status).toBe(404);
+      expect(setClientTags).not.toHaveBeenCalled();
+    });
+
+    it('PUT /:id/note setea la nota interna del cliente', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+      const res = await request(app).put('/api/clients/c1/note').send({ note: 'llamar el lunes' });
+      expect(res.status).toBe(200);
+      expect(setClientNote).toHaveBeenCalledWith('biz_1', 'c1', 'llamar el lunes');
     });
   });
 });

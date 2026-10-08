@@ -13,6 +13,16 @@ export function generatePrompt(tone: 'formal' | 'amigable' | 'directo' = 'amigab
   return httpClient.post<GeneratePromptResponse>('/ai/generate-prompt', { tone });
 }
 
+// ── Prompt de sistema personalizado (persistido en Connection type='SYSTEM_PROMPT') ──
+
+export function getSystemPrompt() {
+  return httpClient.get<{ prompt: string }>('/ai/system-prompt');
+}
+
+export function saveSystemPrompt(prompt: string) {
+  return httpClient.put<{ prompt: string }>('/ai/system-prompt', { prompt });
+}
+
 // ── Motor de IA (multi-proveedor) ──────────────────────────────────────
 
 export interface AIEngineStatus {

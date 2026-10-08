@@ -5,12 +5,16 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import type { SuperpowerParamSpec, SuperpowerParamValues } from '@/lib/api/superpowers';
+
 export interface Superpower {
   name: string;
   subtitle: string;
   description: string;
   icon: LucideIcon;
   isActive: boolean;
+  params?: SuperpowerParamValues;
+  paramSpecs?: SuperpowerParamSpec[];
 }
 
 export const SUPERPOWERS: Superpower[] = [

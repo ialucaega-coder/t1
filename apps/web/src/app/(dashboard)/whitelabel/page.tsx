@@ -18,14 +18,25 @@ export default function WhitelabelPage() {
   const [brandName, setBrandName] = useState('');
   const [customDomain, setCustomDomain] = useState('');
   const [accentColor, setAccentColor] = useState('#38BDF8');
+  const [logo, setLogo] = useState('');
+  const [hiddenSections, setHiddenSections] = useState<string[]>([]);
 
   useEffect(() => {
     if (settings) {
       setBrandName(settings.name);
       setCustomDomain(settings.customDomain);
       setAccentColor(settings.accentColor || settings.primaryColor || '#38BDF8');
+      setLogo(settings.logo || '');
+      setSelectedTheme(settings.theme || 'onyx');
+      setHiddenSections(Array.isArray(settings.hiddenSections) ? settings.hiddenSections : []);
     }
   }, [settings]);
+
+  const toggleSection = (section: string) => {
+    setHiddenSections((prev) =>
+      prev.includes(section) ? prev.filter((s) => s !== section) : [...prev, section]
+    );
+  };
 
   const handleSave = async () => {
     await saveSettings({
@@ -33,6 +44,11 @@ export default function WhitelabelPage() {
       customDomain,
       primaryColor: accentColor,
       accentColor,
+      // El dominio/logo vacío se manda como null; el backend valida que, si viene,
+      // sea una URL válida.
+      logo: logo.trim() || undefined,
+      theme: selectedTheme,
+      hiddenSections,
     });
   };
 
@@ -69,12 +85,25 @@ export default function WhitelabelPage() {
       <section className="card">
         <h3 className="font-semibold text-white mb-4">Tu logo</h3>
         <div className="flex items-center gap-4">
-          <div className="flex h-20 w-20 items-center justify-center rounded-xl border-2 border-dashed border-slate-600 bg-surface hover:border-brand-400 transition-colors cursor-pointer">
-            <Upload className="h-6 w-6 text-slate-500" />
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-slate-600 bg-surface">
+            {logo.trim() ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logo} alt="Logo" className="h-full w-full object-contain" />
+            ) : (
+              <Upload className="h-6 w-6 text-slate-500" />
+            )}
           </div>
-          <div>
-            <p className="text-sm text-slate-300">Sube tu logo en PNG o SVG</p>
-            <p className="text-xs text-slate-500">Recomendado: 200x200px, fondo transparente</p>
+          <div className="flex-1">
+            <input
+              type="url"
+              value={logo}
+              onChange={(e) => setLogo(e.target.value)}
+              className="input max-w-md"
+              placeholder="https://tucdn.com/logo.png"
+            />
+            <p className="text-xs text-slate-500 mt-2">
+              Pegá la URL pública de tu logo (PNG o SVG). Recomendado: 200x200px, fondo transparente.
+            </p>
           </div>
         </div>
       </section>
@@ -109,7 +138,12 @@ export default function WhitelabelPage() {
         <div className="space-y-2">
           {['Costos', 'Configuración IA', 'Arena', 'Marketplace'].map((section) => (
             <label key={section} className="flex items-center gap-3 p-3 rounded-lg hover:bg-surface-100 cursor-pointer">
-              <input type="checkbox" className="rounded border-slate-600 bg-surface text-brand-400 focus:ring-brand-400" />
+              <input
+                type="checkbox"
+                checked={hiddenSections.includes(section)}
+                onChange={() => toggleSection(section)}
+                className="rounded border-slate-600 bg-surface text-brand-400 focus:ring-brand-400"
+              />
               <span className="text-sm text-slate-300">{section}</span>
             </label>
           ))}

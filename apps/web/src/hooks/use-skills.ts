@@ -44,8 +44,10 @@ export function useSkills(): UseSkillsResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar habilidades');
-          // Fallback a datos mock cuando la API no está disponible.
-          setSkills(SKILLS);
+          // Sin datos falsos: si la API falla, mostramos el error (ErrorAlert con
+          // reintento) y una lista vacía, en vez de simular habilidades que no son
+          // reales. El catálogo SKILLS se usa solo para mapear íconos por nombre.
+          setSkills([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

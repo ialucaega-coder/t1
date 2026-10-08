@@ -120,6 +120,8 @@ describe('routes/auth · 2FA', () => {
       id: 'u1',
       email: 'ana@x.com',
       passwordHash: '',
+      isActive: true,
+      deletedAt: null,
       failedLogins: 0,
       lockedUntil: null,
       businessId: 'biz_1',

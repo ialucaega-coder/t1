@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import type { Prisma } from '@prisma/client';
@@ -26,6 +27,7 @@ const router = Router();
 router.get(
   '/stats',
   requireAuth,
+  requireCapability('agency'),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const [totalClients, activeBots] = await Promise.all([
@@ -49,6 +51,7 @@ router.get(
 router.get(
   '/clients',
   requireAuth,
+  requireCapability('agency'),
   asyncHandler(async (req, res) => {
     const pagination = paginationSchema.parse(req.query);
     const search = req.query.search as string | undefined;
@@ -69,6 +72,7 @@ router.get(
 router.post(
   '/clients',
   requireAuth,
+  requireCapability('agency'),
   requireRole('ADMIN'),
   validate(createAgencyClientSchema),
   asyncHandler(async (req, res) => {
@@ -88,6 +92,7 @@ router.post(
 router.patch(
   '/clients/:id',
   requireAuth,
+  requireCapability('agency'),
   requireRole('ADMIN'),
   validate(updateAgencyClientSchema),
   asyncHandler(async (req, res) => {
@@ -105,6 +110,7 @@ router.patch(
 router.delete(
   '/clients/:id',
   requireAuth,
+  requireCapability('agency'),
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const del = await prisma.agencyClient.deleteMany({

@@ -6,4 +6,5 @@ export interface Product {
   stock: number;
   isActive: boolean;
   category?: { id: string; name: string };
+  categoryId?: string;
 }

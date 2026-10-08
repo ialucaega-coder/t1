@@ -81,11 +81,21 @@ export class HttpClient {
     }
 
     if (res.status === 401) {
-      this.setToken(null);
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+      // En los endpoints de autenticación, un 401 es un resultado esperado
+      // (credenciales inválidas), NO una sesión vencida. No redirigimos ni
+      // limpiamos token: propagamos el mensaje del backend para que la pantalla
+      // de login lo muestre. Antes, todo 401 hacía una recarga dura a /login,
+      // así que el error nunca llegaba a verse y se vaciaba el formulario.
+      const isAuthAttempt = path.startsWith('/auth/login') || path.startsWith('/auth/register');
+      if (!isAuthAttempt) {
+        this.setToken(null);
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login';
+        }
+        throw new Error('Unauthorized');
       }
-      throw new Error('Unauthorized');
+      const body = await res.json().catch(() => ({ error: 'Credenciales inválidas' }));
+      throw new Error(body.error || 'Credenciales inválidas');
     }
 
     if (!res.ok) {

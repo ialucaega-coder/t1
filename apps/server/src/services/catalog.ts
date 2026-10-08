@@ -21,9 +21,9 @@ export interface DefaultFeature {
 /** Lee de forma segura el config (Json) de un Skill. */
 export function readFeatureConfig(
   config: Prisma.JsonValue | null
-): { kind?: string; subtitle?: string; iconName?: string } {
+): { kind?: string; subtitle?: string; iconName?: string; params?: Record<string, unknown> } {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return {};
-  return config as { kind?: string; subtitle?: string; iconName?: string };
+  return config as { kind?: string; subtitle?: string; iconName?: string; params?: Record<string, unknown> };
 }
 
 /** Nombres (normalizados) de las features de un `kind` ya presentes en un negocio. */

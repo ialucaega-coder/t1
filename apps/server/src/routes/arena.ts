@@ -98,6 +98,23 @@ router.delete(
   })
 );
 
+// Voto a un builder (espejo del voto de ideas). Scopeado por negocio.
+router.post(
+  '/builders/:id/vote',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const voted = await prisma.arenaBuilder.updateMany({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+      data: { votes: { increment: 1 } },
+    });
+    if (voted.count === 0) return res.status(404).json({ error: 'Builder not found' });
+    const updated = await prisma.arenaBuilder.findFirst({
+      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+    });
+    res.json(updated);
+  })
+);
+
 router.get(
   '/ideas',
   requireAuth,

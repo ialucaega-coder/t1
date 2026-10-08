@@ -48,14 +48,14 @@ describe('hooks/use-skills', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('ante error setea el mensaje y hace fallback al catálogo local', async () => {
+  it('ante error setea el mensaje y deja la lista vacía (sin datos falsos)', async () => {
     mockGet.mockRejectedValue(new Error('Sin conexión'));
 
     const { result } = renderHook(() => useSkills());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('Sin conexión');
-    expect(result.current.skills.length).toBeGreaterThan(0);
+    expect(result.current.skills).toEqual([]);
   });
 
   it('usa mensaje genérico cuando el error no es Error', async () => {

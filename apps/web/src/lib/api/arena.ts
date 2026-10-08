@@ -35,6 +35,10 @@ export function voteIdea(id: string) {
   return httpClient.post<ArenaIdea>(`/arena/ideas/${id}/vote`, {});
 }
 
+export function voteBuilder(id: string) {
+  return httpClient.post<ArenaBuilder>(`/arena/builders/${id}/vote`, {});
+}
+
 export function sendChat(message: string) {
   return httpClient.post<ArenaChatResponse>('/arena/chat', { message });
 }

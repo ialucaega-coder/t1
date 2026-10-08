@@ -7,6 +7,7 @@ import { Bell, Search, Calendar, ShoppingBag, Megaphone, Check, X } from 'lucide
 import { PAGE_TITLES } from '@/config';
 import { NAVIGATION } from '@/config/navigation';
 import { useNotifications } from '@/hooks/use-notifications';
+import { usePageCounterStore } from '@/stores/page-counter';
 import type { AppNotification } from '@/types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -182,6 +183,9 @@ export function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { notifications, unreadCount, markRead, markAllRead } = useNotifications();
+  // Contador vivo empujado por cada página (reemplaza el string hardcodeado de
+  // page-titles.ts). Si una página no lo setea, no se muestra badge.
+  const liveCounter = usePageCounterStore((s) => s.counter);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -219,9 +223,9 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
-        {page.counter && (
+        {liveCounter && (
           <div className="counter-badge">
-            {page.counter}
+            {liveCounter}
           </div>
         )}
         <button onClick={() => setSearchOpen(true)} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-slate-400 hover:bg-surface-100 hover:text-white transition-colors border border-slate-700/50">

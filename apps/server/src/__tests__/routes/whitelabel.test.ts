@@ -23,6 +23,16 @@ vi.mock('../../lib/prisma', () => ({
   },
 }));
 
+vi.mock('../../services/whitelabel/config', () => ({
+  WHITELABEL_THEMES: ['nimbus', 'onyx', 'terra'],
+  WHITELABEL_SECTIONS: ['Costos', 'Configuración IA', 'Arena', 'Marketplace'],
+  loadWhitelabelUi: vi.fn(async () => ({ theme: 'onyx', hiddenSections: [] })),
+  saveWhitelabelUi: vi.fn(async (_businessId: string, patch: Record<string, unknown>) => ({
+    theme: (patch.theme as string) ?? 'onyx',
+    hiddenSections: (patch.hiddenSections as string[]) ?? [],
+  })),
+}));
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
     req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
@@ -41,6 +51,7 @@ vi.mock('../../middleware/auth', () => ({
 
 import { prisma } from '../../lib/prisma';
 import { whitelabelRouter } from '../../routes/whitelabel';
+import { saveWhitelabelUi } from '../../services/whitelabel/config';
 import { errorHandler } from '../../middleware/errorHandler';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -94,6 +105,15 @@ describe('routes/whitelabel', () => {
         expect.objectContaining({ where: { id: 'biz_1' } })
       );
     });
+
+    it('incluye la config de UI del panel (theme + hiddenSections)', async () => {
+      mock(prisma.business.findUnique).mockResolvedValue(businessRow);
+
+      const res = await request(app).get('/api/whitelabel');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ theme: 'onyx', hiddenSections: [] });
+    });
   });
 
   describe('PATCH /api/whitelabel', () => {
@@ -143,6 +163,35 @@ describe('routes/whitelabel', () => {
 
       expect(res.status).toBe(400);
       expect(prisma.business.update).not.toHaveBeenCalled();
+    });
+
+    it('persiste theme + hiddenSections vía el servicio de UI y los devuelve', async () => {
+      mock(prisma.business.update).mockResolvedValue(businessRow);
+
+      const res = await request(app)
+        .patch('/api/whitelabel')
+        .send({ theme: 'terra', hiddenSections: ['Arena', 'Marketplace'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ theme: 'terra', hiddenSections: ['Arena', 'Marketplace'] });
+      expect(saveWhitelabelUi).toHaveBeenCalledWith('biz_1', {
+        theme: 'terra',
+        hiddenSections: ['Arena', 'Marketplace'],
+      });
+    });
+
+    it('devuelve 400 con un theme fuera del enum (validacion Zod)', async () => {
+      const res = await request(app).patch('/api/whitelabel').send({ theme: 'galactic' });
+
+      expect(res.status).toBe(400);
+      expect(saveWhitelabelUi).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 con una sección inválida en hiddenSections', async () => {
+      const res = await request(app).patch('/api/whitelabel').send({ hiddenSections: ['NoExiste'] });
+
+      expect(res.status).toBe(400);
+      expect(saveWhitelabelUi).not.toHaveBeenCalled();
     });
   });
 

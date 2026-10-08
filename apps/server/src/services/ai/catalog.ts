@@ -19,11 +19,13 @@ export type ProviderFamily =
   | 'anthropic'
   | 'gemini'
   | 'groq'
+  | 'xai'
   | 'deepseek'
   | 'mistral'
   | 'together'
   | 'perplexity'
   | 'cohere'
+  | 'openrouter'
   | 'ollama'
   | 'lmstudio';
 
@@ -114,6 +116,29 @@ export const AI_ENGINES: AIEngine[] = [
     id: 'cohere-command-r-plus', name: 'Cohere Command R+', provider: 'cohere', model: 'command-r-plus',
     type: 'api', vision: false, kind: 'openai-compatible',
     baseURL: 'https://api.cohere.ai/compatibility/v1', keyEnv: 'COHERE_API_KEY', icon: 'MessageSquare',
+  },
+  // ── xAI Grok (endpoint compatible con OpenAI) ──────────────────────────
+  // El string de `model` es configurable: si xAI renombra/actualiza su flagship,
+  // alcanza con cambiarlo acá (la arquitectura no cambia). `grok-2-vision` es la
+  // variante multimodal estable; `grok-4` el flagship de razonamiento.
+  {
+    id: 'xai-grok-4', name: 'Grok 4 (xAI)', provider: 'xai', model: 'grok-4',
+    type: 'api', vision: false, kind: 'openai-compatible',
+    baseURL: 'https://api.x.ai/v1', keyEnv: 'XAI_API_KEY', icon: 'Rocket',
+  },
+  {
+    id: 'xai-grok-vision', name: 'Grok Visión (Fotos)', provider: 'xai', model: 'grok-2-vision-1212',
+    type: 'api', vision: true, kind: 'openai-compatible',
+    baseURL: 'https://api.x.ai/v1', keyEnv: 'XAI_API_KEY', icon: 'Eye',
+  },
+  // ── Nous Hermes vía OpenRouter (agregador, API compatible con OpenAI) ───
+  // Hermes NO es proveedor de primera parte: se consume por un agregador de
+  // pesos abiertos. El id de modelo sigue el formato `vendor/model` de OpenRouter.
+  {
+    id: 'openrouter-hermes-3', name: 'Nous Hermes 3 (OpenRouter)', provider: 'openrouter',
+    model: 'nousresearch/hermes-3-llama-3.1-70b',
+    type: 'api', vision: false, kind: 'openai-compatible',
+    baseURL: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', icon: 'Brain',
   },
   // ── Locales (sin key) ──────────────────────────────────────────────────
   {

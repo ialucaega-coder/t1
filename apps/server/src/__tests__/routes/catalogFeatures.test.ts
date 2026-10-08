@@ -50,6 +50,7 @@ function buildApp() {
   const app = express();
   app.use(express.json());
   app.use('/api/skills', createCatalogFeaturesRouter('skill'));
+  app.use('/api/superpowers', createCatalogFeaturesRouter('superpower'));
   app.use(errorHandler);
   return app;
 }
@@ -87,7 +88,7 @@ describe('routes/catalogFeatures (CRUD genérico, kind=skill)', () => {
       expect(res.status).toBe(200);
       expect(ensureDefaultFeatures).toHaveBeenCalledWith('biz_1', 'skill', expect.any(Array));
       expect(res.body).toEqual([
-        { name: 'Reservas', subtitle: 'Sub A', description: 'Agenda', iconName: 'IconA', isActive: true },
+        { name: 'Reservas', subtitle: 'Sub A', description: 'Agenda', iconName: 'IconA', isActive: true, params: {}, paramSpecs: [] },
       ]);
     });
 
@@ -125,6 +126,8 @@ describe('routes/catalogFeatures (CRUD genérico, kind=skill)', () => {
         description: 'Nueva desc',
         iconName: 'NewIcon',
         isActive: false,
+        params: {},
+        paramSpecs: [],
       });
     });
 
@@ -166,6 +169,45 @@ describe('routes/catalogFeatures (CRUD genérico, kind=skill)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ isActive: 'sí' });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('PUT /api/superpowers/:name (params configurables)', () => {
+    it('normaliza y persiste los params del superpoder, y los devuelve resueltos', async () => {
+      mock(prisma.skill.findFirst).mockResolvedValue({
+        id: 'sp1',
+        name: 'Turbo respuesta',
+        icon: 'Gauge',
+        config: { kind: 'superpower', subtitle: 'RÁPIDO', iconName: 'Gauge' },
+      });
+      // El update devuelve lo que mapFeature luego resuelve contra el spec real.
+      mock(prisma.skill.update).mockResolvedValue({
+        name: 'Turbo respuesta',
+        description: 'desc',
+        icon: 'Gauge',
+        isActive: true,
+        config: { kind: 'superpower', subtitle: 'RÁPIDO', iconName: 'Gauge', params: { maxOraciones: 6 } },
+      });
+
+      const res = await request(app)
+        .put('/api/superpowers/Turbo%20respuesta')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ params: { maxOraciones: 99 } }); // fuera de rango → se clampa a 6
+
+      expect(res.status).toBe(200);
+      // Persistió el valor clampeado (6), no el 99 crudo.
+      expect(prisma.skill.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            config: expect.objectContaining({ params: { maxOraciones: 6 } }),
+          }),
+        })
+      );
+      // La respuesta incluye params resueltos + el spec para el front.
+      expect(res.body.params).toEqual({ maxOraciones: 6 });
+      expect(res.body.paramSpecs).toEqual([
+        expect.objectContaining({ key: 'maxOraciones', type: 'number', min: 1, max: 6 }),
+      ]);
     });
   });
 });

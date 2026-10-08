@@ -8,6 +8,8 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
 import { registerSchema, loginSchema, twoFactorCodeSchema, RegisterInput, LoginInput } from '../validators/auth';
 import { requireAuth } from '../middleware/auth';
+import { getAuthSecret } from '../lib/secrets';
+import { revokeUserSessions } from '../services/auth/revocation';
 import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
 
 const updateMeSchema = z.object({
@@ -50,7 +52,7 @@ function clearSessionCookie(res: Response) {
 }
 
 function signToken(payload: { userId: string; businessId: string; role: string }) {
-  return jwt.sign(payload, process.env.NEXTAUTH_SECRET || 'dev-secret', {
+  return jwt.sign(payload, getAuthSecret(), {
     expiresIn: JWT_EXPIRES_IN,
   });
 }
@@ -114,6 +116,19 @@ router.post(
     if (!user) {
       // No revelamos si el email existe o no (evita enumeración de usuarios).
       auditAuthEvent('AUTH_LOGIN_FAILURE', req, { metadata: { reason: 'unknown_email' } });
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Cuentas desactivadas o con borrado lógico no pueden iniciar sesión, ni
+    // siquiera con la contraseña correcta. Respuesta genérica para no revelar
+    // el estado de la cuenta.
+    if (!user.isActive || user.deletedAt) {
+      auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
+        userId: user.id,
+        businessId: user.businessId,
+        metadata: { reason: 'inactive_account' },
+      });
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
@@ -190,7 +205,7 @@ router.get(
     }
     try {
       const token = header.slice(7);
-      const payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as { userId: string; businessId: string; role: string };
+      const payload = jwt.verify(token, getAuthSecret()) as { userId: string; businessId: string; role: string };
       const user = await prisma.user.findUnique({
         where: { id: payload.userId },
         include: { business: true },
@@ -218,10 +233,10 @@ router.patch(
       res.status(401).json({ error: 'Not authenticated' });
       return;
     }
-    let payload: { userId: string; businessId: string; role: string };
+    let payload: { userId: string; businessId: string; role: string; iat?: number };
     try {
       const token = header.slice(7);
-      payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as typeof payload;
+      payload = jwt.verify(token, getAuthSecret()) as typeof payload;
     } catch {
       res.status(401).json({ error: 'Invalid token' });
       return;
@@ -268,6 +283,15 @@ router.patch(
       include: { business: true },
     });
 
+    // Si cambió la contraseña, revocamos todas las sesiones ANTERIORES a la
+    // actual: un atacante con un token viejo robado queda afuera, pero el
+    // usuario que acaba de cambiar su clave NO se desloguea (su token, emitido
+    // en `iat`, sobrevive porque el corte es su propio `iat`).
+    if (update.passwordHash) {
+      const cutoffMs = (payload.iat ?? Math.floor(Date.now() / 1000)) * 1000;
+      await revokeUserSessions(payload.businessId, payload.userId, cutoffMs);
+    }
+
     res.json({
       user: { id: updated.id, email: updated.email, name: updated.name, role: updated.role },
       business: { id: updated.business.id, name: updated.business.name, slug: updated.business.slug },
@@ -277,9 +301,13 @@ router.patch(
 
 router.post(
   '/logout',
+  requireAuth,
   asyncHandler(async (req, res) => {
     clearSessionCookie(res);
-    auditAuthEvent('AUTH_LOGOUT', req, { userId: req.auth?.userId, businessId: req.auth?.businessId });
+    // Revocación server-side: el token de esta sesión queda inutilizable aunque
+    // alguien lo haya copiado (antes el logout solo borraba la cookie local).
+    await revokeUserSessions(req.auth!.businessId, req.auth!.userId);
+    auditAuthEvent('AUTH_LOGOUT', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
     res.status(204).send();
   })
 );

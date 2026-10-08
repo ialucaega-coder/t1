@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Clock, DollarSign, Pencil, Trash2, ToggleLeft, ToggleRight, Search, Briefcase } from 'lucide-react';
 import { useServices } from '@/hooks/use-services';
+import { categoriesApi } from '@/lib/api/index';
+import type { Category } from '@/types';
 import { ServiceFormModal } from '@/components/services/ServiceFormModal';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -20,6 +22,11 @@ export default function ServiciosPage() {
   const [toggling, setToggling] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  useEffect(() => {
+    categoriesApi.getCategories().then(setCategories).catch(() => {});
+  }, []);
 
   const filtered = services.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -28,21 +35,19 @@ export default function ServiciosPage() {
 
   const activeCount = services.filter((s) => s.isActive).length;
 
-  async function handleSave(data: { name: string; description: string; duration: number; price: number; category: string }) {
+  async function handleSave(data: { name: string; description: string; duration: number; price: number; categoryId: string }) {
+    const payload = {
+      name: data.name,
+      description: data.description.trim() || undefined,
+      duration: data.duration,
+      price: data.price,
+      categoryId: data.categoryId || undefined,
+    };
     if (editing) {
-      await updateService(editing.id, {
-        name: data.name,
-        duration: data.duration,
-        price: data.price,
-        isActive: editing.isActive,
-      });
+      await updateService(editing.id, { ...payload, isActive: editing.isActive });
       toast({ type: 'success', message: 'Servicio actualizado correctamente' });
     } else {
-      await createService({
-        name: data.name,
-        duration: data.duration,
-        price: data.price,
-      });
+      await createService(payload);
       toast({ type: 'success', message: 'Servicio creado correctamente' });
     }
     setEditing(null);
@@ -174,11 +179,13 @@ export default function ServiciosPage() {
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditing(null); }}
         onSave={handleSave}
+        categories={categories}
         initial={editing ? {
           name: editing.name,
+          description: editing.description || '',
           duration: editing.duration,
           price: editing.price,
-          category: editing.category?.name || '',
+          categoryId: editing.categoryId || editing.category?.id || '',
         } : undefined}
         title={editing ? 'Editar servicio' : 'Nuevo servicio'}
       />

@@ -3,6 +3,8 @@ import { z } from 'zod';
 /** Filtros de búsqueda y paginación para el listado de clientes. */
 export const listClientsQuerySchema = z.object({
   search: z.string().trim().optional(),
+  /** Filtro por etiqueta del CRM (id de tag). Segmenta la lista. */
+  tagId: z.string().trim().max(64).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });

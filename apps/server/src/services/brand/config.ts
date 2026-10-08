@@ -8,8 +8,8 @@
  *
  * Persistencia: como no se puede tocar el schema de Prisma, guardamos la
  * config en el modelo `Connection` con type='BRAND' (un registro por negocio),
- * reutilizando el campo `config Json?`. Es el mismo patrón que usan los
- * proveedores de IA (type='ai_provider') en routes/settings.ts.
+ * reutilizando el campo `config Json?`. Es el mismo patrón que usa el Motor de
+ * IA (type='AI_ENGINE') en services/ai/engine.ts.
  */
 import { prisma } from '../../lib/prisma';
 

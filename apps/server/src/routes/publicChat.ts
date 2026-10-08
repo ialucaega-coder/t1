@@ -19,6 +19,14 @@ const router = Router();
 // reinicia el contador — suficiente como guarda de costo.
 const MAX_VISION_MSGS_PER_DAY = 300;
 
+// Tope diario GENERAL de mensajes del chat público por negocio (texto incluido).
+// El chat público es anónimo y cada mensaje que llega al LLM cuesta tokens. El
+// rate limit global es POR IP (no frena a muchos usuarios distintos atacando un
+// mismo negocio). Este tope es POR NEGOCIO y protege el costo de IA del dueño:
+// si se supera, respondemos amablemente SIN llamar al proveedor. Caché en
+// memoria (best-effort); si el proceso reinicia, se reinicia el contador.
+const MAX_CHAT_MSGS_PER_DAY = 1000;
+
 /**
  * Incrementa y controla el contador diario de mensajes con imágenes del negocio.
  * Devuelve `true` si ya se superó el tope (hay que rechazar). Node es de un solo
@@ -30,6 +38,20 @@ function overVisionDailyLimit(businessId: string): boolean {
   const count = cache.get<number>(key) ?? 0;
   if (count >= MAX_VISION_MSGS_PER_DAY) return true;
   // TTL de 24h: la clave del día vive lo suficiente y luego se descarta sola.
+  cache.set(key, count + 1, 24 * 60 * 60 * 1000);
+  return false;
+}
+
+/**
+ * Incrementa y controla el contador diario GENERAL de mensajes del negocio.
+ * Devuelve `true` si ya se superó el tope (hay que rechazar antes de llamar al
+ * LLM). Mismo mecanismo que el de visión, pero para todo mensaje.
+ */
+function overChatDailyLimit(businessId: string): boolean {
+  const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  const key = cacheKey(businessId, 'chat-msgs', day);
+  const count = cache.get<number>(key) ?? 0;
+  if (count >= MAX_CHAT_MSGS_PER_DAY) return true;
   cache.set(key, count + 1, 24 * 60 * 60 * 1000);
   return false;
 }
@@ -132,6 +154,19 @@ router.post('/chat', asyncHandler(async (req, res) => {
   if (bot.status !== 'ACTIVE') {
     res.json({
       text: 'El bot no está activo en este momento. Por favor, intentá más tarde.',
+      intent: 'FAQ',
+      actions: [],
+      conversationId: data.conversationId || '',
+    });
+    return;
+  }
+
+  // Guarda de costo por negocio: si se superó el tope diario de mensajes,
+  // respondemos amablemente SIN llamar al LLM (protege el gasto de IA del dueño
+  // ante un chat público anónimo). Se chequea antes de procesar el mensaje.
+  if (overChatDailyLimit(bot.businessId)) {
+    res.json({
+      text: 'Estamos recibiendo muchas consultas hoy. Por favor, escribinos más tarde o dejanos tu contacto y te respondemos a la brevedad.',
       intent: 'FAQ',
       actions: [],
       conversationId: data.conversationId || '',

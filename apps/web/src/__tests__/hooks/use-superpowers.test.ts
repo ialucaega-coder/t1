@@ -48,14 +48,14 @@ describe('hooks/use-superpowers', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('ante error setea el mensaje y hace fallback al catálogo local', async () => {
+  it('ante error setea el mensaje y deja la lista vacía (sin datos falsos)', async () => {
     mockGet.mockRejectedValue(new Error('Timeout'));
 
     const { result } = renderHook(() => useSuperpowers());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('Timeout');
-    expect(result.current.superpowers.length).toBeGreaterThan(0);
+    expect(result.current.superpowers).toEqual([]);
   });
 
   it('usa mensaje genérico cuando el error no es Error', async () => {
