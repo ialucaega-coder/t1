@@ -14,6 +14,7 @@ import { initSocket } from './lib/socket';
 import { getRedis, closeRedis, waitForRedisReady, isRedisEnabled } from './lib/redis';
 import { assertSecretsConfigured, getAuthSecret } from './lib/secrets';
 import { requireAuth, requireStaff } from './middleware/auth';
+import { requirePlatformAdmin } from './middleware/platformAdmin';
 import { requireCapability } from './middleware/capability';
 import { authRouter } from './routes/auth';
 import { bookingsRouter } from './routes/bookings';
@@ -61,6 +62,7 @@ import { calcomRouter } from './routes/calcom';
 import { mercadopagoRouter } from './routes/mercadopago';
 import { manychatRouter } from './routes/manychat';
 import { composioRouter } from './routes/composio';
+import { platformRouter } from './routes/platform';
 import { restoreActiveBots } from './services/telegram/bot';
 import { startScheduler } from './services/scheduler';
 import { apiRateLimit } from './middleware/rateLimit';
@@ -298,6 +300,9 @@ app.use('/api/calcom', calcomRouter);
 app.use('/api/mercadopago', mercadopagoRouter);
 app.use('/api/manychat', manychatRouter);
 app.use('/api/composio', composioRouter);
+// Super Admin (panel del dueño de la plataforma): cross-tenant, detrás de la
+// allowlist por email de PLATFORM_ADMIN_EMAILS (ver middleware/platformAdmin.ts).
+app.use('/api/platform', requireAuth, requirePlatformAdmin, platformRouter);
 // El CORS permisivo de /api/public ya se registró arriba (antes del CORS
 // global), así que acá solo montamos el router.
 app.use('/api/public', publicChatRouter);
