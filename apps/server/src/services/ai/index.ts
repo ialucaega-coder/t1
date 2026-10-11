@@ -3,7 +3,7 @@
  * Re-exporta todo lo necesario para que el resto del backend importe
  * desde un único lugar: `services/ai`.
  */
-export type { AIProvider, AIProviderConfig, ConversationContext, ConversationTurn, ImageInput } from './provider';
+export type { AIProvider, AIProviderConfig, ConversationContext, ConversationTurn, ImageInput, TokenUsage } from './provider';
 export { AnthropicProvider } from './providers/anthropic';
 export { OpenAIProvider } from './providers/openai';
 export {

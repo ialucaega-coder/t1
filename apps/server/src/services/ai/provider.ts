@@ -13,6 +13,19 @@ export interface ConversationTurn {
 }
 
 /**
+ * Consumo de tokens reportado por el modelo en una generación (FinOps/telemetría).
+ * Lo devuelven los SDKs (Anthropic: input/output_tokens; OpenAI: prompt/completion).
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Modelo que generó la respuesta (ej: "claude-3-5-sonnet", "gpt-4o"). */
+  model?: string;
+  /** Familia de proveedor (ej: "anthropic", "openai"). */
+  provider?: string;
+}
+
+/**
  * Imagen adjunta a un mensaje del usuario (superpoder "Oído y vista" — visión).
  * Se puede pasar por URL pública (http/https) o por base64 embebido.
  * `mediaType` es opcional para base64 (ej: "image/jpeg"); si no se pasa, se
@@ -43,6 +56,13 @@ export interface ConversationContext {
    * demás las ignoran de forma segura.
    */
   images?: ImageInput[];
+  /**
+   * Callback opcional para registrar el consumo de tokens de la generación
+   * (FinOps). El proveedor lo invoca con el `usage` real del SDK si está
+   * disponible. Opcional y sin estado compartido: evita acoplar el proveedor
+   * (cacheado y reusado entre requests) a la persistencia.
+   */
+  recordUsage?: (usage: TokenUsage) => void;
 }
 
 /**

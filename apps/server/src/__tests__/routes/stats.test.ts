@@ -136,6 +136,33 @@ describe('routes/stats', () => {
         expect.objectContaining({ where: expect.objectContaining({ businessId: 'biz_1' }) })
       );
     });
+
+    it('mantiene el orden cronológico y alinea bookings con revenue por día', async () => {
+      // Valores distintos por día: detecta si los índices se cruzan/desordenan.
+      for (const n of [1, 2, 3, 4, 5, 6, 7]) mock(prisma.booking.count).mockResolvedValueOnce(n);
+      for (const r of [100, 200, 300, 400, 500, 600, 700]) {
+        mock(prisma.transaction.aggregate).mockResolvedValueOnce({ _sum: { amount: r } });
+      }
+
+      const res = await request(app).get('/api/stats/weekly');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(7);
+      // El índice 0 es el día más viejo; el 6, hoy. bookings[i] y revenue[i] alineados.
+      expect(res.body.map((d: { bookings: number }) => d.bookings)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(res.body.map((d: { revenue: number }) => d.revenue)).toEqual([100, 200, 300, 400, 500, 600, 700]);
+      // Fechas estrictamente ascendentes.
+      const dates = res.body.map((d: { date: string }) => d.date);
+      expect([...dates].sort()).toEqual(dates);
+    });
+
+    it('revenue cae a 0 cuando no hay facturación (_sum.amount null)', async () => {
+      mock(prisma.booking.count).mockResolvedValue(0);
+      mock(prisma.transaction.aggregate).mockResolvedValue({ _sum: { amount: null } });
+
+      const res = await request(app).get('/api/stats/weekly');
+      expect(res.body[0].revenue).toBe(0);
+    });
   });
 
   describe('GET /api/stats/top-services', () => {

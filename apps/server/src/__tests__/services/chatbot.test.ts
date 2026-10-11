@@ -35,9 +35,13 @@ vi.mock('../../services/faq/config', () => ({
 vi.mock('../../services/ai/system-prompt', () => ({
   loadSystemPrompt: vi.fn(async () => ''),
 }));
+vi.mock('../../services/billing/quota', () => ({
+  getMessageQuota: vi.fn(async () => ({ used: 0, limit: 500, remaining: 500, overQuota: false, periodStart: '', periodEnd: null, plan: null })),
+}));
 
 import { prisma } from '../../lib/prisma';
 import { getAIProviderForBusiness } from '../../services/ai/engine';
+import { getMessageQuota } from '../../services/billing/quota';
 import { processMessage, type ChatChannel } from '../../services/chatbot';
 
 const mock = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -124,5 +128,107 @@ describe('services/chatbot — scoping del nombre de cliente (anti IDOR)', () =>
     );
     // Nunca por id sin scope (patrón IDOR).
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('services/chatbot — enforcement del cupo mensual del plan', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    mock(prisma.conversation.create).mockResolvedValue({ id: 'c1' });
+    mock(prisma.conversation.update).mockResolvedValue({ id: 'c1' });
+    mock(prisma.message.create).mockResolvedValue({ id: 'm1' });
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+  });
+
+  it('sobre el cupo: NO llama al LLM y responde el mensaje de límite', async () => {
+    mock(getMessageQuota).mockResolvedValueOnce({
+      used: 500, limit: 500, remaining: 0, overQuota: true, periodStart: '', periodEnd: null, plan: 'Free',
+    });
+    const providerSpy = vi.fn();
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse: providerSpy });
+
+    const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { history: [], botId: 'bot_1' });
+
+    expect(getAIProviderForBusiness).not.toHaveBeenCalled();
+    expect(providerSpy).not.toHaveBeenCalled();
+    expect(res.text).toContain('límite de mensajes de su plan');
+  });
+
+  it('dentro del cupo: llama al LLM normalmente', async () => {
+    mock(getMessageQuota).mockResolvedValueOnce({
+      used: 10, limit: 500, remaining: 490, overQuota: false, periodStart: '', periodEnd: null, plan: 'Free',
+    });
+    mock(getAIProviderForBusiness).mockResolvedValue({
+      generateResponse: vi.fn().mockResolvedValue('respuesta del bot'),
+    });
+
+    const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { history: [], botId: 'bot_1' });
+
+    expect(getAIProviderForBusiness).toHaveBeenCalled();
+    expect(res.text).toBe('respuesta del bot');
+  });
+
+  it('si el cupo falla al consultarse, degrada fail-open (el bot responde)', async () => {
+    mock(getMessageQuota).mockRejectedValueOnce(new Error('db down'));
+    mock(getAIProviderForBusiness).mockResolvedValue({
+      generateResponse: vi.fn().mockResolvedValue('respuesta igual'),
+    });
+
+    const res = await processMessage('biz_1', 'hola', 'WEB', { history: [], botId: 'bot_1' });
+
+    expect(getAIProviderForBusiness).toHaveBeenCalled();
+    expect(res.text).toBe('respuesta igual');
+  });
+});
+
+describe('services/chatbot — persistencia del consumo (FinOps)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    mock(prisma.conversation.create).mockResolvedValue({ id: 'c1' });
+    mock(prisma.conversation.update).mockResolvedValue({ id: 'c1' });
+    mock(prisma.message.create).mockResolvedValue({ id: 'm1' });
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+    mock(getMessageQuota).mockResolvedValue({
+      used: 0, limit: 500, remaining: 500, overQuota: false, periodStart: '', periodEnd: null, plan: null,
+    });
+  });
+
+  it('guarda el usage del provider en message.metadata y la latencia en responseTime', async () => {
+    mock(getAIProviderForBusiness).mockResolvedValue({
+      generateResponse: vi.fn(async (_msg: string, ctx: { recordUsage?: (u: unknown) => void }) => {
+        ctx.recordUsage?.({ inputTokens: 100, outputTokens: 50, model: 'gpt-4o', provider: 'openai' });
+        return 'ok';
+      }),
+    });
+
+    await processMessage('biz_1', 'contame algo', 'WEB', { history: [], botId: 'bot_1' });
+
+    // El primer message.create es el del usuario; el del bot lleva el usage.
+    const botCall = mock(prisma.message.create).mock.calls.find((c) => c[0].data.role === 'BOT');
+    const data = botCall![0].data;
+    expect(data.metadata).toEqual({ usage: { inputTokens: 100, outputTokens: 50, model: 'gpt-4o', provider: 'openai' } });
+    expect(typeof data.responseTime).toBe('number');
+  });
+
+  it('sin usage (provider no lo reporta): no escribe metadata ni responseTime basura', async () => {
+    mock(getAIProviderForBusiness).mockResolvedValue({
+      generateResponse: vi.fn().mockResolvedValue('ok'), // no llama recordUsage
+    });
+
+    await processMessage('biz_1', 'contame algo', 'WEB', { history: [], botId: 'bot_1' });
+
+    const botCall = mock(prisma.message.create).mock.calls.find((c) => c[0].data.role === 'BOT');
+    const data = botCall![0].data;
+    expect(data.metadata).toBeUndefined();
+    // responseTime sí se setea (latencia real), pero nunca usage.
+    expect(data.responseTime === undefined || typeof data.responseTime === 'number').toBe(true);
   });
 });

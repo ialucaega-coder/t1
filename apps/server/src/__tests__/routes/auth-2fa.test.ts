@@ -11,7 +11,7 @@ import bcrypt from 'bcryptjs';
 import { authenticator } from 'otplib';
 
 vi.mock('../../lib/prisma', () => ({
-  prisma: { user: { findUnique: vi.fn(), update: vi.fn() } },
+  prisma: { user: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() } },
 }));
 
 import { prisma } from '../../lib/prisma';

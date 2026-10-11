@@ -30,11 +30,15 @@ vi.mock('../../services/ai/engine', () => ({
   setActiveEngine: vi.fn(),
   setEngineKey: vi.fn(),
 }));
+vi.mock('../../services/ai/usage', () => ({ getUsageSummary: vi.fn() }));
+vi.mock('../../services/billing/quota', () => ({ getMessageQuota: vi.fn() }));
 
 import { prisma } from '../../lib/prisma';
 import { processMessage } from '../../services/chatbot';
 import { getDefaultAIProvider } from '../../services/ai';
 import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../../services/ai/engine';
+import { getUsageSummary } from '../../services/ai/usage';
+import { getMessageQuota } from '../../services/billing/quota';
 import { aiRouter } from '../../routes/ai';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -138,6 +142,39 @@ describe('routes/ai', () => {
       const res = await request(app).put('/api/ai/keys').send({ provider: 'hacker', apiKey: 'x' });
       expect(res.status).toBe(400);
       expect(mock(setEngineKey)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /usage (FinOps)', () => {
+    const sample = {
+      rangeDays: 14, totalInputTokens: 100, totalOutputTokens: 50, totalMessages: 3,
+      estimatedCostUsd: 0.01, byDay: [], byModel: [],
+    };
+
+    it('devuelve el resumen de consumo scopeado por negocio y rango', async () => {
+      mock(getUsageSummary).mockResolvedValue(sample);
+      const res = await request(app).get('/api/ai/usage').query({ days: '14' });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ totalInputTokens: 100, estimatedCostUsd: 0.01 });
+      expect(mock(getUsageSummary)).toHaveBeenCalledWith('biz_1', 14);
+    });
+
+    it('acota days al rango [1,365] (clamp)', async () => {
+      mock(getUsageSummary).mockResolvedValue(sample);
+      await request(app).get('/api/ai/usage').query({ days: '9999' });
+      expect(mock(getUsageSummary)).toHaveBeenCalledWith('biz_1', 365);
+    });
+  });
+
+  describe('GET /quota (cupo del plan)', () => {
+    it('devuelve el cupo mensual del negocio del token', async () => {
+      mock(getMessageQuota).mockResolvedValue({
+        used: 120, limit: 500, remaining: 380, overQuota: false, periodStart: '', periodEnd: null, plan: 'Free',
+      });
+      const res = await request(app).get('/api/ai/quota');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ used: 120, limit: 500, overQuota: false });
+      expect(mock(getMessageQuota)).toHaveBeenCalledWith('biz_1');
     });
   });
 });

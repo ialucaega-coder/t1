@@ -11,7 +11,10 @@ import { processMessage } from '../services/chatbot';
 import { listAvailableProviders, getDefaultAIProvider } from '../services/ai';
 import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../services/ai/engine';
 import { loadSystemPrompt, saveSystemPrompt, MAX_SYSTEM_PROMPT_LENGTH } from '../services/ai/system-prompt';
+import { getUsageSummary } from '../services/ai/usage';
+import { getMessageQuota } from '../services/billing/quota';
 import type { ProviderFamily } from '../services/ai/catalog';
+import { cache, cacheKey } from '../lib/cache';
 
 const router = Router();
 
@@ -205,6 +208,36 @@ router.put('/keys', requireAuth, asyncHandler(async (req, res) => {
   }
   await setEngineKey(req.auth!.businessId, provider as ProviderFamily, apiKey);
   res.json({ success: true });
+}));
+
+const USAGE_TTL_MS = 60_000;
+
+/**
+ * GET /api/ai/usage?days=30
+ * Resumen de consumo de IA (tokens + costo estimado) del negocio, agregado por
+ * día y por modelo. Cacheado 60s (varias tarjetas del panel pueden pedirlo).
+ */
+router.get('/usage', requireAuth, asyncHandler(async (req, res) => {
+  const businessId = req.auth!.businessId;
+  const days = Math.min(Math.max(parseInt(String(req.query.days ?? '30'), 10) || 30, 1), 365);
+
+  const key = cacheKey(businessId, 'ai-usage', String(days));
+  const cached = cache.get(key);
+  if (cached) return res.json(cached);
+
+  const summary = await getUsageSummary(businessId, days);
+  cache.set(key, summary, USAGE_TTL_MS);
+  res.json(summary);
+}));
+
+/**
+ * GET /api/ai/quota
+ * Cupo mensual de mensajes del bot del negocio (uso, límite del plan y restante).
+ * Enforza el `maxMessages` del plan que antes solo se mostraba.
+ */
+router.get('/quota', requireAuth, asyncHandler(async (req, res) => {
+  const quota = await getMessageQuota(req.auth!.businessId);
+  res.json(quota);
 }));
 
 export { router as aiRouter };

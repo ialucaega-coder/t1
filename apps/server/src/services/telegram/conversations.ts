@@ -366,21 +366,52 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
       });
     }
 
-    // Crear la reserva
-    const booking = await prisma.booking.create({
-      data: {
-        date: new Date(state.date),
-        startTime: state.startTime,
-        endTime,
-        totalPrice: service.price,
-        source: 'TELEGRAM',
-        notes: `Reserva desde Telegram — @${telegramUser?.username || chatId}`,
-        clientId: client.id,
-        professionalId: state.professionalId,
-        serviceId: state.serviceId,
-        businessId: state.businessId,
-      },
+    // Reserva atómica: mismo patrón que el chat web. Tomamos un advisory lock
+    // transaccional por (negocio, profesional, día) y re-chequeamos el solape
+    // DENTRO de la transacción, con el lock tomado. Sin esto, dos reservas
+    // concurrentes del mismo recurso (ej: dos chats confirmando a la vez) podían
+    // crear un doble booking porque no hay @@unique en el schema (congelado).
+    // pg_advisory_xact_lock se libera solo al commit/rollback.
+    // Valores ya garantizados no-nulos por el guard de arriba; los capturamos en
+    // locales porque el narrowing de TS no sobrevive dentro del closure de la tx.
+    const { businessId, serviceId, professionalId, date, startTime } = state;
+    const lockKey = `booking:${businessId}:${professionalId}:${date}`;
+    const booking = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+      const sameDayBookings = await tx.booking.findMany({
+        where: {
+          businessId,
+          date: new Date(date),
+          status: { notIn: ['CANCELLED'] },
+          professionalId,
+        },
+        select: { startTime: true, endTime: true },
+      });
+      const overlaps = sameDayBookings.some((b) => startTime < b.endTime && endTime > b.startTime);
+      if (overlaps) return null;
+
+      return tx.booking.create({
+        data: {
+          date: new Date(date),
+          startTime,
+          endTime,
+          totalPrice: service.price,
+          source: 'TELEGRAM',
+          notes: `Reserva desde Telegram — @${telegramUser?.username || chatId}`,
+          clientId: client.id,
+          professionalId,
+          serviceId,
+          businessId,
+        },
+      });
     });
+
+    if (!booking) {
+      clearState(chatId);
+      await ctx.reply('⚠️ Ese horario se acaba de ocupar. Empezá de nuevo con /reservar y elegí otro.');
+      return;
+    }
 
     clearState(chatId);
 

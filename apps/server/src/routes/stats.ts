@@ -95,27 +95,42 @@ router.get(
     if (cached) return res.json(cached);
 
     const now = new Date();
-    const days = [];
 
-    for (let i = 6; i >= 0; i--) {
+    // Rango [inicio, fin) de cada uno de los últimos 7 días.
+    const ranges = Array.from({ length: 7 }, (_, idx) => {
+      const i = 6 - idx;
       const date = new Date(now);
       date.setDate(date.getDate() - i);
       const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
       const end = new Date(start);
       end.setDate(end.getDate() + 1);
+      return { start, end };
+    });
 
-      const [bookings, revenue] = await Promise.all([
-        prisma.booking.count({ where: { businessId, date: { gte: start, lt: end } } }),
-        prisma.transaction.aggregate({ where: { businessId, createdAt: { gte: start, lt: end }, type: 'SALE' }, _sum: { amount: true } }),
-      ]);
+    // Antes: un for con `await` por día = 14 round-trips serializados (N+1).
+    // Ahora: todas las consultas salen en una sola tanda paralela.
+    const [bookingsByDay, revenueByDay] = await Promise.all([
+      Promise.all(
+        ranges.map(({ start, end }) =>
+          prisma.booking.count({ where: { businessId, date: { gte: start, lt: end } } })
+        )
+      ),
+      Promise.all(
+        ranges.map(({ start, end }) =>
+          prisma.transaction.aggregate({
+            where: { businessId, createdAt: { gte: start, lt: end }, type: 'SALE' },
+            _sum: { amount: true },
+          })
+        )
+      ),
+    ]);
 
-      days.push({
-        date: start.toISOString().split('T')[0],
-        day: start.toLocaleDateString('es-AR', { weekday: 'short' }),
-        bookings,
-        revenue: revenue._sum.amount || 0,
-      });
-    }
+    const days = ranges.map(({ start }, idx) => ({
+      date: start.toISOString().split('T')[0],
+      day: start.toLocaleDateString('es-AR', { weekday: 'short' }),
+      bookings: bookingsByDay[idx],
+      revenue: revenueByDay[idx]._sum.amount || 0,
+    }));
 
     cache.set(key, days, STATS_TTL_MS);
     res.json(days);

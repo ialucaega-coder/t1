@@ -34,7 +34,18 @@ vi.mock('../../services/stripe', () => ({
   createPaymentLink: vi.fn(),
 }));
 
+vi.mock('../../services/billing/limits', () => ({
+  getBotCapacity: vi.fn(),
+  getContactCapacity: vi.fn(),
+}));
+
+vi.mock('../../services/billing/quota', () => ({
+  getMessageQuota: vi.fn(),
+}));
+
 import { prisma } from '../../lib/prisma';
+import { getBotCapacity, getContactCapacity } from '../../services/billing/limits';
+import { getMessageQuota } from '../../services/billing/quota';
 import {
   createCheckoutSession,
   createCustomerPortalSession,
@@ -213,6 +224,59 @@ describe('routes/billing', () => {
 
       expect(res.status).toBe(400);
       expect(createCheckoutSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/billing/limits', () => {
+    const mock = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+    it('consolida bots, contactos y cupo de mensajes del negocio del token', async () => {
+      mock(getBotCapacity).mockResolvedValue({ used: 1, limit: 1, atLimit: true });
+      mock(getContactCapacity).mockResolvedValue({ used: 40, limit: 100, atLimit: false });
+      mock(getMessageQuota).mockResolvedValue({
+        used: 120, limit: 500, remaining: 380, overQuota: false,
+        periodStart: '2026-10-01', periodEnd: null, plan: 'Free',
+      });
+
+      const res = await request(app)
+        .get('/api/billing/limits')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        bots: { used: 1, limit: 1, atLimit: true },
+        contacts: { used: 40, limit: 100, atLimit: false },
+        messages: {
+          used: 120, limit: 500, remaining: 380, overQuota: false,
+          periodStart: '2026-10-01', periodEnd: null, plan: 'Free',
+        },
+      });
+      // Siempre scopeado al businessId del token.
+      expect(getBotCapacity).toHaveBeenCalledWith('biz_1');
+      expect(getContactCapacity).toHaveBeenCalledWith('biz_1');
+      expect(getMessageQuota).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('usa el businessId del token, no uno ajeno', async () => {
+      mock(getBotCapacity).mockResolvedValue({ used: 0, limit: 1, atLimit: false });
+      mock(getContactCapacity).mockResolvedValue({ used: 0, limit: 100, atLimit: false });
+      mock(getMessageQuota).mockResolvedValue({
+        used: 0, limit: 500, remaining: 500, overQuota: false,
+        periodStart: '2026-10-01', periodEnd: null, plan: null,
+      });
+
+      const res = await request(app)
+        .get('/api/billing/limits')
+        .set('Authorization', `Bearer ${otherBusinessAdminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(getBotCapacity).toHaveBeenCalledWith('biz_2');
+    });
+
+    it('devuelve 401 sin token', async () => {
+      const res = await request(app).get('/api/billing/limits');
+      expect(res.status).toBe(401);
+      expect(getBotCapacity).not.toHaveBeenCalled();
     });
   });
 

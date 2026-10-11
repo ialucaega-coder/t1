@@ -7,8 +7,9 @@ import { toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { hashPassword } from '../lib/password';
+import { getContactCapacity } from '../services/billing/limits';
 import {
   loadClientCrm,
   saveTags,
@@ -117,50 +118,84 @@ router.get(
   })
 );
 
+/** Tamaño de lote del export en streaming (acota memoria, independiente del total). */
+const CSV_EXPORT_BATCH = 500;
+
+/**
+ * Escapa un valor para una celda CSV:
+ * - Envuelve en comillas y duplica las comillas internas (RFC 4180).
+ * - Previene inyección de fórmulas (CSV injection): si el valor empieza con
+ *   `= + - @` o un control de tab/CR, le antepone una comilla simple para que
+ *   Excel/Sheets no lo ejecute como fórmula.
+ */
+function csvCell(value: string | number | null | undefined): string {
+  const raw = value == null ? '' : String(value);
+  const guarded = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${guarded.replace(/"/g, '""')}"`;
+}
+
 router.get(
   '/export/csv',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const clients = await prisma.user.findMany({
-      where: {
-        businessId: req.auth!.businessId,
-        role: 'CLIENT',
-        deletedAt: null,
-      },
-      select: {
-        name: true,
-        email: true,
-        phone: true,
-        createdAt: true,
-        bookingsAsClient: {
-          orderBy: { date: 'desc' },
-          take: 1,
-          select: { date: true },
-        },
-        _count: { select: { bookingsAsClient: true, orders: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const header = 'Nombre,Email,Teléfono,Reservas,Órdenes,Última visita,Registrado\n';
-    const rows = clients.map((c) => {
-      const lastVisit = c.bookingsAsClient[0]?.date
-        ? new Date(c.bookingsAsClient[0].date).toISOString().split('T')[0]
-        : '';
-      return [
-        `"${c.name.replace(/"/g, '""')}"`,
-        c.email,
-        c.phone || '',
-        c._count.bookingsAsClient,
-        c._count.orders,
-        lastVisit,
-        new Date(c.createdAt).toISOString().split('T')[0],
-      ].join(',');
-    }).join('\n');
+    const businessId = req.auth!.businessId;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="clientes.csv"');
-    res.send('﻿' + header + rows);
+    // BOM para que Excel detecte UTF-8 + cabecera.
+    res.write('﻿' + 'Nombre,Email,Teléfono,Reservas,Órdenes,Última visita,Registrado\n');
+
+    // Antes: un findMany sin `take` cargaba TODOS los clientes a memoria y armaba
+    // un string gigante (riesgo de OOM con decenas de miles de registros). Ahora
+    // paginamos por cursor y escribimos cada lote al response en streaming. El
+    // orderBy incluye `id` como desempate para que el cursor sea determinista.
+    let cursor: string | undefined;
+    for (;;) {
+      // Si el cliente cortó la descarga, dejamos de consultar la BD (no tiene
+      // sentido paginar para una respuesta que ya nadie recibe).
+      if (res.writableEnded || res.destroyed) return;
+
+      const batch = await prisma.user.findMany({
+        where: { businessId, role: 'CLIENT', deletedAt: null },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          createdAt: true,
+          bookingsAsClient: { orderBy: { date: 'desc' }, take: 1, select: { date: true } },
+          _count: { select: { bookingsAsClient: true, orders: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: CSV_EXPORT_BATCH,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      });
+
+      if (batch.length === 0) break;
+
+      const chunk = batch
+        .map((c) => {
+          const lastVisit = c.bookingsAsClient[0]?.date
+            ? new Date(c.bookingsAsClient[0].date).toISOString().split('T')[0]
+            : '';
+          return [
+            csvCell(c.name),
+            csvCell(c.email),
+            csvCell(c.phone || ''),
+            c._count.bookingsAsClient,
+            c._count.orders,
+            lastVisit,
+            new Date(c.createdAt).toISOString().split('T')[0],
+          ].join(',');
+        })
+        .join('\n');
+      res.write(chunk + '\n');
+
+      if (batch.length < CSV_EXPORT_BATCH) break;
+      cursor = batch[batch.length - 1].id;
+    }
+
+    res.end();
   })
 );
 
@@ -317,11 +352,24 @@ router.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const data = createClientSchema.parse(req.body);
+    const businessId = req.auth!.businessId;
+
+    // Enforcement del plan: no superar el `maxContacts` del plan (antes solo se
+    // mostraba el límite). Mismo patrón que maxBots/maxMessages.
+    const cap = await getContactCapacity(businessId);
+    if (cap.atLimit) {
+      return res.status(403).json({
+        error: `Alcanzaste el límite de contactos de tu plan (${cap.limit}). Mejorá tu plan para agregar más.`,
+        code: 'PLAN_LIMIT_REACHED',
+        limit: cap.limit,
+        used: cap.used,
+      });
+    }
 
     const existing = await prisma.user.findFirst({
       where: {
         email: data.email,
-        businessId: req.auth!.businessId,
+        businessId,
         deletedAt: null,
       },
     });
@@ -334,7 +382,7 @@ router.post(
     // cuyo valor es predecible (timestamp acotado): un atacante podía fijar la
     // contraseña de un cliente recién creado y loguearse con rol CLIENT. Estos
     // clientes se crean para el portal/reservas y no fijan su propia clave acá.
-    const tempPassword = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
+    const tempPassword = await hashPassword(crypto.randomBytes(32).toString('hex'));
 
     const client = await prisma.user.create({
       data: {

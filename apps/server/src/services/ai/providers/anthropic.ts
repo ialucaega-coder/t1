@@ -47,6 +47,14 @@ export class AnthropicProvider implements AIProvider {
       messages,
     });
 
+    // FinOps: registramos el consumo real de tokens que reporta la API.
+    context.recordUsage?.({
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      model: this.model,
+      provider: this.name,
+    });
+
     // El primer bloque de contenido de tipo "text" es la respuesta principal.
     const textBlock = response.content.find(
       (block: { type: string }) => block.type === 'text'

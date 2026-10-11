@@ -1,21 +1,23 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import { authRateLimit } from '../middleware/rateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
-import { registerSchema, loginSchema, twoFactorCodeSchema, RegisterInput, LoginInput } from '../validators/auth';
+import { registerSchema, loginSchema, twoFactorCodeSchema, passwordSchema, RegisterInput, LoginInput } from '../validators/auth';
 import { requireAuth } from '../middleware/auth';
 import { getAuthSecret } from '../lib/secrets';
 import { revokeUserSessions } from '../services/auth/revocation';
 import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
+import { hashPassword, verifyPassword, equalizeVerifyTiming } from '../lib/password';
 
 const updateMeSchema = z.object({
   name: z.string().max(100).optional(),
-  currentPassword: z.string().optional(),
-  newPassword: z.string().min(6).max(100).optional(),
+  currentPassword: z.string().max(128).optional(),
+  // Misma política de fortaleza que el registro (8+ con mayúscula, minúscula y
+  // número) en vez del viejo min(6), más débil.
+  newPassword: passwordSchema.optional(),
 });
 import { auditAuthEvent } from '../middleware/audit';
 import type { Response } from 'express';
@@ -69,7 +71,7 @@ router.post(
       return;
     }
 
-    const passwordHash = await bcrypt.hash(data.password, 12);
+    const passwordHash = await hashPassword(data.password);
     const slug = data.businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
     const business = await prisma.business.create({
@@ -115,6 +117,9 @@ router.post(
 
     if (!user) {
       // No revelamos si el email existe o no (evita enumeración de usuarios).
+      // Corremos un verify "dummy" para que el tiempo de respuesta sea similar al
+      // de un email registrado y no se pueda inferir la existencia por timing.
+      await equalizeVerifyTiming();
       auditAuthEvent('AUTH_LOGIN_FAILURE', req, { metadata: { reason: 'unknown_email' } });
       res.status(401).json({ error: 'Invalid credentials' });
       return;
@@ -139,7 +144,7 @@ router.post(
       return;
     }
 
-    const validPassword = await bcrypt.compare(data.password, user.passwordHash);
+    const { valid: validPassword, needsRehash } = await verifyPassword(data.password, user.passwordHash);
     if (!validPassword) {
       const failedLogins = user.failedLogins + 1;
       const update: { failedLogins: number; lockedUntil?: Date } = { failedLogins };
@@ -181,6 +186,23 @@ router.post(
       where: { id: user.id },
       data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() },
     });
+
+    // Rehash perezoso best-effort: si entró con un hash bcrypt legado, lo
+    // reescribimos a Argon2id. Va en su propia escritura y en try/catch para que
+    // un fallo de Argon2 NO rompa un login válido. El updateMany condicionado al
+    // hash viejo evita pisar una contraseña que el usuario haya cambiado en
+    // paralelo (entre el findUnique y este punto).
+    if (needsRehash) {
+      try {
+        const rehashed = await hashPassword(data.password);
+        await prisma.user.updateMany({
+          where: { id: user.id, passwordHash: user.passwordHash },
+          data: { passwordHash: rehashed },
+        });
+      } catch {
+        /* best-effort: el próximo login reintenta la migración */
+      }
+    }
 
     const token = signToken({ userId: user.id, businessId: user.businessId, role: user.role });
     setSessionCookie(res, token);
@@ -226,6 +248,7 @@ router.get(
 
 router.patch(
   '/me',
+  authRateLimit,
   validate(updateMeSchema),
   asyncHandler(async (req, res) => {
     const header = req.headers.authorization;
@@ -260,16 +283,13 @@ router.patch(
       }
       const user = await prisma.user.findUnique({ where: { id: payload.userId } });
       if (!user) { res.status(401).json({ error: 'User not found' }); return; }
-      const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+      const { valid } = await verifyPassword(currentPassword, user.passwordHash);
       if (!valid) {
         res.status(400).json({ error: 'Current password is incorrect' });
         return;
       }
-      if (newPassword.length < 6) {
-        res.status(400).json({ error: 'New password must be at least 6 characters' });
-        return;
-      }
-      update.passwordHash = await bcrypt.hash(newPassword, 12);
+      // La fortaleza de newPassword ya la garantiza updateMeSchema (passwordSchema).
+      update.passwordHash = await hashPassword(newPassword);
     }
 
     if (Object.keys(update).length === 0) {

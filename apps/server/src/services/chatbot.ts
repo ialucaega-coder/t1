@@ -8,11 +8,28 @@
  * configurado para el negocio.
  */
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { getAIProviderForBusiness } from './ai/engine';
-import type { ConversationTurn, ImageInput } from './ai';
+import type { ConversationTurn, ImageInput, TokenUsage } from './ai';
 import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
 import { loadFaqItems, buildFaqPrompt } from './faq/config';
 import { loadSystemPrompt } from './ai/system-prompt';
+import { getMessageQuota } from './billing/quota';
+
+/**
+ * Lee si el negocio superó el cupo de mensajes, SIN romper el flujo del bot: si
+ * la consulta del cupo falla (DB caída, etc.) degradamos fail-open (permitimos
+ * responder). Preferimos cobrar de más un mensaje puntual a dejar al bot mudo
+ * por un problema de la guarda de costo.
+ */
+async function isOverMessageQuota(businessId: string): Promise<boolean> {
+  try {
+    return (await getMessageQuota(businessId)).overQuota;
+  } catch (err) {
+    console.error('Error consultando el cupo de mensajes (fail-open):', (err as Error).message);
+    return false;
+  }
+}
 import { hasParams, resolveSuperpowerParams, type SuperpowerParams } from '../constants/superpowerParams';
 
 export async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
@@ -352,6 +369,9 @@ export async function processMessage(
 
   let responseText: string;
   let actions: ChatAction[] = [];
+  // FinOps: consumo de tokens y latencia reales de la generación de IA (si hubo).
+  let usage: TokenUsage | undefined;
+  let aiLatencyMs: number | undefined;
 
   if (intent === 'HUMAN') {
     responseText = 'Entendido, en breve te va a contactar una persona del equipo. Gracias por tu paciencia.';
@@ -383,6 +403,13 @@ export async function processMessage(
     const result = await handleCatalogIntent(businessId);
     responseText = result.text;
     actions = result.actions;
+  } else if (await isOverMessageQuota(businessId)) {
+    // Cupo mensual de mensajes del plan agotado: NO llamamos al LLM (corta el
+    // costo) ni construimos el prompt. Enforcea el `maxMessages` del plan, que
+    // antes solo se mostraba pero no se aplicaba. Escala por plan y se comparte
+    // entre instancias vía la DB (el conteo es autoritativo; ver billing/quota).
+    responseText = 'Este asistente alcanzó el límite de mensajes de su plan por este período. Escribinos de nuevo más tarde o contactá al negocio directamente.';
+    actions = [{ type: 'escalateToHuman' }];
   } else {
     let systemPrompt = await buildSystemPrompt(businessId, superpowers);
     if (options.systemPromptExtra?.trim()) {
@@ -415,6 +442,7 @@ export async function processMessage(
       images = options.images;
     }
 
+    const aiStart = Date.now();
     try {
       const provider = await getAIProviderForBusiness(businessId);
       responseText = await provider.generateResponse(clientMessage, {
@@ -423,7 +451,10 @@ export async function processMessage(
         history: dbHistory,
         systemPrompt: enrichedPrompt,
         ...(images ? { images } : {}),
+        // FinOps: el proveedor nos pasa el consumo real de tokens.
+        recordUsage: (u) => { usage = u; },
       });
+      aiLatencyMs = Date.now() - aiStart;
     } catch (error) {
       console.error('Error generando respuesta de IA:', error);
       responseText = 'Disculpá, en este momento no puedo responder automáticamente. ¿Querés que te derive con una persona del equipo?';
@@ -431,9 +462,18 @@ export async function processMessage(
     }
   }
 
-  const start = Date.now();
   const botMessage = await prisma.message.create({
-    data: { conversationId: conversation.id, role: 'BOT', text: responseText, responseTime: Date.now() - start },
+    data: {
+      conversationId: conversation.id,
+      role: 'BOT',
+      text: responseText,
+      // Antes `responseTime` medía ~0 (el reloj arrancaba justo antes del insert);
+      // ahora refleja la latencia real de la generación de IA.
+      ...(aiLatencyMs !== undefined ? { responseTime: aiLatencyMs } : {}),
+      // Guardamos el consumo de tokens en el metadata del propio mensaje (que ya
+      // se persiste): cero escrituras extra y base para el dashboard de FinOps.
+      ...(usage ? { metadata: { usage } as unknown as Prisma.InputJsonObject } : {}),
+    },
   });
 
   await prisma.conversation.update({

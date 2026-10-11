@@ -12,6 +12,8 @@ import {
   handleWebhookEvent,
   createPaymentLink,
 } from '../services/stripe';
+import { getBotCapacity, getContactCapacity } from '../services/billing/limits';
+import { getMessageQuota } from '../services/billing/quota';
 
 const subscribeSchema = z.object({
   planId: z.string().min(1),
@@ -70,6 +72,21 @@ router.get('/subscription', asyncHandler(async (req, res) => {
   }
 
   res.json(subscription);
+}));
+
+/**
+ * Límites del plan consolidados: capacidad de bots, de contactos y cupo mensual
+ * de mensajes. Lo consume la UI para mostrar "X de Y usado" y advertir antes de
+ * tocar el tope (el enforcement real vive en bots.ts, clients.ts y chatbot.ts).
+ */
+router.get('/limits', asyncHandler(async (req, res) => {
+  const businessId = req.auth!.businessId;
+  const [bots, contacts, messages] = await Promise.all([
+    getBotCapacity(businessId),
+    getContactCapacity(businessId),
+    getMessageQuota(businessId),
+  ]);
+  res.json({ bots, contacts, messages });
 }));
 
 router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, res) => {

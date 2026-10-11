@@ -11,7 +11,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import type { Redis } from 'ioredis';
 import jwt from 'jsonwebtoken';
 import { initSocket } from './lib/socket';
-import { getRedis, closeRedis } from './lib/redis';
+import { getRedis, closeRedis, waitForRedisReady, isRedisEnabled } from './lib/redis';
 import { assertSecretsConfigured, getAuthSecret } from './lib/secrets';
 import { requireAuth, requireStaff } from './middleware/auth';
 import { requireCapability } from './middleware/capability';
@@ -142,18 +142,41 @@ const io = new Server(httpServer, {
   cors: { origin: corsOrigin, credentials: true },
 });
 
-// Escalado horizontal de Socket.IO: con REDIS_URL, el adaptador replica los
-// eventos entre instancias (un emit desde cualquier réplica llega a todos los
-// clientes). Sin Redis, queda el adaptador en memoria (válido single-node).
-const redisForSockets = getRedis();
+// El adaptador Redis de Socket.IO se instala en el arranque (bootstrap), solo si
+// Redis queda realmente listo. `socketSub` se guarda a nivel de módulo para
+// poder cerrarlo en el apagado.
 let socketSub: Redis | undefined;
-if (redisForSockets) {
-  // Guardamos el cliente `sub` para poder cerrarlo en el apagado. duplicate()
-  // no copia listeners, así que le ponemos su propio handler de error.
-  socketSub = redisForSockets.duplicate();
-  socketSub.on('error', (err: Error) => console.error('[redis:sub] error:', err.message));
-  io.adapter(createAdapter(redisForSockets, socketSub));
-  console.log('[socket.io] Adaptador Redis habilitado (escalado multi-instancia).');
+
+/**
+ * Habilita el escalado horizontal de Socket.IO vía Redis, pero SOLO si Redis
+ * conecta a tiempo. Con REDIS_URL caída/ausente dejamos el adaptador in-memory:
+ * los sockets locales siguen funcionando (single-node) en vez de romperse por un
+ * pub/sub muerto. Nunca lanza: un fallo degrada a in-memory.
+ */
+async function setupSocketAdapter(): Promise<void> {
+  if (!isRedisEnabled()) {
+    console.log('[socket.io] Sin REDIS_URL: adaptador in-memory (single-node).');
+    return;
+  }
+  // Todo el armado va en try/catch: cualquier fallo al inicializar el adaptador
+  // degrada a in-memory (los sockets locales siguen funcionando) en vez de tumbar
+  // el arranque del server.
+  try {
+    const ready = await waitForRedisReady();
+    const pub = ready ? getRedis() : null;
+    if (!pub) {
+      console.warn('[socket.io] Redis no disponible al arrancar: adaptador in-memory (single-node). El escalado multi-instancia se reactiva al reiniciar con Redis OK.');
+      return;
+    }
+    // duplicate() no copia listeners, así que le ponemos su propio handler de error.
+    socketSub = pub.duplicate();
+    socketSub.on('error', (err: Error) => console.error('[redis:sub] error:', err.message));
+    io.adapter(createAdapter(pub, socketSub));
+    console.log('[socket.io] Adaptador Redis habilitado (escalado multi-instancia).');
+  } catch (err) {
+    console.error('[socket.io] No se pudo habilitar el adaptador Redis; se usa in-memory (single-node):', (err as Error).message);
+    socketSub = undefined;
+  }
 }
 
 initSocket(io);
@@ -318,17 +341,27 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 4000;
-httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
 
-  // Restaurar bots de Telegram activos al iniciar el servidor
-  restoreActiveBots().catch((err) => {
-    console.error('Error al restaurar bots de Telegram:', err);
+// Bootstrap: resolvemos el adaptador de Socket.IO (Redis o in-memory) ANTES de
+// aceptar conexiones, y recién ahí escuchamos. Si el probe de Redis falla no
+// rompe el arranque: degradamos a in-memory.
+async function bootstrap(): Promise<void> {
+  await setupSocketAdapter();
+
+  httpServer.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+
+    // Restaurar bots de Telegram activos al iniciar el servidor
+    restoreActiveBots().catch((err) => {
+      console.error('Error al restaurar bots de Telegram:', err);
+    });
+
+    // Programar jobs diarios de superpoderes (reportes / recordatorios)
+    startScheduler();
   });
+}
 
-  // Programar jobs diarios de superpoderes (reportes / recordatorios)
-  startScheduler();
-});
+void bootstrap();
 
 // Apagado limpio: en Cloud Run / K8s el contenedor recibe SIGTERM antes de
 // matarse. Cerramos conexiones (HTTP, Socket.IO y Redis) para no dejar sockets

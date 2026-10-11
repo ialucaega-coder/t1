@@ -6,6 +6,7 @@ import * as aiApi from '@/lib/api/ai';
 import type { ChatTurn } from '@/types';
 import { useToast } from '@/components/common/Toast';
 import { MotorDeIA } from './MotorDeIA';
+import { UsageFinOps } from './UsageFinOps';
 
 export default function IAPage() {
   return (
@@ -20,6 +21,7 @@ export default function IAPage() {
       </div>
 
       <MotorDeIA />
+      <UsageFinOps />
       <PromptEditorSection />
       <TestChatSection />
     </div>

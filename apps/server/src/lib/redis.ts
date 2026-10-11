@@ -54,6 +54,9 @@ export function getRedis(): Redis | null {
     // Acota la latencia por comando durante una caída: en operación normal los
     // comandos tardan <5ms, así que esto solo dispara en un corte real y deja
     // que el caller degrade rápido (fail-open) en vez de colgar el request.
+    // (No desactivamos enableOfflineQueue: el adaptador de Socket.IO hace un
+    // psubscribe al construirse y necesita que la cola absorba ese comando hasta
+    // que la conexión esté lista; sin la cola, lanza y tumba el arranque.)
     commandTimeout: 1000,
     // Reconexión indefinida con backoff acotado: NUNCA devolvemos null, porque
     // eso dejaría al cliente en estado "end" sin recuperarse (rate limiter en
@@ -63,6 +66,29 @@ export function getRedis(): Redis | null {
   client.on('error', (err) => console.error('[redis] error de conexión:', err.message));
   client.on('connect', () => console.log('[redis] conectado'));
   return client;
+}
+
+/**
+ * Espera (hasta `timeoutMs`) a que Redis quede listo. NO destruye el cliente: si
+ * no conecta a tiempo devuelve false y el cliente sigue reintentando en segundo
+ * plano (self-heal). Sirve para decidir en el arranque si instalar el adaptador
+ * de Socket.IO: con Redis caído dejamos el adaptador in-memory, así los sockets
+ * locales siguen funcionando en vez de romperse por un pub/sub muerto.
+ */
+export function waitForRedisReady(timeoutMs = 3000): Promise<boolean> {
+  const c = getRedis();
+  if (!c) return Promise.resolve(false);
+  if (c.status === 'ready') return Promise.resolve(true);
+  const redis = c; // no-null garantizado por los guards de arriba
+  return new Promise((resolve) => {
+    const onReady = () => { cleanup(); resolve(true); };
+    const timer = setTimeout(() => { cleanup(); resolve(false); }, timeoutMs);
+    function cleanup() {
+      clearTimeout(timer);
+      redis.off('ready', onReady);
+    }
+    redis.once('ready', onReady);
+  });
 }
 
 /** Cierra la conexión (para apagado limpio o tests). */

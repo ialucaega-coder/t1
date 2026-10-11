@@ -57,3 +57,47 @@ export function setEngine(engineId: string) {
 export function setEngineKey(provider: string, apiKey: string) {
   return httpClient.put<{ success: boolean }>('/ai/keys', { provider, apiKey });
 }
+
+// ── FinOps: consumo de IA (tokens + costo estimado) ────────────────────
+
+export interface UsageByModel {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  messages: number;
+  estimatedCostUsd: number;
+}
+export interface UsageByDay {
+  day: string;
+  inputTokens: number;
+  outputTokens: number;
+  messages: number;
+  estimatedCostUsd: number;
+}
+export interface UsageSummary {
+  rangeDays: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalMessages: number;
+  estimatedCostUsd: number;
+  byDay: UsageByDay[];
+  byModel: UsageByModel[];
+}
+
+export function getUsage(days = 30) {
+  return httpClient.get<UsageSummary>(`/ai/usage?days=${days}`);
+}
+
+export interface MessageQuota {
+  used: number;
+  limit: number;
+  remaining: number;
+  overQuota: boolean;
+  periodStart: string;
+  periodEnd: string | null;
+  plan: string | null;
+}
+
+export function getQuota() {
+  return httpClient.get<MessageQuota>('/ai/quota');
+}

@@ -16,6 +16,7 @@ vi.mock('../../lib/prisma', () => ({
     user: {
       findUnique: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
     },
     business: {
       create: vi.fn(),
@@ -23,8 +24,17 @@ vi.mock('../../lib/prisma', () => ({
   },
 }));
 
+// Rate limiting pass-through: su contador in-memory es por módulo y se acumula
+// entre tests por IP; acá no testeamos rate limiting (eso vive en
+// middleware/rateLimit.test.ts), así que lo neutralizamos para no dar 429.
+vi.mock('../../middleware/rateLimit', () => ({
+  authRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+  apiRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 import { prisma } from '../../lib/prisma';
 import { authRouter } from '../../routes/auth';
+import { hashPassword } from '../../lib/password';
 
 function buildApp() {
   const app = express();
@@ -212,6 +222,56 @@ describe('routes/auth', () => {
           data: expect.objectContaining({ failedLogins: 0, lockedUntil: null }),
         })
       );
+    });
+
+    it('rehashea un hash bcrypt legado a Argon2id en el login exitoso', async () => {
+      const legacy = await bcrypt.hash('correcta123', 10); // hash bcrypt viejo
+      (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'user_1', email: 'test@example.com', passwordHash: legacy,
+        isActive: true, deletedAt: null, failedLogins: 0, lockedUntil: null,
+        businessId: 'biz_1', role: 'ADMIN',
+        business: { id: 'biz_1', name: 'N', slug: 'n' },
+      });
+      (prisma.user.update as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      (prisma.user.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 1 });
+
+      const res = await request(app).post('/api/auth/login').send({ email: 'test@example.com', password: 'correcta123' });
+
+      expect(res.status).toBe(200);
+      // El rehash va condicionado al hash viejo (evita pisar un cambio concurrente)
+      // y persiste un hash Argon2id.
+      expect(prisma.user.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 'user_1', passwordHash: legacy }),
+          data: { passwordHash: expect.stringMatching(/^\$argon2id\$/) },
+        })
+      );
+    });
+
+    it('NO rehashea cuando el hash ya es Argon2id', async () => {
+      const argon = await hashPassword('correcta123');
+      (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'user_1', email: 'test@example.com', passwordHash: argon,
+        isActive: true, deletedAt: null, failedLogins: 0, lockedUntil: null,
+        businessId: 'biz_1', role: 'ADMIN',
+        business: { id: 'biz_1', name: 'N', slug: 'n' },
+      });
+      (prisma.user.update as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+      const res = await request(app).post('/api/auth/login').send({ email: 'test@example.com', password: 'correcta123' });
+
+      expect(res.status).toBe(200);
+      expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('email inexistente: 401 genérico (sin revelar existencia)', async () => {
+      (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app).post('/api/auth/login').send({ email: 'nadie@example.com', password: 'x' });
+
+      expect(res.status).toBe(401);
+      expect(res.body).not.toHaveProperty('token');
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it('rechaza (401) una cuenta inactiva aun con la contrasena correcta', async () => {

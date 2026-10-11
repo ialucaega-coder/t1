@@ -79,6 +79,14 @@ export class OpenAIProvider implements AIProvider {
       messages,
     });
 
+    // FinOps: registramos el consumo real de tokens que reporta la API.
+    context.recordUsage?.({
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+      model: this.model,
+      provider: this.name,
+    });
+
     return response.choices[0]?.message?.content ?? '';
   }
 

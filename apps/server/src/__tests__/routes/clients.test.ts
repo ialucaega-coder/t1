@@ -53,9 +53,12 @@ vi.mock('../../services/clients/crm', () => ({
   TAG_COLORS: ['slate', 'red', 'blue', 'green'],
 }));
 
+vi.mock('../../services/billing/limits', () => ({ getContactCapacity: vi.fn() }));
+
 import { prisma } from '../../lib/prisma';
 import { clientsRouter } from '../../routes/clients';
 import { loadClientCrm, saveTags, setClientTags, setClientNote } from '../../services/clients/crm';
+import { getContactCapacity } from '../../services/billing/limits';
 import { errorHandler } from '../../middleware/errorHandler';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -73,6 +76,8 @@ describe('routes/clients', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Por defecto, dentro del cupo de contactos (los tests de límite lo pisan).
+    mock(getContactCapacity).mockResolvedValue({ used: 0, limit: 100, atLimit: false });
   });
 
   describe('GET /api/clients', () => {
@@ -118,6 +123,63 @@ describe('routes/clients', () => {
 
       expect(prisma.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ skip: 20, take: 10 })
+      );
+    });
+  });
+
+  describe('GET /api/clients/export/csv', () => {
+    const clientRow = (over: Partial<{ id: string; name: string; email: string; phone: string }>) => ({
+      id: 'c1',
+      name: 'Ana',
+      email: 'ana@mail.com',
+      phone: '123',
+      createdAt: new Date('2024-01-02T00:00:00Z'),
+      bookingsAsClient: [{ date: new Date('2024-05-01T00:00:00Z') }],
+      _count: { bookingsAsClient: 3, orders: 1 },
+      ...over,
+    });
+
+    it('exporta CSV con BOM, cabecera y scope por businessId/rol/no-borrados', async () => {
+      mock(prisma.user.findMany).mockResolvedValue([clientRow({})]);
+
+      const res = await request(app).get('/api/clients/export/csv');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.text.startsWith('﻿')).toBe(true);
+      expect(res.text).toContain('Nombre,Email,Teléfono,Reservas,Órdenes,Última visita,Registrado');
+      expect(res.text).toContain('"Ana"');
+      expect(res.text).toContain('2024-05-01'); // última visita
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { businessId: 'biz_1', role: 'CLIENT', deletedAt: null },
+          take: 500,
+        })
+      );
+    });
+
+    it('sanitiza inyección de fórmulas CSV (antepone comilla simple)', async () => {
+      mock(prisma.user.findMany).mockResolvedValue([clientRow({ name: '=HYPERLINK("http://x")' })]);
+
+      const res = await request(app).get('/api/clients/export/csv');
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain(`"'=HYPERLINK(""http://x"")"`);
+    });
+
+    it('pagina por cursor cuando hay más registros que el lote', async () => {
+      const full = Array.from({ length: 500 }, (_, i) => clientRow({ id: `c${i}` }));
+      mock(prisma.user.findMany)
+        .mockResolvedValueOnce(full)
+        .mockResolvedValueOnce([clientRow({ id: 'last' })]);
+
+      const res = await request(app).get('/api/clients/export/csv');
+
+      expect(res.status).toBe(200);
+      expect(prisma.user.findMany).toHaveBeenCalledTimes(2);
+      // La segunda llamada continúa desde el cursor del último id del lote.
+      expect(prisma.user.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ skip: 1, cursor: { id: 'c499' } })
       );
     });
   });
@@ -186,6 +248,16 @@ describe('routes/clients', () => {
       const res = await request(app).post('/api/clients').send({ name: 'Ana Perez' });
 
       expect(res.status).toBe(400);
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 403 cuando se alcanzó el límite de contactos del plan (sin crear)', async () => {
+      mock(getContactCapacity).mockResolvedValue({ used: 100, limit: 100, atLimit: true });
+
+      const res = await request(app).post('/api/clients').send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ code: 'PLAN_LIMIT_REACHED', limit: 100 });
       expect(prisma.user.create).not.toHaveBeenCalled();
     });
   });

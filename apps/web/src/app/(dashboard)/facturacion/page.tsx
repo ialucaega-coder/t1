@@ -16,6 +16,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { CheckoutButton } from '@/components/billing/CheckoutButton';
+import { PlanUsage } from '@/components/billing/PlanUsage';
 
 interface Plan {
   id: string;
@@ -179,6 +180,9 @@ export default function FacturacionPage() {
           )}
         </div>
       )}
+
+      {/* Uso del plan (bots, contactos, mensajes) */}
+      <PlanUsage />
 
       {/* Intervalo toggle */}
       <div className="flex items-center justify-center gap-3">

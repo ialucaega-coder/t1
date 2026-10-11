@@ -45,8 +45,11 @@ vi.mock('../../middleware/auth', () => ({
     },
 }));
 
+vi.mock('../../services/billing/limits', () => ({ getBotCapacity: vi.fn() }));
+
 import { prisma } from '../../lib/prisma';
 import { botsRouter } from '../../routes/bots';
+import { getBotCapacity } from '../../services/billing/limits';
 import { errorHandler } from '../../middleware/errorHandler';
 
 function buildApp() {
@@ -64,6 +67,8 @@ describe('routes/bots', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Por defecto, dentro del cupo de bots del plan (los tests de límite lo pisan).
+    mock(getBotCapacity).mockResolvedValue({ used: 0, limit: 5, atLimit: false });
   });
 
   describe('GET /api/bots', () => {
@@ -153,6 +158,16 @@ describe('routes/bots', () => {
       const res = await request(app).post('/api/bots').send({ name: 'X', channel: 'SIGNAL' });
 
       expect(res.status).toBe(400);
+    });
+
+    it('devuelve 403 cuando se alcanzó el límite de bots del plan (sin crear)', async () => {
+      mock(getBotCapacity).mockResolvedValue({ used: 1, limit: 1, atLimit: true });
+
+      const res = await request(app).post('/api/bots').send({ name: 'Otro', channel: 'WEB' });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ code: 'PLAN_LIMIT_REACHED', limit: 1 });
+      expect(prisma.bot.create).not.toHaveBeenCalled();
     });
   });
 

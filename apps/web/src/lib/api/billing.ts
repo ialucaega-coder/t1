@@ -36,6 +36,32 @@ export interface Invoice {
   createdAt: string;
 }
 
+export interface Capacity {
+  used: number;
+  limit: number;
+  atLimit: boolean;
+}
+
+export interface MessageQuota {
+  used: number;
+  limit: number;
+  remaining: number;
+  overQuota: boolean;
+  periodStart: string;
+  periodEnd: string | null;
+  plan: string | null;
+}
+
+export interface PlanLimits {
+  bots: Capacity;
+  contacts: Capacity;
+  messages: MessageQuota;
+}
+
+export function getPlanLimits() {
+  return httpClient.get<PlanLimits>('/billing/limits');
+}
+
 export function getPlans() {
   return httpClient.get<Plan[]>('/billing/plans');
 }

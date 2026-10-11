@@ -89,6 +89,7 @@ export default function DashboardPage() {
   const [newBotChannel, setNewBotChannel] = useState<'TELEGRAM' | 'WHATSAPP' | 'WEBCHAT' | 'INSTAGRAM'>('WHATSAPP');
   const [newBotDesc, setNewBotDesc] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -110,12 +111,17 @@ export default function DashboardPage() {
   const handleCreate = async () => {
     if (!newBotName.trim()) return;
     setCreating(true);
+    setCreateError(null);
     try {
       await createBot({ name: newBotName.trim(), description: newBotDesc.trim() || null, channel: newBotChannel });
       setNewBotName('');
       setNewBotDesc('');
       setShowCreate(false);
-    } catch { /* error via hook */ }
+    } catch (err) {
+      // Mostramos el mensaje real del backend (p. ej. el 403 de límite de plan
+      // "Alcanzaste el máximo de bots de tu plan (N)"), no un genérico mudo.
+      setCreateError(err instanceof Error ? err.message : 'No se pudo crear el bot. Intentá de nuevo.');
+    }
     finally { setCreating(false); }
   };
 
@@ -282,7 +288,7 @@ export default function DashboardPage() {
               </span>
             )}
           </div>
-          <button onClick={() => setShowCreate(!showCreate)} className="btn-primary text-xs">
+          <button onClick={() => { setShowCreate(!showCreate); setCreateError(null); }} className="btn-primary text-xs">
             <Plus className="h-3.5 w-3.5" /> Crear bot
           </button>
         </div>
@@ -311,8 +317,14 @@ export default function DashboardPage() {
                 <input type="text" value={newBotDesc} onChange={(e) => setNewBotDesc(e.target.value)} placeholder="Opcional" className="input w-full" />
               </div>
             </div>
+            {createError && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{createError}</span>
+              </div>
+            )}
             <div className="flex justify-end mt-3 gap-2">
-              <button onClick={() => setShowCreate(false)} className="btn-secondary text-xs">Cancelar</button>
+              <button onClick={() => { setShowCreate(false); setCreateError(null); }} className="btn-secondary text-xs">Cancelar</button>
               <button onClick={handleCreate} disabled={creating || !newBotName.trim()} className="btn-primary text-xs disabled:opacity-50">
                 {creating ? 'Creando...' : 'Crear bot'}
               </button>

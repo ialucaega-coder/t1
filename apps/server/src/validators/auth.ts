@@ -20,6 +20,9 @@ const normalizedEmail = z
 export const passwordSchema = z
   .string()
   .min(8, 'La contraseña debe tener al menos 8 caracteres')
+  // Tope de largo: sin él, un atacante puede enviar contraseñas enormes y gastar
+  // CPU/memoria en el hash (Argon2id) en cada intento.
+  .max(128, 'La contraseña no puede superar los 128 caracteres')
   .regex(/[a-z]/, 'La contraseña debe incluir al menos una letra minúscula')
   .regex(/[A-Z]/, 'La contraseña debe incluir al menos una letra mayúscula')
   .regex(/[0-9]/, 'La contraseña debe incluir al menos un número');
@@ -36,8 +39,9 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   email: normalizedEmail,
   // En login no se re-valida la fortaleza (podría romper cuentas
-  // creadas antes de esta política); solo se exige que no esté vacía.
-  password: z.string().min(1),
+  // creadas antes de esta política); solo se exige que no esté vacía. El tope de
+  // largo evita gastar CPU/memoria hasheando inputs gigantes en cada intento.
+  password: z.string().min(1).max(128),
   // Código TOTP de 2FA. Opcional: solo se exige si la cuenta tiene 2FA activo
   // (el login responde twoFactorRequired si falta).
   twoFactorCode: z.string().trim().optional(),
