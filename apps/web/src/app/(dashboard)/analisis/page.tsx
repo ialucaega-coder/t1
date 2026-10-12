@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock, CheckCircle2 } from 'lucide-react';
+import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock, CheckCircle2, LineChart, Filter, ChevronDown } from 'lucide-react';
 import { useAnalytics } from '@/hooks/use-analytics';
+import type { AnalyticsTimeseriesPoint, AnalyticsFunnel } from '@/types/analytics';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'insights', label: 'Insights', icon: Brain },
   { id: 'mejoras', label: 'Mejoras', icon: TrendingUp },
   { id: 'estadisticas', label: 'Estadísticas', icon: BarChart3 },
+  { id: 'reportes', label: 'Reportes', icon: LineChart },
   { id: 'costos', label: 'Costos', icon: DollarSign },
   { id: 'campanas', label: 'Campañas', icon: Megaphone },
 ] as const;
@@ -91,8 +93,117 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
   );
 }
 
+// Colores por etapa del embudo (alineados con LIFECYCLE_STAGES del backend).
+// Funcionan en claro y oscuro: son colores sólidos sobre pista translúcida.
+const FUNNEL_COLORS = ['#38BDF8', '#818CF8', '#F59E0B', '#10B981'];
+
+/**
+ * Serie temporal de 14 días: mensajes como barras + conversaciones nuevas como
+ * línea, ambas en la misma escala (máximo combinado) para que la comparación sea
+ * honesta. Colores vía clases/currentColor para legibilidad en claro y oscuro.
+ */
+function TimeSeriesChart({ data }: { data: AnalyticsTimeseriesPoint[] }) {
+  if (data.length === 0) {
+    return <p className="text-xs text-slate-500">Sin datos en los últimos 14 días.</p>;
+  }
+
+  const max = Math.max(...data.map((d) => Math.max(d.messages, d.conversations)), 1);
+  const W = 580, H = 210, padL = 30, padR = 8, padT = 12, padB = 26;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const n = data.length;
+  const slot = chartW / n;
+  const barW = slot * 0.5;
+  const cx = (i: number) => padL + slot * i + slot / 2;
+  const cy = (v: number) => padT + chartH - (v / max) * chartH;
+
+  const linePts = data.map((d, i) => `${cx(i)},${cy(d.conversations)}`).join(' ');
+  const ticks = [0, max / 2, max];
+
+  return (
+    <div>
+      <div className="flex items-center gap-4 mb-3 text-[10px]">
+        <span className="flex items-center gap-1.5 text-slate-400">
+          <span className="inline-block w-3 h-2 rounded-sm bg-brand-400" /> Mensajes
+        </span>
+        <span className="flex items-center gap-1.5 text-slate-400">
+          <span className="inline-block w-3 h-[2px] rounded-sm bg-emerald-400" /> Conversaciones nuevas
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img"
+        aria-label="Serie temporal de mensajes y conversaciones nuevas de los últimos 14 días">
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} y1={cy(t)} x2={W - padR} y2={cy(t)} stroke="currentColor" className="text-slate-700/40" strokeWidth={1} />
+            <text x={padL - 6} y={cy(t) + 3} textAnchor="end" className="fill-slate-500 text-[9px]">{Math.round(t)}</text>
+          </g>
+        ))}
+        {data.map((d, i) => {
+          const h = (d.messages / max) * chartH;
+          return (
+            <rect key={d.date} x={cx(i) - barW / 2} y={padT + chartH - h} width={barW} height={h}
+              rx={2} className="fill-brand-400" opacity={0.7} />
+          );
+        })}
+        <polyline points={linePts} fill="none" stroke="currentColor" className="text-emerald-400" strokeWidth={2}
+          strokeLinejoin="round" strokeLinecap="round" />
+        {data.map((d, i) => (
+          <circle key={d.date} cx={cx(i)} cy={cy(d.conversations)} r={2.5} className="fill-emerald-400" />
+        ))}
+        {data.map((d, i) => (
+          // Mostramos 1 de cada 2 etiquetas para no amontonar en 14 días.
+          i % 2 === 0 ? (
+            <text key={d.date} x={cx(i)} y={H - 8} textAnchor="middle" className="fill-slate-500 text-[8px]">{d.label}</text>
+          ) : null
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * Embudo del ciclo de vida CRM: una barra por etapa (ancho ∝ cantidad) con el
+ * porcentaje del total y la conversión respecto de la etapa anterior.
+ */
+function FunnelChart({ funnel }: { funnel: AnalyticsFunnel }) {
+  if (funnel.total === 0) {
+    return <p className="text-xs text-slate-500">Todavía no hay contactos para armar el embudo.</p>;
+  }
+  const maxCount = Math.max(...funnel.stages.map((s) => s.count), 1);
+
+  return (
+    <div className="space-y-1">
+      {funnel.stages.map((s, i) => (
+        <div key={s.stage}>
+          {i > 0 && s.conversionFromPrev !== null && (
+            <div className="flex items-center gap-1 text-[10px] text-slate-500 pl-[88px] py-0.5">
+              <ChevronDown className="h-3 w-3" />
+              <span className="font-medium text-slate-400">{s.conversionFromPrev}%</span> de conversión
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <div className="w-20 text-xs text-slate-400 shrink-0 text-right">{s.label}</div>
+            <div className="flex-1 h-8 bg-surface-100 rounded-md overflow-hidden">
+              <div
+                className="h-full rounded-md flex items-center px-2 text-[11px] font-semibold text-white transition-all"
+                style={{
+                  width: `${Math.max((s.count / maxCount) * 100, s.count > 0 ? 10 : 0)}%`,
+                  backgroundColor: FUNNEL_COLORS[i % FUNNEL_COLORS.length],
+                }}
+              >
+                {s.count}
+              </div>
+            </div>
+            <div className="w-10 text-right text-[10px] text-slate-500 shrink-0">{s.pctOfTotal}%</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function AnalisisPage() {
-  const { kpi, conversations, satisfaction, improvements, costs, metrics, isLoading, error, refetch } = useAnalytics();
+  const { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, isLoading, error, refetch } = useAnalytics();
   const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
@@ -230,6 +341,31 @@ export default function AnalisisPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'reportes' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card-accent">
+            <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
+              <LineChart className="h-4 w-4 text-brand-400" /> Actividad últimos 14 días
+            </h3>
+            <p className="mono-label mb-4">MENSAJES Y CONVERSACIONES NUEVAS POR DÍA</p>
+            <TimeSeriesChart data={timeseries} />
+          </div>
+          <div className="card-accent">
+            <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
+              <Filter className="h-4 w-4 text-brand-400" /> Embudo de conversión
+            </h3>
+            <p className="mono-label mb-4">
+              CICLO DE VIDA CRM{funnel ? ` · ${funnel.total} contactos` : ''}
+            </p>
+            {funnel ? (
+              <FunnelChart funnel={funnel} />
+            ) : (
+              <p className="text-xs text-slate-500">Sin datos del embudo.</p>
+            )}
           </div>
         </div>
       )}

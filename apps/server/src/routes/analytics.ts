@@ -2,8 +2,17 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { getFunnel, type LifecycleStage } from '../services/clients/lifecycle';
 
 const router = Router();
+
+/** Etiquetas en español para cada etapa del embudo (orden de LIFECYCLE_STAGES). */
+const STAGE_LABELS: Record<LifecycleStage, string> = {
+  NEW: 'Nuevo',
+  HOT: 'Caliente',
+  PAYMENT: 'En pago',
+  CUSTOMER: 'Cliente',
+};
 
 const COST_PER_1K_TOKENS = 0.003;
 const AVG_TOKENS_PER_MESSAGE = 150;
@@ -327,6 +336,108 @@ router.get(
       { label: 'Escalaciones a humano', value: `${handoffRate}%` },
       { label: 'Reservas por bot', value: String(botBookings) },
     ]);
+  })
+);
+
+/**
+ * Serie temporal de los últimos 14 días (estilo respond.io): por día, cuántas
+ * conversaciones nuevas se crearon y cuántos mensajes se registraron. Ambas
+ * métricas salen de `createdAt` (columnas que ya existen), así que es barato y
+ * no toca el schema.
+ *
+ * Patrón anti-N+1: una sola consulta por tabla (igual que `/conversations`),
+ * trayendo sólo `createdAt` de la ventana y agrupando por día en memoria. Scope
+ * multi-tenant por `businessId`.
+ */
+router.get(
+  '/timeseries',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const days = 14;
+
+    // Ventana [inicio del día más antiguo, ahora].
+    const oldestDayStart = new Date();
+    oldestDayStart.setDate(oldestDayStart.getDate() - (days - 1));
+    oldestDayStart.setHours(0, 0, 0, 0);
+
+    const [conversations, messages] = await Promise.all([
+      prisma.conversation.findMany({
+        where: { businessId, createdAt: { gte: oldestDayStart } },
+        select: { createdAt: true },
+      }),
+      prisma.message.findMany({
+        where: { conversation: { businessId }, createdAt: { gte: oldestDayStart } },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    // Agrupamos por día local reutilizando la clave ISO del inicio del día.
+    const bucketKey = (d: Date) =>
+      new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+
+    const convCounts = new Map<string, number>();
+    for (const { createdAt } of conversations) {
+      const key = bucketKey(createdAt);
+      convCounts.set(key, (convCounts.get(key) ?? 0) + 1);
+    }
+    const msgCounts = new Map<string, number>();
+    for (const { createdAt } of messages) {
+      const key = bucketKey(createdAt);
+      msgCounts.set(key, (msgCounts.get(key) ?? 0) + 1);
+    }
+
+    const result = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const key = dayStart.toISOString();
+      result.push({
+        date: dayStart.toISOString().split('T')[0],
+        label: dayStart.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }),
+        conversations: convCounts.get(key) ?? 0,
+        messages: msgCounts.get(key) ?? 0,
+      });
+    }
+
+    res.json(result);
+  })
+);
+
+/**
+ * Embudo del ciclo de vida CRM (New → Hot → Payment → Customer) con la
+ * conversión entre etapas. Reutiliza `getFunnel` (conteos por etapa) y agrega:
+ *  - `pctOfTotal`: qué porcentaje del total de contactos está en la etapa.
+ *  - `conversionFromPrev`: conversión respecto de la etapa anterior
+ *    (count[i] / count[i-1] * 100). La primera etapa no tiene anterior (null).
+ */
+router.get(
+  '/funnel',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const { counts, total, stages } = await getFunnel(businessId);
+
+    const funnel = stages.map((stage, idx) => {
+      const count = counts[stage];
+      const prevCount = idx === 0 ? null : counts[stages[idx - 1]];
+      const conversionFromPrev =
+        prevCount === null
+          ? null
+          : prevCount > 0
+            ? parseFloat(((count / prevCount) * 100).toFixed(1))
+            : 0;
+      return {
+        stage,
+        label: STAGE_LABELS[stage],
+        count,
+        pctOfTotal: total > 0 ? parseFloat(((count / total) * 100).toFixed(1)) : 0,
+        conversionFromPrev,
+      };
+    });
+
+    res.json({ total, stages: funnel });
   })
 );
 

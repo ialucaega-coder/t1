@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { analyticsApi } from '@/lib/api/index';
+import type { AnalyticsTimeseriesPoint, AnalyticsFunnel } from '@/types/analytics';
 import {
   DAILY_CONVERSATIONS,
   SATISFACTION_DISTRIBUTION,
@@ -22,6 +23,8 @@ export interface UseAnalyticsResult {
   improvements: typeof SUGGESTED_IMPROVEMENTS;
   costs: typeof AI_COSTS;
   metrics: MetricItem[];
+  timeseries: AnalyticsTimeseriesPoint[];
+  funnel: AnalyticsFunnel | null;
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
@@ -49,6 +52,8 @@ export function useAnalytics(): UseAnalyticsResult {
   const [improvements, setImprovements] = useState<typeof SUGGESTED_IMPROVEMENTS>([]);
   const [costs, setCosts] = useState<typeof AI_COSTS>([]);
   const [metrics, setMetrics] = useState<MetricItem[]>([]);
+  const [timeseries, setTimeseries] = useState<AnalyticsTimeseriesPoint[]>([]);
+  const [funnel, setFunnel] = useState<AnalyticsFunnel | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -60,13 +65,15 @@ export function useAnalytics(): UseAnalyticsResult {
       setIsLoading(true);
       setError(null);
       try {
-        const [kpiRes, convRes, satRes, impRes, costRes, metricsRes] = await Promise.all([
+        const [kpiRes, convRes, satRes, impRes, costRes, metricsRes, tsRes, funnelRes] = await Promise.all([
           analyticsApi.getKpi(),
           analyticsApi.getConversations(),
           analyticsApi.getSatisfaction(),
           analyticsApi.getImprovements(),
           analyticsApi.getCosts(),
           analyticsApi.getMetrics(),
+          analyticsApi.getTimeseries(),
+          analyticsApi.getFunnel(),
         ]);
         if (!cancelled) {
           setKpi(kpiRes);
@@ -75,6 +82,8 @@ export function useAnalytics(): UseAnalyticsResult {
           setImprovements(impRes);
           setCosts(costRes);
           setMetrics(metricsRes);
+          setTimeseries(tsRes);
+          setFunnel(funnelRes);
         }
       } catch (err) {
         if (!cancelled) {
@@ -87,6 +96,8 @@ export function useAnalytics(): UseAnalyticsResult {
           setImprovements([]);
           setCosts([]);
           setMetrics([]);
+          setTimeseries([]);
+          setFunnel(null);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -99,5 +110,5 @@ export function useAnalytics(): UseAnalyticsResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  return { kpi, conversations, satisfaction, improvements, costs, metrics, isLoading, error, refetch };
+  return { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, isLoading, error, refetch };
 }

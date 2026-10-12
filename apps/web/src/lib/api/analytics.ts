@@ -5,6 +5,8 @@ import type {
   AnalyticsSatisfaction,
   AnalyticsImprovement,
   AnalyticsCost,
+  AnalyticsTimeseriesPoint,
+  AnalyticsFunnel,
 } from '@/types/analytics';
 
 export function getKpi() {
@@ -29,4 +31,12 @@ export function getCosts() {
 
 export function getMetrics() {
   return httpClient.get<{ label: string; value: string }[]>('/analytics/metrics');
+}
+
+export function getTimeseries() {
+  return httpClient.get<AnalyticsTimeseriesPoint[]>('/analytics/timeseries');
+}
+
+export function getFunnel() {
+  return httpClient.get<AnalyticsFunnel>('/analytics/funnel');
 }

@@ -34,3 +34,26 @@ export interface AnalyticsCost {
   tokens: number;
   cost: number;
 }
+
+/** Un punto de la serie temporal de 14 días (conversaciones nuevas y mensajes). */
+export interface AnalyticsTimeseriesPoint {
+  date: string;
+  label: string;
+  conversations: number;
+  messages: number;
+}
+
+/** Una etapa del embudo CRM con su conversión respecto de la etapa anterior. */
+export interface AnalyticsFunnelStage {
+  stage: 'NEW' | 'HOT' | 'PAYMENT' | 'CUSTOMER';
+  label: string;
+  count: number;
+  pctOfTotal: number;
+  /** Conversión count[i] / count[i-1] * 100. `null` en la primera etapa. */
+  conversionFromPrev: number | null;
+}
+
+export interface AnalyticsFunnel {
+  total: number;
+  stages: AnalyticsFunnelStage[];
+}
