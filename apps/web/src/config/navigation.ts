@@ -49,6 +49,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Marketplace', href: '/marketplace', icon: Map, badge: 'active' },
       { name: 'Campañas', href: '/campanas', icon: Megaphone, badge: 'new' },
       { name: 'Automatizaciones', href: '/workflows', icon: Workflow, badge: 'new' },
+      { name: 'Oficina Mr Go', href: '/oficina', icon: Building2, badge: 'new' },
       { name: 'Arena', href: '/arena', icon: Trophy, badge: 'prizes' },
     ],
   },

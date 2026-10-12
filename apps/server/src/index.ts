@@ -63,6 +63,7 @@ import { mercadopagoRouter } from './routes/mercadopago';
 import { manychatRouter } from './routes/manychat';
 import { composioRouter } from './routes/composio';
 import { workflowsRouter } from './routes/workflows';
+import { mrgoRouter } from './routes/mrgo';
 import { platformRouter } from './routes/platform';
 import { restoreActiveBots } from './services/telegram/bot';
 import { startScheduler } from './services/scheduler';
@@ -302,6 +303,7 @@ app.use('/api/mercadopago', mercadopagoRouter);
 app.use('/api/manychat', manychatRouter);
 app.use('/api/composio', composioRouter);
 app.use('/api/workflows', workflowsRouter);
+app.use('/api/mrgo', mrgoRouter);
 // Super Admin (panel del dueño de la plataforma): cross-tenant, detrás de la
 // allowlist por email de PLATFORM_ADMIN_EMAILS (ver middleware/platformAdmin.ts).
 app.use('/api/platform', requireAuth, requirePlatformAdmin, platformRouter);
