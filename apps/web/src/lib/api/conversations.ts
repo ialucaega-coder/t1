@@ -18,7 +18,15 @@ export interface ConversationMeta {
   lastReadAt?: string | null;
   /** Canal real cuando no tiene enum propio (ej: 'MESSENGER'/'VOICE' sobre WEBCHAT). */
   realChannel?: string;
+  /** Bot pausado en esta conversación (un agente la tomó). */
+  botPaused?: boolean;
+  pausedBy?: string | null;
+  pausedByName?: string | null;
+  pausedAt?: string | null;
 }
+
+/** Vistas del Inbox estilo respond.io. */
+export type InboxView = 'all' | 'attention' | 'unread' | 'leads';
 
 export interface Conversation {
   id: string;
@@ -45,12 +53,13 @@ export interface ConversationDetail extends Conversation {
   messages: { id: string; role: string; text: string; responseTime: number | null; createdAt: string }[];
 }
 
-export function list(params?: { page?: number; pageSize?: number; status?: string; channel?: string }) {
+export function list(params?: { page?: number; pageSize?: number; status?: string; channel?: string; view?: InboxView }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.pageSize) qs.set('pageSize', String(params.pageSize));
   if (params?.status) qs.set('status', params.status);
   if (params?.channel) qs.set('channel', params.channel);
+  if (params?.view && params.view !== 'all') qs.set('view', params.view);
   const query = qs.toString();
   return httpClient.get<{ data: Conversation[]; total: number; page: number; pageSize: number }>(
     `/conversations${query ? `?${query}` : ''}`
@@ -87,4 +96,14 @@ export function addNote(id: string, text: string) {
 // Marca la conversación como leída.
 export function markRead(id: string) {
   return httpClient.patch<{ metadata: ConversationMeta }>(`/conversations/${id}/read`, {});
+}
+
+// Toma la conversación: pausa el bot en esta conversación para responder como humano.
+export function take(id: string) {
+  return httpClient.post<{ metadata: ConversationMeta }>(`/conversations/${id}/take`, {});
+}
+
+// Reactiva el bot en la conversación (opuesto a take).
+export function release(id: string) {
+  return httpClient.post<{ metadata: ConversationMeta }>(`/conversations/${id}/release`, {});
 }

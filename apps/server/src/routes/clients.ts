@@ -21,6 +21,13 @@ import {
   MAX_TAGS_PER_CLIENT,
   TAG_COLORS,
 } from '../services/clients/crm';
+import {
+  loadLifecycle,
+  setClientStage,
+  getFunnel,
+  stageFor,
+  LIFECYCLE_STAGES,
+} from '../services/clients/lifecycle';
 
 const router = Router();
 
@@ -64,6 +71,9 @@ router.get(
     // y (b) adjuntar las etiquetas de cada cliente a la respuesta.
     const crm = await loadClientCrm(req.auth!.businessId);
 
+    // Etapa del ciclo de vida (embudo CRM) de cada cliente. Default 'NEW'.
+    const lifecycle = await loadLifecycle(req.auth!.businessId);
+
     // Filtro por etiqueta: restringimos los ids ANTES de la query para que la
     // paginación y el total sean correctos (no post-filtramos la página).
     if (query.tagId) {
@@ -76,6 +86,7 @@ router.get(
     const withTags = <T extends { id: string }>(client: T) => ({
       ...client,
       tags: crm.byClient[client.id]?.tags ?? [],
+      stage: stageFor(lifecycle, client.id),
     });
 
     // Nueva paginación (?limit / ?offset): devuelve la forma estándar { ...limit... }.
@@ -211,6 +222,20 @@ router.get(
   })
 );
 
+/**
+ * GET /api/clients/funnel → conteo de clientes por etapa del ciclo de vida
+ * (embudo CRM). Scope multi-tenant por businessId. Debe declararse ANTES de
+ * `/:id` para que no lo capture esa ruta.
+ */
+router.get(
+  '/funnel',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const funnel = await getFunnel(req.auth!.businessId);
+    res.json(funnel);
+  })
+);
+
 const tagColorEnum = z.enum(TAG_COLORS);
 const saveTagsSchema = z.object({
   tags: z
@@ -281,6 +306,25 @@ router.put(
   })
 );
 
+const setLifecycleSchema = z.object({
+  stage: z.enum(LIFECYCLE_STAGES),
+});
+
+/** PATCH /api/clients/:id/lifecycle → mueve al cliente de etapa en el embudo. */
+router.patch(
+  '/:id/lifecycle',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const clientId = req.params.id as string;
+    const data = setLifecycleSchema.parse(req.body);
+    if (!(await assertClientInBusiness(req.auth!.businessId, clientId))) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    const stage = await setClientStage(req.auth!.businessId, clientId, data.stage);
+    res.json({ stage });
+  })
+);
+
 router.get(
   '/:id',
   requireAuth,
@@ -334,10 +378,17 @@ router.get(
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
 
-    // Adjunta la anotación del CRM (etiquetas asignadas + nota interna).
+    // Adjunta la anotación del CRM (etiquetas asignadas + nota interna) y la
+    // etapa del ciclo de vida (embudo).
     const crm = await loadClientCrm(req.auth!.businessId);
     const annotation = crm.byClient[client.id] ?? { tags: [], note: '' };
-    res.json({ ...client, tags: annotation.tags, note: annotation.note });
+    const lifecycle = await loadLifecycle(req.auth!.businessId);
+    res.json({
+      ...client,
+      tags: annotation.tags,
+      note: annotation.note,
+      stage: stageFor(lifecycle, client.id),
+    });
   })
 );
 

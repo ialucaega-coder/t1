@@ -1,5 +1,5 @@
 import { httpClient } from './http-client';
-import type { Client, ClientDetail, ClientTag } from '@/types';
+import type { Client, ClientDetail, ClientTag, LifecycleStage } from '@/types';
 
 export function getClients(params?: { search?: string; tagId?: string; page?: number; pageSize?: number }) {
   const qs = new URLSearchParams();
@@ -44,6 +44,21 @@ export function setClientTags(id: string, tags: string[]) {
 
 export function setClientNote(id: string, note: string) {
   return httpClient.put<ClientAnnotation>(`/clients/${id}/note`, { note });
+}
+
+/** Conteo del embudo (clientes por etapa del ciclo de vida). */
+export interface ClientFunnel {
+  counts: Record<LifecycleStage, number>;
+  total: number;
+  stages: LifecycleStage[];
+}
+
+export function getClientFunnel() {
+  return httpClient.get<ClientFunnel>('/clients/funnel');
+}
+
+export function setClientLifecycle(id: string, stage: LifecycleStage) {
+  return httpClient.patch<{ stage: LifecycleStage }>(`/clients/${id}/lifecycle`, { stage });
 }
 
 export function getClient(id: string) {

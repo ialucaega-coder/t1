@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 
@@ -44,6 +44,18 @@ interface ConversationMeta {
   /** Compat: lectura global previa (se mantiene como fallback). */
   lastReadAt?: string | null;
   /**
+   * Bot pausado en ESTA conversación: cuando es true, un agente la "tomó" y el
+   * bot no debe responder automáticamente (el motor de chatbot debe chequear
+   * este flag antes de autorespoder). Se escribe vía /take (pausar) y /release
+   * (reactivar). No existe columna para esto en el schema (congelado), así que
+   * vive acá en metadata, igual que assignee/tags/notas.
+   */
+  botPaused?: boolean;
+  /** Quién tomó la conversación (userId del agente) y su nombre/momento. */
+  pausedBy?: string | null;
+  pausedByName?: string | null;
+  pausedAt?: string | null;
+  /**
    * Canal real cuando no tiene enum propio en BotChannel (ej: 'MESSENGER' o
    * 'VOICE', que se persisten como WEBCHAT). Lo escribe el chatbot al crear la
    * conversación; el Inbox lo usa para mostrar/filtrar el canal correcto.
@@ -54,6 +66,26 @@ interface ConversationMeta {
 
 /** Máximo de notas internas que guardamos por conversación (evita JSON gigante). */
 const MAX_NOTES = 200;
+
+/**
+ * Vistas del Inbox (estilo respond.io) que se piden con ?view=...:
+ *  - 'all'       → Todas (sin filtro extra).
+ *  - 'attention' → "Te necesitan": conversaciones derivadas a un humano (HANDOFF).
+ *  - 'unread'    → "Sin leer": el usuario actual nunca las abrió (readBy[userId] ausente).
+ *  - 'leads'     → "Interesados": etiquetadas como lead/interesado.
+ */
+type InboxView = 'all' | 'attention' | 'unread' | 'leads';
+const INBOX_VIEWS: readonly InboxView[] = ['all', 'attention', 'unread', 'leads'];
+function normalizeView(v: unknown): InboxView {
+  return (typeof v === 'string' && (INBOX_VIEWS as readonly string[]).includes(v)) ? (v as InboxView) : 'all';
+}
+
+/**
+ * Etiquetas que marcan un "lead/interesado" para la vista 'leads'. Las tags se
+ * guardan preservando el case original, y el filtro JSON de Postgres (array_contains)
+ * es exacto, así que matcheamos las variantes de capitalización más comunes.
+ */
+const LEAD_TAG_VARIANTS = ['lead', 'Lead', 'LEAD', 'interesado', 'Interesado', 'INTERESADO'];
 
 // Lee de forma segura el metadata (Json) como objeto tipado, preservando
 // cualquier clave existente que no manejemos explícitamente.
@@ -122,10 +154,34 @@ router.get(
     const pageSize = Math.min(50, parseInt(req.query.pageSize as string) || 20);
     const status = req.query.status as string | undefined;
     const channel = req.query.channel as string | undefined;
+    const view = normalizeView(req.query.view);
 
     const where: Prisma.ConversationWhereInput = { businessId: req.auth!.businessId };
-    if (status) where.status = status as Prisma.ConversationWhereInput['status'];
     if (channel) where.channel = channel as Prisma.ConversationWhereInput['channel'];
+
+    // La vista define el estado cuando corresponde (attention = HANDOFF); si no,
+    // respetamos el filtro de estado explícito que mande la UI.
+    if (view === 'attention') {
+      where.status = 'HANDOFF';
+    } else if (status) {
+      where.status = status as Prisma.ConversationWhereInput['status'];
+    }
+
+    // Filtros de vista que viven dentro de metadata (Json). Se combinan con AND.
+    const viewAnd: Prisma.ConversationWhereInput[] = [];
+    if (view === 'unread') {
+      // "Sin leer" por agente: el usuario actual nunca la abrió (readBy[userId]
+      // ausente o null). El refinamiento fino (último mensaje del cliente) lo
+      // hace el cliente; esto acota a nivel de BD de forma paginable.
+      viewAnd.push({ metadata: { path: ['readBy', req.auth!.userId], equals: Prisma.AnyNull } });
+    }
+    if (view === 'leads') {
+      // Alguna de las etiquetas de lead/interesado (variantes de capitalización).
+      viewAnd.push({
+        OR: LEAD_TAG_VARIANTS.map((t) => ({ metadata: { path: ['tags'], array_contains: t } })),
+      });
+    }
+    if (viewAnd.length) where.AND = viewAnd;
 
     const [conversations, total] = await Promise.all([
       prisma.conversation.findMany({
@@ -363,6 +419,65 @@ router.patch(
       return { meta, result: null };
     });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+
+    res.json({ metadata: outcome.metadata });
+  })
+);
+
+// Un agente "toma" la conversación: pausa el bot en ESTA conversación para
+// responder como humano. Guarda botPaused=true + quién la tomó, en metadata.
+// (El motor de chatbot debe chequear metadata.botPaused antes de autorespoder;
+// ese consumo vive en el dominio del chatbot, fuera de esta ruta.)
+router.post(
+  '/:id/take',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
+
+    const agent = await prisma.user.findFirst({
+      where: { id: req.auth!.userId, businessId },
+      select: { name: true },
+    });
+
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      meta.botPaused = true;
+      meta.pausedBy = req.auth!.userId;
+      meta.pausedByName = agent?.name ?? undefined;
+      meta.pausedAt = new Date().toISOString();
+      return { meta, result: null };
+    });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+
+    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
+      conversationId,
+    });
+
+    res.json({ metadata: outcome.metadata });
+  })
+);
+
+// Reactiva el bot en la conversación (lo opuesto a /take): botPaused=false y
+// limpia el rastro de quién la tenía tomada.
+router.post(
+  '/:id/release',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
+
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      meta.botPaused = false;
+      meta.pausedBy = null;
+      meta.pausedByName = null;
+      meta.pausedAt = null;
+      return { meta, result: null };
+    });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+
+    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
+      conversationId,
+    });
 
     res.json({ metadata: outcome.metadata });
   })

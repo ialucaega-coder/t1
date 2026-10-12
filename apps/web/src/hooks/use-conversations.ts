@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as conversationsApi from '@/lib/api/conversations';
 import type { Conversation, ConversationDetail } from '@/lib/api/conversations';
 
-export function useConversations(params?: { status?: string; channel?: string }) {
+export function useConversations(params?: { status?: string; channel?: string; view?: conversationsApi.InboxView }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -40,7 +40,7 @@ export function useConversations(params?: { status?: string; channel?: string })
     // as a whole object: callers often pass a new object literal on every
     // render, which would otherwise retrigger this effect on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadToken, page, params?.status, params?.channel]);
+  }, [reloadToken, page, params?.status, params?.channel, params?.view]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 

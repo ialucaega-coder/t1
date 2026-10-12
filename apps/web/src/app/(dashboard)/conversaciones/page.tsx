@@ -56,6 +56,15 @@ function channelOf(conv: conversationsApi.Conversation): string {
   return conv.displayChannel || conv.channel;
 }
 
+// Vistas del Inbox estilo respond.io. El filtrado real lo hace el backend
+// (?view=...); acá solo elegimos la pestaña activa.
+const VIEW_TABS: { value: conversationsApi.InboxView; label: string }[] = [
+  { value: 'all', label: 'Todas' },
+  { value: 'attention', label: 'Te necesitan' },
+  { value: 'unread', label: 'Sin leer' },
+  { value: 'leads', label: 'Interesados' },
+];
+
 interface TeamOption {
   id: string;
   name: string;

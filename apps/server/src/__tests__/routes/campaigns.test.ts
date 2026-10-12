@@ -25,6 +25,7 @@ vi.mock('../../lib/prisma', () => ({
     },
     booking: { findMany: vi.fn() },
     user: { findMany: vi.fn() },
+    business: { findUnique: vi.fn() },
   },
 }));
 
@@ -34,7 +35,20 @@ vi.mock('../../lib/socket', () => ({
   getIO: () => undefined,
 }));
 
+// Adaptadores de envio saliente mockeados: no se tocan Twilio/Resend reales. El
+// envio de campanas los reutiliza (no los reescribe), asi que verificamos que se
+// llamen una vez por destinatario alcanzable.
+vi.mock('../../services/whatsapp/client', () => ({
+  isConfigured: vi.fn(() => true),
+  sendMessage: vi.fn(async () => 'SID_TEST'),
+}));
+vi.mock('../../services/email', () => ({
+  sendGenericNotification: vi.fn(async () => true),
+}));
+
 import { prisma } from '../../lib/prisma';
+import * as whatsapp from '../../services/whatsapp/client';
+import { sendGenericNotification } from '../../services/email';
 import { campaignsRouter } from '../../routes/campaigns';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -203,9 +217,60 @@ describe('routes/campaigns', () => {
   });
 
   describe('POST /api/campaigns/:id/send', () => {
-    it('envia la campana y actualiza el conteo de destinatarios', async () => {
-      mock(prisma.campaign.findFirst).mockResolvedValue({ id: 'c1', status: 'draft' });
+    it('envia por email a cada destinatario con email y actualiza sentCount', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'email',
+        name: 'Promo',
+        description: 'Cuerpo de la promo',
+      });
       mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null },
+        { id: 'u2', name: 'Beto', email: 'beto@x.com', phone: null },
+      ]);
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 2 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ message: 'Hola!' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('sent');
+      expect(res.body.envio).toEqual({ enviados: 2, fallidos: 0, canalSoportado: true });
+      // Una llamada al adaptador de email por cada destinatario alcanzable.
+      expect(sendGenericNotification).toHaveBeenCalledTimes(2);
+      expect(sendGenericNotification).toHaveBeenCalledWith('ana@x.com', 'Promo', 'Hola!');
+      expect(prisma.campaign.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'c1' }, data: expect.objectContaining({ status: 'sent', sentCount: 2 }) })
+      );
+    });
+
+    it('un destinatario que falla no corta el resto de la campana', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'email',
+        name: 'Promo',
+        description: null,
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([
+        { clientId: 'u1' },
+        { clientId: 'u2' },
+        { clientId: 'u3' },
+      ]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null },
+        { id: 'u2', name: 'Beto', email: 'beto@x.com', phone: null },
+        { id: 'u3', name: 'Caro', email: 'caro@x.com', phone: null },
+      ]);
+      // El segundo envio lanza: debe contarse como fallido y seguir con el tercero.
+      mock(sendGenericNotification)
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('resend 500'))
+        .mockResolvedValueOnce(true);
       mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 2 });
 
       const res = await request(app)
@@ -214,10 +279,64 @@ describe('routes/campaigns', () => {
         .send({});
 
       expect(res.status).toBe(200);
-      expect(res.body.status).toBe('sent');
+      expect(res.body.envio).toEqual({ enviados: 2, fallidos: 1, canalSoportado: true });
+      expect(sendGenericNotification).toHaveBeenCalledTimes(3);
       expect(prisma.campaign.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'c1' }, data: expect.objectContaining({ status: 'sent', sentCount: 2 }) })
+        expect.objectContaining({ data: expect.objectContaining({ sentCount: 2 }) })
       );
+    });
+
+    it('envia por whatsapp usando el numero dedicado del negocio', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'whatsapp',
+        name: 'Promo',
+        description: 'Cuerpo wa',
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: null, phone: '+5491111' },
+        { id: 'u2', name: 'Beto', email: null, phone: null }, // sin phone => fallido
+      ]);
+      mock(prisma.business.findUnique).mockResolvedValue({ whatsappNumber: '+5490000' });
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 1 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.envio).toEqual({ enviados: 1, fallidos: 1, canalSoportado: true });
+      expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+      expect(whatsapp.sendMessage).toHaveBeenCalledWith('+5491111', 'Cuerpo wa', '+5490000');
+    });
+
+    it('canal no soportado (sms) no llama adaptadores y cuenta fallidos', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'sms',
+        name: 'Promo',
+        description: 'x',
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: '+549' },
+        { id: 'u2', name: 'Beto', email: 'beto@x.com', phone: '+549' },
+      ]);
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 0 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.envio).toEqual({ enviados: 0, fallidos: 2, canalSoportado: false });
+      expect(sendGenericNotification).not.toHaveBeenCalled();
+      expect(whatsapp.sendMessage).not.toHaveBeenCalled();
     });
 
     it('devuelve 404 si la campana no existe', async () => {

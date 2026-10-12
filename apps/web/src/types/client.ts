@@ -1,3 +1,6 @@
+/** Etapas del ciclo de vida de contactos (embudo CRM), estilo respond.io. */
+export type LifecycleStage = 'NEW' | 'HOT' | 'PAYMENT' | 'CUSTOMER';
+
 export interface Client {
   id: string;
   name: string;
@@ -11,6 +14,8 @@ export interface Client {
   _count: { bookingsAsClient: number; orders: number };
   /** Ids de etiquetas del CRM asignadas a este cliente. */
   tags?: string[];
+  /** Etapa del ciclo de vida (embudo CRM). Default 'NEW'. */
+  stage?: LifecycleStage;
 }
 
 /** Colores disponibles para las etiquetas del CRM (alineados con el backend). */

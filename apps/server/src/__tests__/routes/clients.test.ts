@@ -53,6 +53,21 @@ vi.mock('../../services/clients/crm', () => ({
   TAG_COLORS: ['slate', 'red', 'blue', 'green'],
 }));
 
+// El lifecycle (embudo CRM) también pega a prisma.connection; lo mockeamos para
+// aislar las rutas de clientes de su persistencia. Los tests del servicio en sí
+// viven en __tests__/services/clients-lifecycle.test.ts.
+vi.mock('../../services/clients/lifecycle', () => ({
+  loadLifecycle: vi.fn(async () => ({})),
+  stageFor: () => 'NEW',
+  setClientStage: vi.fn(async (_b: string, _c: string, stage: string) => stage),
+  getFunnel: vi.fn(async () => ({
+    counts: { NEW: 0, HOT: 0, PAYMENT: 0, CUSTOMER: 0 },
+    total: 0,
+    stages: ['NEW', 'HOT', 'PAYMENT', 'CUSTOMER'],
+  })),
+  LIFECYCLE_STAGES: ['NEW', 'HOT', 'PAYMENT', 'CUSTOMER'],
+}));
+
 vi.mock('../../services/billing/limits', () => ({ getContactCapacity: vi.fn() }));
 
 import { prisma } from '../../lib/prisma';

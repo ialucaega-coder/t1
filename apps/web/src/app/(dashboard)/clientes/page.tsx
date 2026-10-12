@@ -5,6 +5,7 @@ import {
   Search, UserPlus, Users, ChevronLeft, ChevronRight,
   Calendar, ShoppingBag, Mail, Phone, Clock, Trash2,
   Edit3, X, User, Flame, Thermometer, Snowflake, Download, Tag as TagIcon,
+  Sparkles, CreditCard, UserCheck,
 } from 'lucide-react';
 import { useClients, useClientDetail } from '@/hooks/use-clients';
 import * as clientsApi from '@/lib/api/clients';
@@ -15,7 +16,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { useToast } from '@/components/common/Toast';
 import { usePageCounter, fmtCounter } from '@/stores/page-counter';
-import type { ClientTag } from '@/types';
+import type { ClientTag, LifecycleStage } from '@/types';
 
 type Interest = 'hot' | 'warm' | 'cold';
 
