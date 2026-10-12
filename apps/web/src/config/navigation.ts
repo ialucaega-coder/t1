@@ -77,4 +77,13 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Facturación', href: '/facturacion', icon: CreditCard },
     ],
   },
+  {
+    // Panel del dueño de la plataforma (super admin). El acceso real lo corta el
+    // backend por allowlist de email (PLATFORM_ADMIN_EMAILS); a quien no esté en
+    // la lista, la página le muestra "Acceso restringido".
+    label: 'PLATAFORMA',
+    items: [
+      { name: 'Super Admin', href: '/plataforma', icon: Shield },
+    ],
+  },
 ];
