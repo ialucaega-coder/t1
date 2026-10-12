@@ -45,6 +45,12 @@ vi.mock('../../services/workflows', () => ({
     accion: 'enviar_whatsapp',
   })),
   deleteWorkflow: vi.fn(async () => true),
+  runWorkflows: vi.fn(async () => ({
+    matched: 1,
+    results: [
+      { ruleId: 'r1', nombre: 'Bienvenida', accion: 'enviar_whatsapp', result: { action: 'enviar_whatsapp', kind: 'externo', ok: true, status: 'simulado', detail: 'se enviaría WhatsApp a ••••5678' } },
+    ],
+  })),
 }));
 
 vi.mock('../../middleware/auth', () => ({
@@ -52,6 +58,8 @@ vi.mock('../../middleware/auth', () => ({
     req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
     next();
   },
+  // Factory passthrough: en estos tests el auth siempre es ADMIN.
+  requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
 import {
@@ -59,6 +67,7 @@ import {
   createWorkflow,
   updateWorkflow,
   deleteWorkflow,
+  runWorkflows,
 } from '../../services/workflows';
 import { workflowsRouter } from '../../routes/workflows';
 import { errorHandler } from '../../middleware/errorHandler';
@@ -192,6 +201,37 @@ describe('routes/workflows', () => {
       const res = await request(app).delete('/api/workflows/de-otro-negocio');
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/workflows/run', () => {
+    it('dispara las reglas del trigger en dry_run por defecto (scope por businessId)', async () => {
+      const res = await request(app)
+        .post('/api/workflows/run')
+        .send({ trigger: 'mensaje_entrante', payload: { clientId: 'c1' } });
+
+      expect(res.status).toBe(200);
+      expect(res.body.mode).toBe('dry_run');
+      expect(res.body.matched).toBe(1);
+      expect(res.body.results).toHaveLength(1);
+      expect(runWorkflows).toHaveBeenCalledWith('biz_1', { trigger: 'mensaje_entrante', payload: { clientId: 'c1' } }, 'dry_run');
+    });
+
+    it('con execute=true corre en vivo', async () => {
+      const res = await request(app)
+        .post('/api/workflows/run')
+        .send({ trigger: 'mensaje_entrante', execute: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.mode).toBe('live');
+      expect(runWorkflows).toHaveBeenCalledWith('biz_1', { trigger: 'mensaje_entrante', payload: undefined }, 'live');
+    });
+
+    it('devuelve 400 con un trigger fuera del catálogo', async () => {
+      const res = await request(app).post('/api/workflows/run').send({ trigger: 'nope' });
+
+      expect(res.status).toBe(400);
+      expect(runWorkflows).not.toHaveBeenCalled();
     });
   });
 });

@@ -20,6 +20,7 @@
  */
 import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma';
+import { executeAction, type ActionResult, type ExecMode } from '../actions/executor';
 
 const WORKFLOWS_CONNECTION_TYPE = 'WORKFLOWS';
 const WORKFLOWS_CONNECTION_NAME = 'Automatizaciones';
@@ -327,5 +328,47 @@ export async function evaluateWorkflows(
   if (!isValidTrigger(event.trigger)) return [];
   const rules = await loadWorkflows(businessId);
   return rules.filter((r) => r.activo && r.trigger === event.trigger);
-  // TODO(ejecución): evaluar r.condicion contra event.payload y despachar r.accion.
+  // Nota: la evaluación de `condicion` sigue como stub (toda regla activa del
+  // trigger matchea). `runWorkflows` es quien EJECUTA las acciones de las reglas.
+}
+
+/** Resultado de correr las reglas de un evento: la regla + lo que hizo su acción. */
+export interface WorkflowRunResult {
+  ruleId: string;
+  nombre: string;
+  accion: string;
+  result: ActionResult;
+}
+
+/**
+ * EJECUTA las reglas que matchean un evento: selecciona (evaluateWorkflows) y,
+ * por cada regla, despacha su `accion` al executor compartido con el
+ * `event.payload` como parámetros.
+ *
+ * `mode` controla las acciones externas (ver executor): 'dry_run' (por defecto)
+ * las simula; 'live' las ejecuta de verdad. Las acciones internas (mover etapa,
+ * notificar) se ejecutan en ambos modos. Secuencial a propósito: evita ráfagas
+ * contra servicios externos y mantiene un orden determinístico de efectos.
+ *
+ * Es el cierre del cableado de ejecución: el pipeline de eventos (cuando emita
+ * triggers reales) llama a esto; hoy se dispara también desde la ruta de prueba
+ * `POST /api/workflows/run`.
+ */
+export async function runWorkflows(
+  businessId: string,
+  event: WorkflowEvent,
+  mode: ExecMode = 'dry_run',
+): Promise<{ matched: number; results: WorkflowRunResult[] }> {
+  const rules = await evaluateWorkflows(businessId, event);
+  const results: WorkflowRunResult[] = [];
+  for (const rule of rules) {
+    const result = await executeAction({
+      businessId,
+      action: rule.accion,
+      params: event.payload ?? {},
+      mode,
+    });
+    results.push({ ruleId: rule.id, nombre: rule.nombre, accion: rule.accion, result });
+  }
+  return { matched: rules.length, results };
 }

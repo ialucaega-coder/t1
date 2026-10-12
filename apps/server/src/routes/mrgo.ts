@@ -28,6 +28,7 @@ import {
   saveAgents,
 } from '../services/mrgo/agents';
 import { orchestrate } from '../services/mrgo/orchestrator';
+import { executeAction } from '../services/actions/executor';
 
 // Zod exige una tupla no vacía para z.enum; el catálogo nunca está vacío.
 const agentKeyEnum = z.enum(AGENT_KEYS as [string, ...string[]]);
@@ -46,6 +47,9 @@ const putAgentsSchema = z.object({
 const orchestrateSchema = z.object({
   text: z.string().trim().min(1).max(4000),
   channel: z.string().trim().max(40).optional(),
+  // Si viene true y la decisión propone un tool, se EJECUTA (acciones externas
+  // en vivo). Por defecto no ejecuta (o simula las externas): solo rutea.
+  execute: z.boolean().optional(),
 });
 
 const router = Router();
@@ -75,18 +79,33 @@ router.put(
   })
 );
 
-// Decide qué agente atiende un input (y qué tool proponer). No ejecuta el tool.
+// Decide qué agente atiende un input y, si se pide `execute`, ejecuta el tool
+// propuesto a través del executor compartido (mismo que Workflows). Sin
+// `execute`, solo rutea: las acciones externas quedan en dry-run (simuladas).
 router.post(
   '/orchestrate',
   requireAuth,
   validate(orchestrateSchema),
   asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
     const decision = await orchestrate({
-      businessId: req.auth!.businessId,
+      businessId,
       text: req.body.text,
       channel: req.body.channel,
     });
-    res.json(decision);
+
+    // Si Mr Go decidió un tool, lo despachamos. `execute: true` → en vivo
+    // (acciones externas reales); por defecto dry_run (externas simuladas).
+    const execution = decision.tool
+      ? await executeAction({
+          businessId,
+          action: decision.tool,
+          params: decision.toolParams ?? {},
+          mode: req.body.execute ? 'live' : 'dry_run',
+        })
+      : null;
+
+    res.json({ ...decision, execution });
   })
 );
 

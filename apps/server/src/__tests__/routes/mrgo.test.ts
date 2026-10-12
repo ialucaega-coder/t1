@@ -137,6 +137,10 @@ describe('routes/mrgo', () => {
       expect(res.body.nextAgent).toBe('ventas');
       expect(res.body.emotion).toBe('entusiasmo');
       expect(res.body.tool).toBe('generar_link_pago');
+      // La ruta ahora despacha el tool por el executor. `generar_link_pago` es
+      // un placeholder (sin cableado directo) → no_soportado, sin efectos.
+      expect(res.body.execution).toBeTruthy();
+      expect(res.body.execution.status).toBe('no_soportado');
       expect(orchestrate).toHaveBeenCalledWith({
         businessId: 'biz_1',
         text: 'Quiero una cotización',
