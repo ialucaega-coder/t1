@@ -75,6 +75,9 @@ describe('routes/campaigns', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Claim atómico del /send: por defecto la campaña no estaba enviada (count=1).
+    // Los casos "ya enviada" y "no existe" lo overridan a count=0.
+    mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
   });
 
   describe('GET /api/campaigns', () => {
@@ -243,8 +246,13 @@ describe('routes/campaigns', () => {
       // Una llamada al adaptador de email por cada destinatario alcanzable.
       expect(sendGenericNotification).toHaveBeenCalledTimes(2);
       expect(sendGenericNotification).toHaveBeenCalledWith('ana@x.com', 'Promo', 'Hola!');
+      // El estado ya se setea en el claim atómico (updateMany); el update final
+      // solo persiste sentCount.
+      expect(prisma.campaign.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'sent' } })
+      );
       expect(prisma.campaign.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'c1' }, data: expect.objectContaining({ status: 'sent', sentCount: 2 }) })
+        expect.objectContaining({ where: { id: 'c1' }, data: { sentCount: 2 } })
       );
     });
 
@@ -340,6 +348,7 @@ describe('routes/campaigns', () => {
     });
 
     it('devuelve 404 si la campana no existe', async () => {
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 0 }); // claim no afecta filas
       mock(prisma.campaign.findFirst).mockResolvedValue(null);
 
       const res = await request(app)
@@ -351,6 +360,7 @@ describe('routes/campaigns', () => {
     });
 
     it('devuelve 400 si la campana ya fue enviada', async () => {
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 0 }); // ya estaba 'sent'
       mock(prisma.campaign.findFirst).mockResolvedValue({ id: 'c1', status: 'sent' });
 
       const res = await request(app)

@@ -195,61 +195,111 @@ export interface CreateRuleInput {
 export type UpdateRuleInput = Partial<CreateRuleInput>;
 
 /**
- * Crea una regla nueva. Hace read-modify-write atómico sobre la lista completa
- * (mergea dentro de la misma transacción vía `saveWorkflows`, que toma el lock).
- * Devuelve la regla creada, o null si los datos no pasan el saneo (trigger/acción
- * fuera de catálogo o nombre vacío).
+ * Read-modify-write ATÓMICO de la lista de reglas. El `mutator` recibe la lista
+ * FRESCA leída DENTRO de la transacción (tras tomar el lock con SELECT ... FOR
+ * UPDATE) y devuelve la lista nueva. Así dos escrituras concurrentes al mismo
+ * negocio no se pisan (el segundo ve lo que escribió el primero), que es lo que
+ * la versión anterior NO garantizaba (leía fuera de la tx). Mismo patrón que
+ * `permissions.ts` / `lifecycle.ts`.
+ */
+async function mutateRules(
+  businessId: string,
+  mutator: (current: WorkflowRule[]) => WorkflowRule[],
+): Promise<WorkflowRule[]> {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.connection.findFirst({
+      where: { businessId, type: WORKFLOWS_CONNECTION_TYPE },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const clean = sanitizeRules(mutator([]));
+      await tx.connection.create({
+        data: {
+          name: WORKFLOWS_CONNECTION_NAME,
+          type: WORKFLOWS_CONNECTION_TYPE,
+          icon: 'Workflow',
+          isActive: true,
+          config: { rules: clean } as unknown as object,
+          businessId,
+        },
+      });
+      return clean;
+    }
+
+    await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${existing.id} FOR UPDATE`;
+    const fresh = await tx.connection.findUnique({ where: { id: existing.id }, select: { config: true } });
+    const current = normalize(fresh?.config);
+    const clean = sanitizeRules(mutator(current));
+    await tx.connection.update({
+      where: { id: existing.id },
+      data: { config: { rules: clean } as unknown as object, isActive: true },
+    });
+    return clean;
+  });
+}
+
+/**
+ * Crea una regla nueva. El merge (append + tope) corre DENTRO de la transacción
+ * sobre la lista fresca, así no pisa creaciones concurrentes. Devuelve la regla
+ * creada, o null si los datos no pasan el saneo o se alcanzó el tope.
  */
 export async function createWorkflow(
   businessId: string,
   input: CreateRuleInput,
 ): Promise<WorkflowRule | null> {
   const id = randomUUID();
-  const candidate = { ...input, id };
   // Validamos la regla candidata aislada antes de tocar la base.
-  const [sane] = sanitizeRules([candidate]);
+  const [sane] = sanitizeRules([{ ...input, id }]);
   if (!sane) return null;
 
-  const current = await loadWorkflows(businessId);
-  if (current.length >= MAX_WORKFLOW_RULES) return null;
-  const saved = await saveWorkflows(businessId, [...current, sane]);
-  return saved.find((r) => r.id === sane.id) ?? null;
+  let created = false;
+  const saved = await mutateRules(businessId, (current) => {
+    if (current.length >= MAX_WORKFLOW_RULES) return current; // tope: sin cambios
+    created = true;
+    return [...current, sane];
+  });
+  if (!created) return null;
+  return saved.find((r) => r.id === id) ?? null;
 }
 
 /**
- * Edita una regla por id (incluye activar/desactivar vía `activo`). Mergea el
- * patch sobre la regla existente y re-guarda la lista. Devuelve la regla
- * resultante, o null si no existe o el resultado no pasa el saneo.
+ * Edita una regla por id (incluye activar/desactivar vía `activo`). El merge
+ * corre DENTRO de la transacción sobre la lista fresca. Devuelve la regla
+ * resultante, o null si no existe.
  */
 export async function updateWorkflow(
   businessId: string,
   id: string,
   patch: UpdateRuleInput,
 ): Promise<WorkflowRule | null> {
-  const current = await loadWorkflows(businessId);
-  const idx = current.findIndex((r) => r.id === id);
-  if (idx === -1) return null;
-
-  const merged: WorkflowRule = { ...current[idx], ...patch, id };
-  const [sane] = sanitizeRules([merged]);
-  if (!sane) return null;
-
-  const next = [...current];
-  next[idx] = sane;
-  const saved = await saveWorkflows(businessId, next);
+  let existed = false;
+  const saved = await mutateRules(businessId, (current) => {
+    const idx = current.findIndex((r) => r.id === id);
+    if (idx === -1) return current;
+    const [merged] = sanitizeRules([{ ...current[idx], ...patch, id }]);
+    if (!merged) return current;
+    existed = true;
+    const next = [...current];
+    next[idx] = merged;
+    return next;
+  });
+  if (!existed) return null;
   return saved.find((r) => r.id === id) ?? null;
 }
 
 /**
- * Borra una regla por id. Devuelve true si existía y se borró, false si no
- * existía (para que la ruta responda 404).
+ * Borra una regla por id. El filtrado corre DENTRO de la transacción sobre la
+ * lista fresca. Devuelve true si existía y se borró, false si no existía.
  */
 export async function deleteWorkflow(businessId: string, id: string): Promise<boolean> {
-  const current = await loadWorkflows(businessId);
-  const next = current.filter((r) => r.id !== id);
-  if (next.length === current.length) return false; // no existía
-  await saveWorkflows(businessId, next);
-  return true;
+  let removed = false;
+  await mutateRules(businessId, (current) => {
+    const next = current.filter((r) => r.id !== id);
+    if (next.length !== current.length) removed = true;
+    return next;
+  });
+  return removed;
 }
 
 /** Evento que podría disparar reglas (lo emitirá el pipeline cuando se cablee). */

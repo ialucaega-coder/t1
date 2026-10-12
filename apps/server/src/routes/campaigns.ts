@@ -127,9 +127,22 @@ router.post(
   asyncHandler(async (req, res) => {
     const id = String(req.params.id);
     const businessId = req.auth!.businessId;
+
+    // Claim ATÓMICO: marca la campaña como 'sent' solo si todavía NO lo estaba.
+    // Así, ante dos envíos concurrentes (misma campaña), solo uno gana el
+    // updateMany y el otro ve count=0 y corta. Antes el check de estado y el
+    // update final no eran atómicos (TOCTOU) y permitían doble-envío.
+    const claim = await prisma.campaign.updateMany({
+      where: { id, businessId, status: { not: 'sent' } },
+      data: { status: 'sent' },
+    });
+    if (claim.count === 0) {
+      const exists = await prisma.campaign.findFirst({ where: { id, businessId }, select: { id: true } });
+      throw new AppError(exists ? 400 : 404, exists ? 'Campaign already sent' : 'Campaign not found');
+    }
+
     const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
-    if (!campaign) throw new AppError(404, 'Campaign not found');
-    if (campaign.status === 'sent') throw new AppError(400, 'Campaign already sent');
+    if (!campaign) throw new AppError(404, 'Campaign not found'); // defensivo: no debería ocurrir tras el claim
 
     // Cuerpo a enviar: manda el `message` del request; si no viene, caemos a la
     // descripción o al nombre de la campaña (siempre hay algo que despachar).
@@ -198,13 +211,11 @@ router.post(
       fallidos = recipients.length;
     }
 
+    // El estado ya quedó en 'sent' por el claim atómico de arriba; acá solo
+    // persistimos el conteo de enviados. openRate/clickRate: sin tracking.
     const updated = await prisma.campaign.update({
       where: { id },
-      data: {
-        status: 'sent',
-        sentCount: enviados,
-        // openRate/clickRate: no hay tracking de apertura/click; se dejan como están.
-      },
+      data: { sentCount: enviados },
     });
 
     getIO()?.to(`business:${businessId}`).emit('campaign:sent', {
