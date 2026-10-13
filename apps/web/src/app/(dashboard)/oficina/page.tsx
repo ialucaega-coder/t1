@@ -14,12 +14,14 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle } from 'lucide-react';
+import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
   getMrGoAgents,
   orchestrate,
+  getMrGoMemory,
+  saveMrGoMemory,
   colorKeyForAgent,
   mapEmotion,
   CEO_AGENT_KEY,
@@ -54,6 +56,11 @@ interface FeedEvent {
   esFallback: boolean;
   hora: string;
 }
+
+// Límites de la memoria de Mr Go (espejan los del backend).
+const MEMORY_PROFILE_MAX = 2000;
+const MEMORY_FACT_MAX = 300;
+const MEMORY_FACTS_MAX = 50;
 
 /** Detecta si la decisión degradó al routing por defecto (sin LLM / falló). */
 function esDecisionFallback(d: OrchestratorDecision): boolean {
@@ -100,6 +107,12 @@ export default function OficinaPage() {
   const [resaltado, setResaltado] = useState<string | null>(null);
   const [feed, setFeed] = useState<FeedEvent[]>([]);
 
+  // Memoria de Mr Go (profile + facts). Se carga aparte de los agentes.
+  const [memProfile, setMemProfile] = useState('');
+  const [memFacts, setMemFacts] = useState<string[]>([]);
+  const [nuevoHecho, setNuevoHecho] = useState('');
+  const [guardandoMem, setGuardandoMem] = useState(false);
+
   async function cargar() {
     setIsLoading(true);
     setError(null);
@@ -118,6 +131,57 @@ export default function OficinaPage() {
   useEffect(() => {
     cargar();
   }, []);
+
+  // Carga la memoria del negocio al montar (silenciosa: si falla, se deja vacía
+  // y el dueño igual puede escribir y guardar).
+  useEffect(() => {
+    let activo = true;
+    getMrGoMemory()
+      .then((mem) => {
+        if (!activo) return;
+        setMemProfile(mem.profile ?? '');
+        setMemFacts(Array.isArray(mem.facts) ? mem.facts : []);
+      })
+      .catch(() => {
+        /* memoria opcional: no bloqueamos la oficina si no se pudo leer */
+      });
+    return () => {
+      activo = false;
+    };
+  }, []);
+
+  /** Suma un hecho nuevo a la lista (respetando los límites del backend). */
+  function agregarHecho() {
+    const h = nuevoHecho.trim();
+    if (!h || memFacts.length >= MEMORY_FACTS_MAX) return;
+    setMemFacts((prev) => [...prev, h.slice(0, MEMORY_FACT_MAX)]);
+    setNuevoHecho('');
+  }
+
+  /** Borra el hecho en la posición indicada. */
+  function borrarHecho(index: number) {
+    setMemFacts((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function guardarMemoria() {
+    if (guardandoMem) return;
+    setGuardandoMem(true);
+    try {
+      const saved = await saveMrGoMemory({ profile: memProfile, facts: memFacts });
+      setMemProfile(saved.profile ?? '');
+      setMemFacts(Array.isArray(saved.facts) ? saved.facts : []);
+      toast({ type: 'success', message: 'Memoria de Mr Go guardada.' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('403') || /forbidden/i.test(msg)) {
+        toast({ type: 'error', message: 'Solo un admin puede editar la memoria.' });
+      } else {
+        toast({ type: 'error', message: msg || 'No se pudo guardar la memoria de Mr Go.' });
+      }
+    } finally {
+      setGuardandoMem(false);
+    }
+  }
 
   // Índices por clave para unir config (activo) con presentación (nombre/desc).
   const roleByKey = useMemo(() => {
@@ -380,6 +444,106 @@ export default function OficinaPage() {
                   ))}
                 </ul>
               )}
+            </div>
+
+            {/* Memoria de Mr Go */}
+            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
+              <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
+                <Brain className="h-4 w-4 text-brand-400" />
+                Memoria de Mr Go
+              </h2>
+              <p className="mb-3 text-xs text-slate-500">
+                Lo que Mr Go sabe de tu negocio. Lo usa para decidir y responder mejor.
+              </p>
+
+              {/* Perfil del negocio */}
+              <label className="mb-1 block text-xs font-medium text-slate-400">Perfil del negocio</label>
+              <textarea
+                value={memProfile}
+                onChange={(e) => setMemProfile(e.target.value.slice(0, MEMORY_PROFILE_MAX))}
+                rows={5}
+                maxLength={MEMORY_PROFILE_MAX}
+                placeholder="Contá qué es tu negocio, el tono, reglas…"
+                className="w-full resize-none rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-400 focus:outline-none"
+              />
+              <div className="mt-1 text-right text-[10px] text-slate-500">
+                {memProfile.length}/{MEMORY_PROFILE_MAX}
+              </div>
+
+              {/* Hechos / notas */}
+              <div className="mt-3 flex items-center justify-between">
+                <label className="text-xs font-medium text-slate-400">Hechos y notas</label>
+                <span className="text-[10px] text-slate-500">
+                  {memFacts.length}/{MEMORY_FACTS_MAX}
+                </span>
+              </div>
+
+              {memFacts.length === 0 ? (
+                <p className="mt-2 text-xs text-slate-500">Todavía no hay hechos cargados.</p>
+              ) : (
+                <ul className="mt-2 space-y-2">
+                  {memFacts.map((fact, i) => (
+                    <li
+                      key={i}
+                      className="flex items-start gap-2 rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-2"
+                    >
+                      <span className="min-w-0 flex-1 break-words text-xs text-slate-300">{fact}</span>
+                      <button
+                        type="button"
+                        onClick={() => borrarHecho(i)}
+                        aria-label="Borrar hecho"
+                        className="shrink-0 rounded p-1 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* Agregar un hecho nuevo */}
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="text"
+                  value={nuevoHecho}
+                  onChange={(e) => setNuevoHecho(e.target.value.slice(0, MEMORY_FACT_MAX))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      agregarHecho();
+                    }
+                  }}
+                  maxLength={MEMORY_FACT_MAX}
+                  placeholder="Agregá un hecho (ej: atendemos de 9 a 18)"
+                  disabled={memFacts.length >= MEMORY_FACTS_MAX}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-400 focus:outline-none disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  onClick={agregarHecho}
+                  disabled={!nuevoHecho.trim() || memFacts.length >= MEMORY_FACTS_MAX}
+                  className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-50"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Agregar hecho
+                </button>
+              </div>
+              {memFacts.length >= MEMORY_FACTS_MAX && (
+                <p className="mt-1 text-[10px] text-amber-400">
+                  Llegaste al máximo de {MEMORY_FACTS_MAX} hechos.
+                </p>
+              )}
+
+              {/* Guardar */}
+              <button
+                type="button"
+                onClick={guardarMemoria}
+                disabled={guardandoMem}
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-400 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-500 disabled:opacity-50"
+              >
+                {guardandoMem ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                {guardandoMem ? 'Guardando…' : 'Guardar memoria'}
+              </button>
             </div>
           </section>
         </div>

@@ -145,3 +145,23 @@ export function orchestrate(text: string, channel?: string, execute = false) {
 export function saveMrGoAgents(agents: MrGoAgentConfig[]) {
   return httpClient.put<{ agents: MrGoAgentConfig[] }>('/mrgo/agents', { agents });
 }
+
+/**
+ * Memoria por negocio de Mr Go: `profile` (texto libre: qué es el negocio, tono,
+ * reglas) + `facts` (hechos/notas recientes). Límites del backend: profile máx
+ * 2000 chars; cada fact máx 300 chars; máx 50 facts.
+ */
+export interface MrGoMemory {
+  profile: string;
+  facts: string[];
+}
+
+/** Lee la memoria del negocio (profile + facts). */
+export function getMrGoMemory() {
+  return httpClient.get<MrGoMemory>('/mrgo/memory');
+}
+
+/** Guarda la memoria del negocio (solo ADMIN). Devuelve la memoria persistida. */
+export function saveMrGoMemory(memory: { profile?: string; facts?: string[] }) {
+  return httpClient.put<MrGoMemory>('/mrgo/memory', memory);
+}
