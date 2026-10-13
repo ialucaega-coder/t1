@@ -492,7 +492,10 @@ export default function WorkflowsPage() {
                   className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
                 />
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Texto libre que describe cuándo aplicar la regla. Se evaluará cuando se cablee la ejecución.
+                  Formato <span className="text-slate-400">campo operador valor</span> (ej:{' '}
+                  <span className="text-slate-400">monto &gt; 1000</span>,{' '}
+                  <span className="text-slate-400">canal = whatsapp</span>). Operadores: = ≠ &gt; ≥ &lt; ≤ y
+                  &ldquo;contiene&rdquo;. Si la dejás vacía, la regla aplica siempre.
                 </p>
               </div>
               <div>
