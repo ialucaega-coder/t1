@@ -241,6 +241,27 @@ describe('services/mrgo/orchestrator', () => {
     expect(dec.tool).toBeUndefined();
   });
 
+  it('descarta un tool que el agente NO tiene permitido por su rol (gating CrewAI)', async () => {
+    // Ventas NO tiene 'mover_lifecycle' (es del CRM). Se descarta el tool, se
+    // conserva el agente.
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"mover_lifecycle"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+    expect(dec.tool).toBeUndefined();
+  });
+
+  it('conserva un tool permitido para el rol del agente', async () => {
+    // Ventas SÍ puede 'generar_link_pago'.
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"generar_link_pago"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+    expect(dec.tool).toBe('generar_link_pago');
+  });
+
   it('fallback si el motor de IA no está disponible', async () => {
     mock(getAIProviderForBusiness).mockRejectedValue(new Error('sin motor'));
 

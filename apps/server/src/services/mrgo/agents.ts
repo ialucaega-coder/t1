@@ -95,6 +95,33 @@ export const TOOL_CATALOG: AgentTool[] = [
 export const TOOL_KEYS: readonly string[] = TOOL_CATALOG.map((t) => t.key);
 const TOOL_SET: ReadonlySet<string> = new Set(TOOL_KEYS);
 
+/**
+ * Tools permitidos por rol (patrón CrewAI: cada agente tiene su caja de
+ * herramientas). El orquestador no deja que un agente proponga un tool fuera de
+ * su área (ej: Soporte no genera links de pago). El `ceo` coordina y puede todo.
+ * Un rol sin entrada acá no tiene tools propios (solo rutea/responde).
+ */
+export const ROLE_TOOLS: Record<string, readonly string[]> = {
+  ceo: TOOL_KEYS, // el CEO coordina: acceso a todo el catálogo
+  ventas: ['generar_link_pago', 'crear_cliente', 'enviar_whatsapp'],
+  finanzas: ['generar_link_pago'],
+  reservas: ['crear_reserva', 'enviar_whatsapp'],
+  cobros: ['generar_link_pago', 'enviar_whatsapp'],
+  soporte: ['enviar_whatsapp'],
+  inbox: ['enviar_whatsapp'],
+  crm: ['mover_lifecycle', 'crear_cliente'],
+  marketing: ['lanzar_campana'],
+  campanas: ['lanzar_campana', 'enviar_whatsapp'],
+  // catalogo, analitica, rrhh, operaciones: sin tools propios (solo responden).
+};
+
+/** ¿El agente-rol tiene permitido usar ese tool? (el ceo puede todo). */
+export function toolAllowedForAgent(agentKey: string, toolKey: string): boolean {
+  if (!TOOL_SET.has(toolKey)) return false;
+  const allowed = ROLE_TOOLS[agentKey];
+  return Array.isArray(allowed) && allowed.includes(toolKey);
+}
+
 /** Verifica si una clave de rol pertenece al catálogo. */
 export function isValidAgentKey(value: unknown): value is string {
   return typeof value === 'string' && AGENT_SET.has(value);
