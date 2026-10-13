@@ -32,6 +32,10 @@ import { createNotification } from '../notifications';
 import * as whatsapp from '../whatsapp/client';
 import { setClientStage, isLifecycleStage } from '../clients/lifecycle';
 import { hashPassword } from '../../lib/password';
+import { loadMpConfig } from '../mercadopago/config';
+import { createPaymentPreference } from '../mercadopago/client';
+import { sendCampaign } from '../campaigns/send';
+import { AppError } from '../../middleware/errorHandler';
 
 /** Naturaleza de la acción: interna (reversible) o externa (saliente). */
 export type ActionKind = 'interno' | 'externo';
@@ -91,6 +95,19 @@ function str(params: Record<string, unknown>, ...keys: string[]): string | undef
 function maskPhone(phone: string): string {
   const tail = phone.replace(/\D/g, '').slice(-4);
   return tail ? `••••${tail}` : '••••';
+}
+
+/** Lee un número de `params` (acepta number directo o string numérico). */
+function num(params: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = params[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -248,10 +265,68 @@ const crearCliente: ActionHandler = {
 };
 
 /**
+ * Genera un link de pago de MercadoPago (Checkout Pro). EXTERNO: en `dry_run`
+ * simula; en `live` crea la preferencia real y devuelve la URL de cobro. Crear
+ * la preferencia NO cobra a nadie (solo genera el link); la entrega al cliente
+ * es un paso aparte (ej: un enviar_whatsapp con la url). Requiere MP conectado.
+ */
+const generarLinkPago: ActionHandler = {
+  kind: 'externo',
+  run: async ({ businessId, params, mode }) => {
+    const amount = num(params, 'amount', 'monto', 'importe');
+    if (amount === undefined || amount <= 0) return { ok: false, status: 'omitido', detail: 'monto inválido o ausente' };
+    const title = str(params, 'title', 'titulo', 'descripcion', 'description', 'concepto') ?? 'Pago';
+
+    if (mode !== 'live') {
+      return { ok: true, status: 'simulado', detail: `se generaría un link de pago por ${amount}`, data: { amount } };
+    }
+    const cfg = await loadMpConfig(businessId);
+    if (!cfg || !cfg.enabled) return { ok: false, status: 'omitido', detail: 'MercadoPago no está conectado' };
+
+    const pref = await createPaymentPreference(cfg.accessToken, { title, amount, currency: cfg.currency });
+    return { ok: true, status: 'ejecutado', detail: 'link de pago generado', data: { url: pref.initPoint, id: pref.id } };
+  },
+};
+
+/**
+ * Lanza (dispara el envío de) una campaña existente del negocio. EXTERNO: en
+ * `dry_run` simula (verifica que exista); en `live` ejecuta el envío real vía el
+ * servicio compartido `sendCampaign`. Un `AppError` 400/404 del servicio
+ * (ya enviada / no existe) se reporta como `omitido`; otros errores escalan.
+ */
+const lanzarCampana: ActionHandler = {
+  kind: 'externo',
+  run: async ({ businessId, params, mode }) => {
+    const campaignId = str(params, 'campaignId', 'campanaId', 'campana', 'id');
+    if (!campaignId) return { ok: false, status: 'omitido', detail: 'falta el id de la campaña' };
+
+    if (mode !== 'live') {
+      const c = await prisma.campaign.findFirst({ where: { id: campaignId, businessId }, select: { id: true, name: true } });
+      if (!c) return { ok: false, status: 'omitido', detail: 'campaña no encontrada' };
+      return { ok: true, status: 'simulado', detail: `se lanzaría la campaña "${c.name}"` };
+    }
+
+    try {
+      const r = await sendCampaign(businessId, campaignId, str(params, 'message', 'mensaje'));
+      const { enviados, fallidos } = r.envio;
+      return { ok: true, status: 'ejecutado', detail: `campaña enviada (${enviados} ok, ${fallidos} fallidos)`, data: { enviados, fallidos } };
+    } catch (err) {
+      // "ya enviada" (400) / "no existe" (404) → omitido; cualquier otro escala
+      // al catch de executeAction como 'error'.
+      if (err instanceof AppError && (err.statusCode === 400 || err.statusCode === 404)) {
+        return { ok: false, status: 'omitido', detail: err.message };
+      }
+      throw err;
+    }
+  },
+};
+
+/**
  * Acciones reconocidas pero cuya ejecución directa todavía NO se cableó (crear
- * reserva, link de pago, lanzar campaña, asignar agente). Tocan flujos
- * irreversibles o dinero, así que se habilitan una por una con cuidado.
- * Devuelven `no_soportado` para que la interfaz sea completa y honesta.
+ * reserva, asignar agente). Necesitan el motor de reservas (validación de
+ * servicio/profesional/horario y chequeo de conflictos) o el pipeline de inbox,
+ * que no conviene duplicar a la ligera. Devuelven `no_soportado` (interfaz
+ * completa y honesta) hasta integrarlas con cuidado.
  */
 function placeholder(kind: ActionKind, nombre: string): ActionHandler {
   return {
@@ -270,11 +345,11 @@ const HANDLERS: Record<string, ActionHandler> = {
   enviar_whatsapp: enviarWhatsapp,
   notificar,
   crear_cliente: crearCliente,
+  generar_link_pago: generarLinkPago,
+  lanzar_campana: lanzarCampana,
   // Reconocidas, sin ejecución directa todavía:
   asignar_agente: placeholder('interno', 'Asignar agente'),
   crear_reserva: placeholder('externo', 'Crear reserva'),
-  generar_link_pago: placeholder('externo', 'Generar link de pago'),
-  lanzar_campana: placeholder('externo', 'Lanzar campaña'),
 };
 
 /** Acciones con ejecución REAL cableada (no placeholder). */
@@ -283,6 +358,8 @@ const EXECUTABLE_ACTIONS: ReadonlySet<string> = new Set([
   'enviar_whatsapp',
   'notificar',
   'crear_cliente',
+  'generar_link_pago',
+  'lanzar_campana',
 ]);
 
 /** ¿La acción tiene ejecución REAL cableada (no es placeholder)? */

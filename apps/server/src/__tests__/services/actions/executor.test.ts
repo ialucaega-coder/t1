@@ -15,10 +15,15 @@ vi.mock('../../../lib/prisma', () => ({
   prisma: {
     user: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
     business: { findUnique: vi.fn() },
+    campaign: { findFirst: vi.fn() },
   },
 }));
 
 vi.mock('../../../lib/password', () => ({ hashPassword: vi.fn(async () => 'hashed') }));
+
+vi.mock('../../../services/mercadopago/config', () => ({ loadMpConfig: vi.fn() }));
+vi.mock('../../../services/mercadopago/client', () => ({ createPaymentPreference: vi.fn() }));
+vi.mock('../../../services/campaigns/send', () => ({ sendCampaign: vi.fn() }));
 
 vi.mock('../../../services/notifications', () => ({
   createNotification: vi.fn(async () => ({ id: 'notif_1' })),
@@ -40,6 +45,10 @@ import { prisma } from '../../../lib/prisma';
 import { createNotification } from '../../../services/notifications';
 import * as whatsapp from '../../../services/whatsapp/client';
 import { setClientStage } from '../../../services/clients/lifecycle';
+import { loadMpConfig } from '../../../services/mercadopago/config';
+import { createPaymentPreference } from '../../../services/mercadopago/client';
+import { sendCampaign } from '../../../services/campaigns/send';
+import { AppError } from '../../../middleware/errorHandler';
 import { executeAction, isExecutableAction } from '../../../services/actions/executor';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -207,9 +216,69 @@ describe('executeAction — crear_cliente (interno)', () => {
   });
 });
 
+describe('executeAction — generar_link_pago (externo, gated)', () => {
+  it('omite si el monto es inválido o ausente', async () => {
+    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: {}, mode: 'live' });
+    expect(r.status).toBe('omitido');
+  });
+
+  it('en dry_run SIMULA (no llama a MercadoPago)', async () => {
+    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 1500 }, mode: 'dry_run' });
+    expect(r.status).toBe('simulado');
+    expect(loadMpConfig).not.toHaveBeenCalled();
+  });
+
+  it('en live crea la preferencia y devuelve la url', async () => {
+    mock(loadMpConfig).mockResolvedValue({ accessToken: 'tok', enabled: true, currency: 'ARS' });
+    mock(createPaymentPreference).mockResolvedValue({ id: 'pref_1', initPoint: 'https://mp/checkout/1' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 1500, titulo: 'Seña' }, mode: 'live' });
+
+    expect(r.status).toBe('ejecutado');
+    expect(r.data?.url).toBe('https://mp/checkout/1');
+    expect(createPaymentPreference).toHaveBeenCalledWith('tok', expect.objectContaining({ amount: 1500, currency: 'ARS' }));
+  });
+
+  it('en live omite si MercadoPago no está conectado', async () => {
+    mock(loadMpConfig).mockResolvedValue(null);
+    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 1500 }, mode: 'live' });
+    expect(r.status).toBe('omitido');
+    expect(createPaymentPreference).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeAction — lanzar_campana (externo, gated)', () => {
+  it('omite si falta el id de la campaña', async () => {
+    const r = await executeAction({ businessId: BIZ, action: 'lanzar_campana', params: {}, mode: 'live' });
+    expect(r.status).toBe('omitido');
+  });
+
+  it('en dry_run SIMULA verificando que exista (no envía)', async () => {
+    mock(prisma.campaign.findFirst).mockResolvedValue({ id: 'c1', name: 'Promo' });
+    const r = await executeAction({ businessId: BIZ, action: 'lanzar_campana', params: { campaignId: 'c1' }, mode: 'dry_run' });
+    expect(r.status).toBe('simulado');
+    expect(sendCampaign).not.toHaveBeenCalled();
+  });
+
+  it('en live envía la campaña vía el servicio', async () => {
+    mock(sendCampaign).mockResolvedValue({ id: 'c1', envio: { enviados: 3, fallidos: 1, canalSoportado: true } });
+    const r = await executeAction({ businessId: BIZ, action: 'lanzar_campana', params: { campaignId: 'c1' }, mode: 'live' });
+    expect(r.status).toBe('ejecutado');
+    expect(r.data?.enviados).toBe(3);
+    expect(sendCampaign).toHaveBeenCalledWith(BIZ, 'c1', undefined);
+  });
+
+  it('mapea AppError 400/404 del servicio a omitido', async () => {
+    mock(sendCampaign).mockRejectedValue(new AppError(400, 'Campaign already sent'));
+    const r = await executeAction({ businessId: BIZ, action: 'lanzar_campana', params: { campaignId: 'c1' }, mode: 'live' });
+    expect(r.status).toBe('omitido');
+    expect(r.detail).toContain('already sent');
+  });
+});
+
 describe('executeAction — placeholders y desconocidas', () => {
   it('acción reconocida sin cableado → no_soportado', async () => {
-    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: {} });
+    const r = await executeAction({ businessId: BIZ, action: 'crear_reserva', params: {} });
     expect(r.status).toBe('no_soportado');
     expect(r.ok).toBe(false);
   });
@@ -238,7 +307,9 @@ describe('isExecutableAction', () => {
     expect(isExecutableAction('enviar_whatsapp')).toBe(true);
     expect(isExecutableAction('notificar')).toBe(true);
     expect(isExecutableAction('crear_cliente')).toBe(true);
-    expect(isExecutableAction('generar_link_pago')).toBe(false);
+    expect(isExecutableAction('generar_link_pago')).toBe(true);
+    expect(isExecutableAction('lanzar_campana')).toBe(true);
+    expect(isExecutableAction('crear_reserva')).toBe(false);
     expect(isExecutableAction('no_existe')).toBe(false);
   });
 });
