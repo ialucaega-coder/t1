@@ -38,10 +38,13 @@ vi.mock('../../services/ai/system-prompt', () => ({
 vi.mock('../../services/billing/quota', () => ({
   getMessageQuota: vi.fn(async () => ({ used: 0, limit: 500, remaining: 500, overQuota: false, periodStart: '', periodEnd: null, plan: null })),
 }));
+// Stub del disparo de automatizaciones (se prueba aparte): evita la cadena real.
+vi.mock('../../services/workflows', () => ({ dispatchEvent: vi.fn() }));
 
 import { prisma } from '../../lib/prisma';
 import { getAIProviderForBusiness } from '../../services/ai/engine';
 import { getMessageQuota } from '../../services/billing/quota';
+import { dispatchEvent } from '../../services/workflows';
 import { processMessage, type ChatChannel } from '../../services/chatbot';
 
 const mock = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -93,6 +96,14 @@ describe('services/chatbot — canal real en metadata', () => {
     const data = createData();
     expect(data.channel).toBe('INSTAGRAM');
     expect(data.metadata).toBeUndefined();
+  });
+
+  it('dispara el trigger "mensaje_entrante" con el canal y la conversación', async () => {
+    await run('WHATSAPP');
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      'biz_1',
+      expect.objectContaining({ trigger: 'mensaje_entrante', payload: expect.objectContaining({ channel: 'WHATSAPP', conversationId: 'c1' }) }),
+    );
   });
 });
 

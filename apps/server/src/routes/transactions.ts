@@ -13,6 +13,7 @@ import {
   findIdempotentEntityId,
   recordIdempotentKey,
 } from '../lib/idempotency';
+import { dispatchEvent } from '../services/workflows';
 
 const router = Router();
 
@@ -105,6 +106,21 @@ router.post(
       }
       return { txn: created, duplicated: false };
     });
+
+    // Dispara "pago recibido" solo para cobros reales (venta total o parcial),
+    // nunca para devoluciones (REFUND = salida de dinero) ni para duplicados por
+    // idempotencia. Fire-and-forget: el modo lo resuelve el negocio y no lanza.
+    if (!result.duplicated && (result.txn.type === 'SALE' || result.txn.type === 'PARTIAL')) {
+      void dispatchEvent(businessId, {
+        trigger: 'pago_recibido',
+        payload: {
+          transactionId: result.txn.id,
+          amount: Number(result.txn.amount),
+          paymentMethod: result.txn.paymentMethod,
+          orderId: result.txn.orderId ?? undefined,
+        },
+      });
+    }
 
     res.status(result.duplicated ? 200 : 201).json(result.txn);
   })

@@ -15,6 +15,7 @@ import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
 import { loadFaqItems, buildFaqPrompt } from './faq/config';
 import { loadSystemPrompt } from './ai/system-prompt';
 import { getMessageQuota } from './billing/quota';
+import { dispatchEvent } from './workflows';
 
 /**
  * Lee si el negocio superó el cupo de mensajes, SIN romper el flujo del bot: si
@@ -359,6 +360,19 @@ export async function processMessage(
       message: userMessage,
     });
   } catch {}
+
+  // Dispara las automatizaciones de "mensaje entrante". Fire-and-forget: el modo
+  // (simular/ejecutar) lo resuelve dispatchEvent según el ajuste del negocio y
+  // nunca lanza, así que no agrega latencia ni puede romper la respuesta del bot.
+  void dispatchEvent(businessId, {
+    trigger: 'mensaje_entrante',
+    payload: {
+      channel,
+      conversationId: conversation.id,
+      clientId: options.clientId,
+      phone: options.contactPhone,
+    },
+  });
 
   const dbHistory = options.history || await loadHistory(conversation.id);
 

@@ -22,8 +22,11 @@ vi.mock('../../middleware/auth', () => ({
   },
   requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
+// Stub del disparo de automatizaciones (lo probamos aparte): evita la cadena real.
+vi.mock('../../services/workflows', () => ({ dispatchEvent: vi.fn() }));
 
 import { prisma } from '../../lib/prisma';
+import { dispatchEvent } from '../../services/workflows';
 import { transactionsRouter } from '../../routes/transactions';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -44,7 +47,7 @@ describe('routes/transactions — POST / (idempotencia)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mock(prisma.transaction.create).mockResolvedValue({ id: 'tx_1', amount: 1500 });
+    mock(prisma.transaction.create).mockResolvedValue({ id: 'tx_1', amount: 1500, type: 'SALE', paymentMethod: 'CASH', orderId: null });
     mock(prisma.connection.create).mockResolvedValue({ id: 'conn_1' });
     mock(prisma.connection.findFirst).mockResolvedValue(null);
     mock(prisma.$executeRaw).mockResolvedValue(undefined);
@@ -77,5 +80,37 @@ describe('routes/transactions — POST / (idempotencia)', () => {
     expect(res.status).toBe(200);
     expect(prisma.transaction.create).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('routes/transactions — disparo de "pago_recibido"', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    mock(prisma.$executeRaw).mockResolvedValue(undefined);
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+  });
+
+  it('dispara el trigger en una venta (SALE)', async () => {
+    mock(prisma.transaction.create).mockResolvedValue({ id: 'tx_1', amount: 1500, type: 'SALE', paymentMethod: 'CASH', orderId: null });
+
+    const res = await request(app).post('/api/transactions').send({ amount: 1500, type: 'SALE', paymentMethod: 'CASH' });
+
+    expect(res.status).toBe(201);
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      'biz_1',
+      expect.objectContaining({ trigger: 'pago_recibido', payload: expect.objectContaining({ transactionId: 'tx_1', amount: 1500 }) }),
+    );
+  });
+
+  it('NO dispara el trigger en una devolución (REFUND)', async () => {
+    mock(prisma.transaction.create).mockResolvedValue({ id: 'tx_2', amount: 500, type: 'REFUND', paymentMethod: 'CASH', orderId: null });
+
+    const res = await request(app).post('/api/transactions').send({ amount: 500, type: 'REFUND', paymentMethod: 'CASH' });
+
+    expect(res.status).toBe(201);
+    expect(dispatchEvent).not.toHaveBeenCalled();
   });
 });
