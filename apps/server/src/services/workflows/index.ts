@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { executeAction, type ActionResult, type ExecMode } from '../actions/executor';
 import { getAutomationMode } from './settings';
+import { matchesCondition } from './conditions';
 
 const WORKFLOWS_CONNECTION_TYPE = 'WORKFLOWS';
 const WORKFLOWS_CONNECTION_NAME = 'Automatizaciones';
@@ -328,9 +329,11 @@ export async function evaluateWorkflows(
 ): Promise<WorkflowRule[]> {
   if (!isValidTrigger(event.trigger)) return [];
   const rules = await loadWorkflows(businessId);
-  return rules.filter((r) => r.activo && r.trigger === event.trigger);
-  // Nota: la evaluación de `condicion` sigue como stub (toda regla activa del
-  // trigger matchea). `runWorkflows` es quien EJECUTA las acciones de las reglas.
+  return rules.filter(
+    (r) => r.activo && r.trigger === event.trigger && matchesCondition(r.condicion, event.payload),
+  );
+  // La `condicion` (opcional) se evalúa contra event.payload (ver conditions.ts);
+  // sin condición o si no es parseable, matchea igual (fail-open, compat).
 }
 
 /** Resultado de correr las reglas de un evento: la regla + lo que hizo su acción. */

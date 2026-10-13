@@ -26,10 +26,12 @@
  * Contrato: `executeAction` NUNCA lanza; siempre devuelve un `ActionResult`
  * estructurado (los errores se capturan y se reportan con `status: 'error'`).
  */
+import crypto from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { createNotification } from '../notifications';
 import * as whatsapp from '../whatsapp/client';
 import { setClientStage, isLifecycleStage } from '../clients/lifecycle';
+import { hashPassword } from '../../lib/password';
 
 /** Naturaleza de la acción: interna (reversible) o externa (saliente). */
 export type ActionKind = 'interno' | 'externo';
@@ -219,9 +221,36 @@ const enviarWhatsapp: ActionHandler = {
 };
 
 /**
+ * Crea un contacto/cliente (lead) en el CRM. Interno: no sale al exterior. Scoped
+ * por negocio; si viene email y ya existe uno con ese email en el negocio, se
+ * omite (no duplica). La contraseña es aleatoria e inadivinable (mismo criterio
+ * que routes/clients.ts): estos contactos no fijan su clave acá.
+ */
+const crearCliente: ActionHandler = {
+  kind: 'interno',
+  run: async ({ businessId, params }) => {
+    const name = str(params, 'name', 'nombre');
+    if (!name) return { ok: false, status: 'omitido', detail: 'falta el nombre del cliente' };
+    const email = str(params, 'email', 'correo');
+    if (!email) return { ok: false, status: 'omitido', detail: 'falta el email del cliente' };
+    const phone = str(params, 'phone', 'telefono');
+
+    const existing = await prisma.user.findFirst({ where: { businessId, email }, select: { id: true } });
+    if (existing) return { ok: false, status: 'omitido', detail: 'ya existe un cliente con ese email' };
+
+    const passwordHash = await hashPassword(crypto.randomBytes(32).toString('hex'));
+    const client = await prisma.user.create({
+      data: { name, email, phone: phone ?? null, passwordHash, role: 'CLIENT', businessId },
+      select: { id: true },
+    });
+    return { ok: true, status: 'ejecutado', detail: 'cliente creado', data: { clientId: client.id } };
+  },
+};
+
+/**
  * Acciones reconocidas pero cuya ejecución directa todavía NO se cableó (crear
- * reserva, link de pago, lanzar campaña, crear cliente, asignar agente). Tocan
- * flujos irreversibles o dinero, así que se habilitan una por una con cuidado.
+ * reserva, link de pago, lanzar campaña, asignar agente). Tocan flujos
+ * irreversibles o dinero, así que se habilitan una por una con cuidado.
  * Devuelven `no_soportado` para que la interfaz sea completa y honesta.
  */
 function placeholder(kind: ActionKind, nombre: string): ActionHandler {
@@ -240,17 +269,25 @@ const HANDLERS: Record<string, ActionHandler> = {
   mover_lifecycle: moverLifecycle,
   enviar_whatsapp: enviarWhatsapp,
   notificar,
+  crear_cliente: crearCliente,
   // Reconocidas, sin ejecución directa todavía:
   asignar_agente: placeholder('interno', 'Asignar agente'),
   crear_reserva: placeholder('externo', 'Crear reserva'),
   generar_link_pago: placeholder('externo', 'Generar link de pago'),
   lanzar_campana: placeholder('externo', 'Lanzar campaña'),
-  crear_cliente: placeholder('interno', 'Crear cliente'),
 };
+
+/** Acciones con ejecución REAL cableada (no placeholder). */
+const EXECUTABLE_ACTIONS: ReadonlySet<string> = new Set([
+  'mover_lifecycle',
+  'enviar_whatsapp',
+  'notificar',
+  'crear_cliente',
+]);
 
 /** ¿La acción tiene ejecución REAL cableada (no es placeholder)? */
 export function isExecutableAction(action: string): boolean {
-  return action === 'mover_lifecycle' || action === 'enviar_whatsapp' || action === 'notificar';
+  return EXECUTABLE_ACTIONS.has(action);
 }
 
 /**

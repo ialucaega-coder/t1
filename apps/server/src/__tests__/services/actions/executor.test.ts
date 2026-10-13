@@ -13,10 +13,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // --- Mocks de dependencias ---
 vi.mock('../../../lib/prisma', () => ({
   prisma: {
-    user: { findFirst: vi.fn(), findMany: vi.fn() },
+    user: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
     business: { findUnique: vi.fn() },
   },
 }));
+
+vi.mock('../../../lib/password', () => ({ hashPassword: vi.fn(async () => 'hashed') }));
 
 vi.mock('../../../services/notifications', () => ({
   createNotification: vi.fn(async () => ({ id: 'notif_1' })),
@@ -173,6 +175,38 @@ describe('executeAction — enviar_whatsapp (externo, gated por modo)', () => {
   });
 });
 
+describe('executeAction — crear_cliente (interno)', () => {
+  it('crea el cliente cuando hay nombre y email nuevo', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue(null); // no existe ese email
+    mock(prisma.user.create).mockResolvedValue({ id: 'c_new' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'ana@x.com', phone: '+54123' } });
+
+    expect(r.status).toBe('ejecutado');
+    expect(r.data?.clientId).toBe('c_new');
+    expect(prisma.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ name: 'Ana', email: 'ana@x.com', role: 'CLIENT', businessId: BIZ }) }),
+    );
+  });
+
+  it('omite si falta nombre o email', async () => {
+    const r1 = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { email: 'a@x.com' } });
+    expect(r1.status).toBe('omitido');
+    const r2 = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana' } });
+    expect(r2.status).toBe('omitido');
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('omite si ya existe un cliente con ese email (no duplica)', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'ya' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'ana@x.com' } });
+
+    expect(r.status).toBe('omitido');
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('executeAction — placeholders y desconocidas', () => {
   it('acción reconocida sin cableado → no_soportado', async () => {
     const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: {} });
@@ -203,6 +237,7 @@ describe('isExecutableAction', () => {
     expect(isExecutableAction('mover_lifecycle')).toBe(true);
     expect(isExecutableAction('enviar_whatsapp')).toBe(true);
     expect(isExecutableAction('notificar')).toBe(true);
+    expect(isExecutableAction('crear_cliente')).toBe(true);
     expect(isExecutableAction('generar_link_pago')).toBe(false);
     expect(isExecutableAction('no_existe')).toBe(false);
   });
