@@ -51,9 +51,26 @@ export interface MrGoAgentsResponse {
 }
 
 /**
+ * Resultado de EJECUTAR (o simular) el tool que propuso Mr Go. Espeja el
+ * `ActionResult` del backend (apps/server/src/services/mrgo).
+ * - `kind`: 'interno' (mover etapa, notificar) vs 'externo' (enviar WhatsApp).
+ * - `status`: 'ejecutado' (se efectuó), 'simulado' (externa sin execute),
+ *   'no_soportado', 'omitido' o 'error'.
+ */
+export interface ActionResult {
+  action: string;
+  kind: 'interno' | 'externo';
+  ok: boolean;
+  status: 'ejecutado' | 'simulado' | 'no_soportado' | 'omitido' | 'error';
+  detail: string;
+  data?: Record<string, unknown>;
+}
+
+/**
  * Decisión de routing que devuelve POST /orchestrate. `emotion` viene como texto
  * libre del LLM (ej: 'neutral', 'entusiasmo'); el front lo mapea a MrGoEmotion.
  * `tool`/`toolParams` son opcionales (solo si Mr Go propuso una acción).
+ * `execution` trae el resultado de ejecutar/simular ese tool (null si no hubo).
  */
 export interface OrchestratorDecision {
   nextAgent: string;
@@ -61,6 +78,7 @@ export interface OrchestratorDecision {
   reasoning: string;
   tool?: string;
   toolParams?: Record<string, unknown>;
+  execution: ActionResult | null;
 }
 
 /**
@@ -114,9 +132,13 @@ export function getMrGoAgents() {
   return httpClient.get<MrGoAgentsResponse>('/mrgo/agents');
 }
 
-/** Le da una orden al equipo: el orquestador decide qué agente la atiende. */
-export function orchestrate(text: string, channel?: string) {
-  return httpClient.post<OrchestratorDecision>('/mrgo/orchestrate', { text, channel });
+/**
+ * Le da una orden al equipo: el orquestador decide qué agente la atiende y, si
+ * `execute` es true, EJECUTA el tool propuesto en vivo (acciones externas
+ * reales). Por defecto no ejecuta en vivo: las acciones externas se simulan.
+ */
+export function orchestrate(text: string, channel?: string, execute = false) {
+  return httpClient.post<OrchestratorDecision>('/mrgo/orchestrate', { text, channel, execute });
 }
 
 /** Persiste qué agentes están activos (y su motor de IA opcional). */

@@ -10,9 +10,11 @@ import {
   Zap,
   ArrowRight,
   Filter,
+  Play,
+  AlertTriangle,
 } from 'lucide-react';
 import * as workflowsApi from '@/lib/api/workflows';
-import type { WorkflowRule, CatalogItem } from '@/lib/api/workflows';
+import type { WorkflowRule, CatalogItem, RunWorkflowResponse, ActionResult } from '@/lib/api/workflows';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -32,6 +34,24 @@ function labelMap(items: CatalogItem[]): Record<string, string> {
   return Object.fromEntries(items.map((i) => [i.key, i.label]));
 }
 
+/** Clases + etiqueta del badge según el estado de ejecución de una acción. */
+function statusBadge(status: ActionResult['status']): { label: string; cls: string } {
+  switch (status) {
+    case 'ejecutado':
+      return { label: 'Ejecutado', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
+    case 'simulado':
+      return { label: 'Simulado', cls: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20' };
+    case 'omitido':
+      return { label: 'Omitido', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+    case 'no_soportado':
+      return { label: 'No soportado', cls: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
+    case 'error':
+      return { label: 'Error', cls: 'bg-red-500/10 text-red-400 border-red-500/20' };
+    default:
+      return { label: status, cls: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
+  }
+}
+
 export default function WorkflowsPage() {
   const [rules, setRules] = useState<WorkflowRule[]>([]);
   const [triggers, setTriggers] = useState<CatalogItem[]>([]);
@@ -43,6 +63,11 @@ export default function WorkflowsPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  // Panel "Probar automatización"
+  const [testTrigger, setTestTrigger] = useState('');
+  const [testLive, setTestLive] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<RunWorkflowResponse | null>(null);
   const { toast } = useToast();
 
   const refetch = useCallback(async () => {
@@ -118,6 +143,24 @@ export default function WorkflowsPage() {
       toast({ type: 'error', message: 'Error al eliminar la automatización' });
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function handleRun() {
+    const trigger = testTrigger || triggers[0]?.key;
+    if (!trigger) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await workflowsApi.runWorkflow(trigger, { execute: testLive });
+      setTestResult(res);
+      if (res.matched === 0) {
+        toast({ type: 'info', message: 'Ninguna regla activa coincide con ese disparador' });
+      }
+    } catch {
+      toast({ type: 'error', message: 'Error al probar la automatización' });
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -223,6 +266,113 @@ export default function WorkflowsPage() {
           ))}
         </div>
       )}
+
+      {/* Probar automatización */}
+      <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Play className="h-4 w-4 text-sky-400" />
+          <h2 className="font-semibold text-white">Probar automatización</h2>
+        </div>
+        <p className="text-sm text-slate-400 mb-4">
+          Elegí un disparador y probá qué harían tus reglas activas. Por defecto es una{' '}
+          <span className="text-slate-300">simulación</span>: las acciones internas (mover etapa,
+          notificar al equipo) se ejecutan, y las externas (enviar WhatsApp) solo se simulan.
+        </p>
+
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-slate-300 mb-1">Disparador</label>
+            <select
+              value={testTrigger || triggers[0]?.key || ''}
+              onChange={(e) => setTestTrigger(e.target.value)}
+              className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+            >
+              {triggers.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={handleRun}
+            disabled={testing || triggers.length === 0}
+            className="flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600 transition-colors disabled:opacity-50"
+          >
+            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            Probar
+          </button>
+        </div>
+
+        <label className="mt-3 flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={testLive}
+            onChange={(e) => setTestLive(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-700 text-red-500 focus:ring-red-500"
+          />
+          <span className="text-sm text-slate-300">
+            <span className="inline-flex items-center gap-1.5 font-medium text-amber-400">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Ejecutar en vivo
+            </span>{' '}
+            <span className="text-slate-400">— envía mensajes reales (WhatsApp) a los clientes.</span>
+          </span>
+        </label>
+
+        {testResult && (
+          <div className="mt-5 border-t border-slate-700 pt-4">
+            <div className="flex items-center gap-2 mb-3 text-sm">
+              <span className="text-slate-300">
+                {testResult.matched} regla{testResult.matched === 1 ? '' : 's'} coincidente
+                {testResult.matched === 1 ? '' : 's'}
+              </span>
+              <span
+                className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${
+                  testResult.mode === 'live'
+                    ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                    : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20'
+                }`}
+              >
+                {testResult.mode === 'live' ? 'En vivo' : 'Simulación'}
+              </span>
+            </div>
+
+            {testResult.results.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                No hay reglas activas para este disparador. Creá una (o activala) y volvé a probar.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {testResult.results.map((item) => {
+                  const badge = statusBadge(item.result.status);
+                  return (
+                    <div
+                      key={item.ruleId}
+                      className="flex items-start justify-between gap-3 rounded-lg bg-slate-700/40 px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-white truncate">{item.nombre}</span>
+                          <span className="text-xs text-slate-500">
+                            {actionLabels[item.accion] || item.accion}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">{item.result.detail}</p>
+                      </div>
+                      <span
+                        className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${badge.cls}`}
+                      >
+                        {badge.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Modal crear */}
       {showModal && (

@@ -33,6 +33,36 @@ export interface CreateRuleInput {
 
 export type UpdateRuleInput = Partial<CreateRuleInput>;
 
+/** Resultado de ejecutar (o simular) una acción. */
+export interface ActionResult {
+  action: string;
+  kind: 'interno' | 'externo';
+  ok: boolean;
+  status: 'ejecutado' | 'simulado' | 'no_soportado' | 'omitido' | 'error';
+  detail: string;
+  data?: Record<string, unknown>;
+}
+
+/** Una regla disparada y el resultado de su acción. */
+export interface RunResultItem {
+  ruleId: string;
+  nombre: string;
+  accion: string;
+  result: ActionResult;
+}
+
+export interface RunWorkflowResponse {
+  trigger: string;
+  mode: 'dry_run' | 'live';
+  matched: number;
+  results: RunResultItem[];
+}
+
+export interface RunWorkflowOptions {
+  payload?: Record<string, unknown>;
+  execute?: boolean;
+}
+
 /** Lista reglas + catálogos de triggers y acciones. */
 export function list() {
   return httpClient.get<WorkflowsResponse>('/workflows');
@@ -48,4 +78,17 @@ export function update(id: string, data: UpdateRuleInput) {
 
 export function remove(id: string) {
   return httpClient.delete<void>(`/workflows/${id}`);
+}
+
+/**
+ * Dispara las reglas de un trigger y devuelve qué hizo cada acción.
+ * Por defecto hace dry-run (simula las acciones externas como enviar WhatsApp);
+ * con `execute: true` las corre EN VIVO. Solo ADMIN (lo exige el backend).
+ */
+export function runWorkflow(trigger: string, opts?: RunWorkflowOptions) {
+  return httpClient.post<RunWorkflowResponse>('/workflows/run', {
+    trigger,
+    payload: opts?.payload,
+    execute: opts?.execute ?? false,
+  });
 }

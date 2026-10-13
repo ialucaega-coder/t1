@@ -5,15 +5,16 @@
  *
  * El dueño ve a su equipo de agentes Mr Go trabajando (grilla de escritorios) y
  * le da órdenes al equipo. El orquestador (POST /mrgo/orchestrate) decide qué
- * agente la atiende, con qué emoción y qué acción (tool) proponer. La EJECUCIÓN
- * real del tool todavía no está cableada (v1: solo se muestra la decisión).
+ * agente la atiende, con qué emoción y qué acción (tool) proponer. Si está
+ * activo "Ejecutar en vivo", el tool se EJECUTA de verdad (acciones externas
+ * reales); si no, se simula. El resultado se muestra en el feed.
  *
  * Layout: split ~70/30 (en móvil apila). Izquierda = la oficina (agentes
  * activos, CEO destacado). Derecha = centro de comandos (input + feed).
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Send, Loader2, Building2, Radio, Wrench, Info } from 'lucide-react';
+import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
@@ -26,6 +27,7 @@ import {
   type MrGoRole,
   type MrGoTool,
   type OrchestratorDecision,
+  type ActionResult,
 } from '@/lib/api/mrgo';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -48,6 +50,7 @@ interface FeedEvent {
   emotion: MrGoEmotion;
   reasoning: string;
   toolNombre?: string;
+  execution?: ActionResult | null;
   esFallback: boolean;
   hora: string;
 }
@@ -55,6 +58,24 @@ interface FeedEvent {
 /** Detecta si la decisión degradó al routing por defecto (sin LLM / falló). */
 function esDecisionFallback(d: OrchestratorDecision): boolean {
   return d.reasoning.trim().toLowerCase().startsWith('routing por defecto');
+}
+
+/** Clases + etiqueta del badge según el estado de ejecución de la acción. */
+function statusBadge(status: ActionResult['status']): { label: string; cls: string } {
+  switch (status) {
+    case 'ejecutado':
+      return { label: 'Ejecutado', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
+    case 'simulado':
+      return { label: 'Simulado', cls: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20' };
+    case 'omitido':
+      return { label: 'Omitido', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+    case 'no_soportado':
+      return { label: 'No soportado', cls: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
+    case 'error':
+      return { label: 'Error', cls: 'bg-red-500/10 text-red-400 border-red-500/20' };
+    default:
+      return { label: status, cls: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
+  }
 }
 
 export default function OficinaPage() {
@@ -68,6 +89,9 @@ export default function OficinaPage() {
 
   const [orden, setOrden] = useState('');
   const [enviando, setEnviando] = useState(false);
+  // Ejecutar en vivo: si está activo, el tool que proponga Mr Go se EJECUTA de
+  // verdad (acciones externas reales). Apagado por defecto (solo simula).
+  const [ejecutarEnVivo, setEjecutarEnVivo] = useState(false);
 
   // Emoción actual por agente (clave → emoción). Los activos arrancan 'working';
   // cuando el orquestador deriva a uno, ese pasa a la emoción de la decisión.
@@ -137,7 +161,7 @@ export default function OficinaPage() {
     if (!text || enviando) return;
     setEnviando(true);
     try {
-      const decision = await orchestrate(text);
+      const decision = await orchestrate(text, undefined, ejecutarEnVivo);
       const role = roleByKey.get(decision.nextAgent);
       const emotion = mapEmotion(decision.emotion);
       const esFallback = esDecisionFallback(decision);
@@ -153,6 +177,7 @@ export default function OficinaPage() {
         emotion,
         reasoning: decision.reasoning || 'Sin explicación.',
         toolNombre: decision.tool ? toolByKey.get(decision.tool)?.nombre ?? decision.tool : undefined,
+        execution: decision.execution,
         esFallback,
         hora: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
       };
@@ -273,6 +298,22 @@ export default function OficinaPage() {
                 {enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 {enviando ? 'Mr Go está pensando…' : 'Enviar orden'}
               </button>
+
+              <label className="mt-3 flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ejecutarEnVivo}
+                  onChange={(e) => setEjecutarEnVivo(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-700 text-red-500 focus:ring-red-500"
+                />
+                <span className="text-xs text-slate-400">
+                  <span className="inline-flex items-center gap-1 font-medium text-amber-400">
+                    <AlertTriangle className="h-3 w-3" />
+                    Ejecutar la acción en vivo
+                  </span>{' '}
+                  — efectúa de verdad (p. ej. envía WhatsApp). Si está apagado, solo se simula.
+                </span>
+              </label>
             </div>
 
             {/* Feed — Lo que está pasando */}
@@ -307,12 +348,23 @@ export default function OficinaPage() {
                           <p className="mt-0.5 text-xs text-slate-400">{ev.reasoning}</p>
 
                           {ev.toolNombre && (
-                            <div className="mt-2 flex items-center gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1">
-                              <Wrench className="h-3 w-3 text-amber-400" />
-                              <span className="text-[11px] text-amber-300">
-                                Acción sugerida: {ev.toolNombre}
-                              </span>
-                              <span className="text-[10px] text-slate-500">(ejecución real próximamente)</span>
+                            <div className="mt-2 rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="flex items-center gap-1.5 text-[11px] text-amber-300">
+                                  <Wrench className="h-3 w-3 text-amber-400" />
+                                  {ev.toolNombre}
+                                </span>
+                                {ev.execution && (
+                                  <span
+                                    className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusBadge(ev.execution.status).cls}`}
+                                  >
+                                    {statusBadge(ev.execution.status).label}
+                                  </span>
+                                )}
+                              </div>
+                              {ev.execution && (
+                                <p className="mt-1 text-[10px] text-slate-400">{ev.execution.detail}</p>
+                              )}
                             </div>
                           )}
 
