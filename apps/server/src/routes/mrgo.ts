@@ -15,7 +15,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import {
@@ -29,6 +29,7 @@ import {
 } from '../services/mrgo/agents';
 import { orchestrate } from '../services/mrgo/orchestrator';
 import { executeAction } from '../services/actions/executor';
+import { loadMemory, saveMemory, MAX_PROFILE_LEN, MAX_FACT_LEN, MAX_FACTS } from '../services/mrgo/memory';
 
 // Zod exige una tupla no vacía para z.enum; el catálogo nunca está vacío.
 const agentKeyEnum = z.enum(AGENT_KEYS as [string, ...string[]]);
@@ -50,6 +51,11 @@ const orchestrateSchema = z.object({
   // Si viene true y la decisión propone un tool, se EJECUTA (acciones externas
   // en vivo). Por defecto no ejecuta (o simula las externas): solo rutea.
   execute: z.boolean().optional(),
+});
+
+const memorySchema = z.object({
+  profile: z.string().trim().max(MAX_PROFILE_LEN).optional(),
+  facts: z.array(z.string().trim().max(MAX_FACT_LEN)).max(MAX_FACTS).optional(),
 });
 
 const router = Router();
@@ -106,6 +112,28 @@ router.post(
       : null;
 
     res.json({ ...decision, execution });
+  })
+);
+
+// Memoria del negocio (perfil + hechos) que el orquestador usa de contexto.
+router.get(
+  '/memory',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const memory = await loadMemory(req.auth!.businessId);
+    res.json(memory);
+  })
+);
+
+// Edita la memoria. Solo ADMIN (es config del negocio que guía a todos los agentes).
+router.put(
+  '/memory',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(memorySchema),
+  asyncHandler(async (req, res) => {
+    const memory = await saveMemory(req.auth!.businessId, req.body);
+    res.json(memory);
   })
 );
 

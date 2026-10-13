@@ -20,6 +20,7 @@ import {
   loadAgents,
   type AgentConfig,
 } from './agents';
+import { loadMemory, buildMemoryPrompt } from './memory';
 
 /** Entrada del orquestador. */
 export interface OrchestrateInput {
@@ -179,7 +180,11 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
     return fallbackDecision(activeAgents, 'el mensaje vino vacío');
   }
 
-  const systemPrompt = buildRoutingSystemPrompt(activeAgents);
+  // Memoria del negocio (perfil + hechos): le da contexto estable al orquestador.
+  // Si no hay nada configurado, buildMemoryPrompt devuelve '' y no afecta el prompt.
+  const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const routingPrompt = buildRoutingSystemPrompt(activeAgents);
+  const systemPrompt = memoria ? `${memoria}\n\n${routingPrompt}` : routingPrompt;
   const userPrompt = channel ? `[canal: ${channel}]\n${text}` : text;
 
   let rawResponse: string;

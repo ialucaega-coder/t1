@@ -50,10 +50,25 @@ vi.mock('../../middleware/auth', () => ({
     req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
     next();
   },
+  requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
+
+// --- Mock de memoria: loadMemory/saveMemory stub; buildMemoryPrompt REAL ---
+vi.mock('../../services/mrgo/memory', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/memory')>();
+  return {
+    ...actual,
+    loadMemory: vi.fn(async () => ({ profile: '', facts: [] })),
+    saveMemory: vi.fn(async (_biz: string, input: { profile?: string; facts?: string[] }) => ({
+      profile: input.profile ?? '',
+      facts: input.facts ?? [],
+    })),
+  };
+});
 
 import { loadAgents, saveAgents } from '../../services/mrgo/agents';
 import { orchestrate } from '../../services/mrgo/orchestrator';
+import { loadMemory, saveMemory } from '../../services/mrgo/memory';
 import { mrgoRouter } from '../../routes/mrgo';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -158,6 +173,33 @@ describe('routes/mrgo', () => {
       const res = await request(app).post('/api/mrgo/orchestrate').send({ text: 'hola' });
       expect(res.status).toBe(401);
       expect(orchestrate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET/PUT /api/mrgo/memory', () => {
+    it('GET devuelve la memoria del negocio (scope por businessId)', async () => {
+      mock(loadMemory).mockResolvedValueOnce({ profile: 'Barbería', facts: ['promo viernes'] });
+
+      const res = await request(app).get('/api/mrgo/memory').set(...AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ profile: 'Barbería', facts: ['promo viernes'] });
+      expect(loadMemory).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('PUT guarda la memoria inyectando el businessId', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/memory')
+        .set(...AUTH)
+        .send({ profile: 'Soy una barbería', facts: ['abierto de 9 a 18'] });
+
+      expect(res.status).toBe(200);
+      expect(saveMemory).toHaveBeenCalledWith('biz_1', expect.objectContaining({ profile: 'Soy una barbería' }));
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app).get('/api/mrgo/memory');
+      expect(res.status).toBe(401);
     });
   });
 });
@@ -269,5 +311,18 @@ describe('services/mrgo/orchestrator', () => {
 
     expect(dec.nextAgent).toBe('ceo');
     expect(dec.reasoning).toContain('motor de IA');
+  });
+
+  it('inyecta la memoria del negocio en el prompt de sistema del orquestador', async () => {
+    mock(loadMemory).mockResolvedValueOnce({ profile: 'Barbería de barrio', facts: ['promo viernes'] });
+    const gen = vi.fn(async () => '{"nextAgent":"ceo","emotion":"neutral","reasoning":"ok"}');
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+
+    await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    // El 2º argumento de generateResponse lleva el systemPrompt con la memoria.
+    const opts = (gen.mock.calls[0] as unknown[])[1] as { systemPrompt: string };
+    expect(opts.systemPrompt).toContain('Barbería de barrio');
+    expect(opts.systemPrompt).toContain('promo viernes');
   });
 });
