@@ -363,24 +363,46 @@ const crearReserva: ActionHandler = {
 };
 
 /**
- * Acción reconocida pero sin ejecución directa todavía (asignar agente):
- * necesita el pipeline de inbox (derivación conversación→miembro, hoy en rutas +
- * Connection JSON, sin servicio reutilizable). Devuelve `no_soportado` hasta
- * integrarla con cuidado.
+ * Deriva una conversación al equipo humano (handoff). Interno y reversible:
+ * marca la conversación (scoped por negocio) como HANDOFF y notifica a los
+ * admins, mismo criterio que el handoff del chatbot. Pensado como acción de
+ * workflow para `mensaje_entrante` (el payload trae el conversationId).
  */
-function placeholder(kind: ActionKind, nombre: string): ActionHandler {
-  return {
-    kind,
-    run: async () => ({ ok: false, status: 'no_soportado', detail: `${nombre}: ejecución directa aún no cableada` }),
-  };
-}
+const asignarAgente: ActionHandler = {
+  kind: 'interno',
+  run: async ({ businessId, params }) => {
+    const conversationId = str(params, 'conversationId', 'conversacionId', 'conversacion');
+    if (!conversationId) return { ok: false, status: 'omitido', detail: 'falta la conversación a derivar' };
+
+    // Scope multi-tenant: la conversación tiene que ser de ESTE negocio.
+    const conv = await prisma.conversation.findFirst({ where: { id: conversationId, businessId }, select: { id: true } });
+    if (!conv) return { ok: false, status: 'omitido', detail: 'conversación no encontrada en el negocio' };
+
+    await prisma.conversation.update({ where: { id: conversationId }, data: { status: 'HANDOFF' } });
+
+    const admins = await prisma.user.findMany({ where: { businessId, role: 'ADMIN' }, select: { id: true } });
+    await Promise.all(
+      admins.map((a) =>
+        createNotification({
+          type: 'GENERAL',
+          channel: 'PUSH',
+          title: 'Conversación derivada',
+          body: 'Una automatización derivó una conversación al equipo para atención humana.',
+          userId: a.id,
+          businessId,
+        }),
+      ),
+    );
+    return { ok: true, status: 'ejecutado', detail: `conversación derivada al equipo (${admins.length} aviso/s)`, data: { conversationId } };
+  },
+};
 
 /**
  * Registro de handlers por clave de acción. Cubre las claves de los dos
- * catálogos (WORKFLOWS ACTION_CATALOG + Mr Go TOOL_CATALOG).
+ * catálogos (WORKFLOWS ACTION_CATALOG + Mr Go TOOL_CATALOG). Todas las acciones
+ * de ambos catálogos tienen ejecución real cableada.
  */
 const HANDLERS: Record<string, ActionHandler> = {
-  // Workflows (ACTION_CATALOG) + Mr Go (TOOL_CATALOG) comparten estas:
   mover_lifecycle: moverLifecycle,
   enviar_whatsapp: enviarWhatsapp,
   notificar,
@@ -388,11 +410,10 @@ const HANDLERS: Record<string, ActionHandler> = {
   generar_link_pago: generarLinkPago,
   lanzar_campana: lanzarCampana,
   crear_reserva: crearReserva,
-  // Reconocida, sin ejecución directa todavía:
-  asignar_agente: placeholder('interno', 'Asignar agente'),
+  asignar_agente: asignarAgente,
 };
 
-/** Acciones con ejecución REAL cableada (no placeholder). */
+/** Acciones con ejecución REAL cableada. */
 const EXECUTABLE_ACTIONS: ReadonlySet<string> = new Set([
   'mover_lifecycle',
   'enviar_whatsapp',
@@ -401,9 +422,10 @@ const EXECUTABLE_ACTIONS: ReadonlySet<string> = new Set([
   'generar_link_pago',
   'lanzar_campana',
   'crear_reserva',
+  'asignar_agente',
 ]);
 
-/** ¿La acción tiene ejecución REAL cableada (no es placeholder)? */
+/** ¿La acción tiene ejecución REAL cableada? */
 export function isExecutableAction(action: string): boolean {
   return EXECUTABLE_ACTIONS.has(action);
 }

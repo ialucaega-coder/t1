@@ -17,6 +17,7 @@ vi.mock('../../../lib/prisma', () => ({
     business: { findUnique: vi.fn() },
     campaign: { findFirst: vi.fn() },
     service: { findFirst: vi.fn() },
+    conversation: { findFirst: vi.fn(), update: vi.fn() },
   },
 }));
 
@@ -327,13 +328,32 @@ describe('executeAction — crear_reserva (externo, gated)', () => {
   });
 });
 
-describe('executeAction — placeholders y desconocidas', () => {
-  it('acción reconocida sin cableado → no_soportado', async () => {
+describe('executeAction — asignar_agente (interno)', () => {
+  it('omite si falta la conversación', async () => {
     const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: {} });
-    expect(r.status).toBe('no_soportado');
-    expect(r.ok).toBe(false);
+    expect(r.status).toBe('omitido');
   });
 
+  it('omite si la conversación no es del negocio', async () => {
+    mock(prisma.conversation.findFirst).mockResolvedValue(null);
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_ajena' } });
+    expect(r.status).toBe('omitido');
+    expect(prisma.conversation.update).not.toHaveBeenCalled();
+  });
+
+  it('deriva la conversación (HANDOFF) y notifica a los admins', async () => {
+    mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'conv_1' });
+    mock(prisma.user.findMany).mockResolvedValue([{ id: 'a1' }]);
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
+    expect(r.status).toBe('ejecutado');
+    expect(prisma.conversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'conv_1' }, data: { status: 'HANDOFF' } }),
+    );
+    expect(createNotification).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('executeAction — desconocidas', () => {
   it('acción desconocida → no_soportado', async () => {
     const r = await executeAction({ businessId: BIZ, action: 'no_existe', params: {} });
     expect(r.status).toBe('no_soportado');
@@ -361,7 +381,7 @@ describe('isExecutableAction', () => {
     expect(isExecutableAction('generar_link_pago')).toBe(true);
     expect(isExecutableAction('lanzar_campana')).toBe(true);
     expect(isExecutableAction('crear_reserva')).toBe(true);
-    expect(isExecutableAction('asignar_agente')).toBe(false);
+    expect(isExecutableAction('asignar_agente')).toBe(true);
     expect(isExecutableAction('no_existe')).toBe(false);
   });
 });
