@@ -35,6 +35,7 @@ import { hashPassword } from '../../lib/password';
 import { loadMpConfig } from '../mercadopago/config';
 import { createPaymentPreference } from '../mercadopago/client';
 import { sendCampaign } from '../campaigns/send';
+import { createBooking } from '../bookings/create';
 import { AppError } from '../../middleware/errorHandler';
 
 /** Naturaleza de la acción: interna (reversible) o externa (saliente). */
@@ -322,11 +323,50 @@ const lanzarCampana: ActionHandler = {
 };
 
 /**
- * Acciones reconocidas pero cuya ejecución directa todavía NO se cableó (crear
- * reserva, asignar agente). Necesitan el motor de reservas (validación de
- * servicio/profesional/horario y chequeo de conflictos) o el pipeline de inbox,
- * que no conviene duplicar a la ligera. Devuelven `no_soportado` (interfaz
- * completa y honesta) hasta integrarlas con cuidado.
+ * Crea una reserva usando el motor compartido (`services/bookings/create`).
+ * EXTERNO: en `dry_run` simula (verifica que el servicio exista); en `live` crea
+ * el turno real (con validación scoped + chequeo de conflictos). Requiere
+ * serviceId, date, startTime y un clientId (el cliente del turno); un AppError
+ * 404/409 del motor (servicio/cliente inexistente o solape) → `omitido`.
+ */
+const crearReserva: ActionHandler = {
+  kind: 'externo',
+  run: async ({ businessId, params, mode }) => {
+    const serviceId = str(params, 'serviceId', 'servicioId', 'servicio');
+    const date = str(params, 'date', 'fecha');
+    const startTime = str(params, 'startTime', 'hora', 'horaInicio');
+    if (!serviceId || !date || !startTime) {
+      return { ok: false, status: 'omitido', detail: 'faltan datos (serviceId, date, startTime)' };
+    }
+    const clientId = str(params, 'clientId', 'cliente', 'userId');
+    if (!clientId) return { ok: false, status: 'omitido', detail: 'falta el cliente de la reserva' };
+    const professionalId = str(params, 'professionalId', 'profesional', 'profesionalId');
+    if (!professionalId) return { ok: false, status: 'omitido', detail: 'falta el profesional de la reserva' };
+
+    if (mode !== 'live') {
+      const svc = await prisma.service.findFirst({ where: { id: serviceId, businessId }, select: { id: true, name: true } });
+      if (!svc) return { ok: false, status: 'omitido', detail: 'servicio no encontrado' };
+      return { ok: true, status: 'simulado', detail: `se crearía una reserva de "${svc.name}" el ${date} ${startTime}` };
+    }
+
+    try {
+      // actingUserId vacío: fuerza la validación de que el clientId sea del negocio.
+      const booking = await createBooking(businessId, { serviceId, date, startTime, professionalId, clientId }, '');
+      return { ok: true, status: 'ejecutado', detail: 'reserva creada', data: { bookingId: booking.id } };
+    } catch (err) {
+      if (err instanceof AppError && (err.statusCode === 400 || err.statusCode === 404 || err.statusCode === 409)) {
+        return { ok: false, status: 'omitido', detail: err.message };
+      }
+      throw err;
+    }
+  },
+};
+
+/**
+ * Acción reconocida pero sin ejecución directa todavía (asignar agente):
+ * necesita el pipeline de inbox (derivación conversación→miembro, hoy en rutas +
+ * Connection JSON, sin servicio reutilizable). Devuelve `no_soportado` hasta
+ * integrarla con cuidado.
  */
 function placeholder(kind: ActionKind, nombre: string): ActionHandler {
   return {
@@ -347,9 +387,9 @@ const HANDLERS: Record<string, ActionHandler> = {
   crear_cliente: crearCliente,
   generar_link_pago: generarLinkPago,
   lanzar_campana: lanzarCampana,
-  // Reconocidas, sin ejecución directa todavía:
+  crear_reserva: crearReserva,
+  // Reconocida, sin ejecución directa todavía:
   asignar_agente: placeholder('interno', 'Asignar agente'),
-  crear_reserva: placeholder('externo', 'Crear reserva'),
 };
 
 /** Acciones con ejecución REAL cableada (no placeholder). */
@@ -360,6 +400,7 @@ const EXECUTABLE_ACTIONS: ReadonlySet<string> = new Set([
   'crear_cliente',
   'generar_link_pago',
   'lanzar_campana',
+  'crear_reserva',
 ]);
 
 /** ¿La acción tiene ejecución REAL cableada (no es placeholder)? */

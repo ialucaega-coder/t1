@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { asyncHandler, AppError } from '../middleware/errorHandler';
+import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
@@ -10,6 +10,7 @@ import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendBookingCreated, sendBookingConfirmed, sendBookingCancelled } from '../services/notifications';
 import { syncBookingToCalcom } from '../services/calcom/sync';
 import { dispatchEvent } from '../services/workflows';
+import { createBooking } from '../services/bookings/create';
 
 const router = Router();
 
@@ -73,76 +74,9 @@ router.post(
   validate(createBookingSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateBookingInput;
-    // Scoped por negocio: evita reservar contra el servicio (precio/duración) de
-    // otro tenant enviando un serviceId ajeno.
-    const service = await prisma.service.findFirst({
-      where: { id: data.serviceId, businessId: req.auth!.businessId },
-    });
-    if (!service) {
-      throw new AppError(404, 'Service not found');
-    }
-
-    // Anti cross-tenant: si viene un clientId explícito, debe pertenecer al negocio.
-    // Evita que se cree (y luego se notifique a) un cliente de otro negocio.
-    if (data.clientId && data.clientId !== req.auth!.userId) {
-      const client = await prisma.user.findFirst({
-        where: { id: data.clientId, businessId: req.auth!.businessId },
-        select: { id: true },
-      });
-      if (!client) throw new AppError(404, 'Cliente no encontrado en este negocio');
-    }
-
-    const [hours, minutes] = data.startTime.split(':').map(Number);
-    const endMinutes = hours * 60 + minutes + service.duration;
-    const endTime = `${Math.floor(endMinutes / 60).toString().padStart(2, '0')}:${(endMinutes % 60).toString().padStart(2, '0')}`;
-
-    // Reserva atómica también en el panel: mismo advisory lock por
-    // (negocio, profesional, día) + re-chequeo de solape dentro de la
-    // transacción. Evita agendar dos turnos del mismo profesional a la misma
-    // hora (físicamente imposible). Sin profesional asignado no hay recurso que
-    // colisione, así que se omite el chequeo.
-    const lockKey = `booking:${req.auth!.businessId}:${data.professionalId ?? ''}:${data.date}`;
-    const booking = await prisma.$transaction(async (tx) => {
-      if (data.professionalId) {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-        const sameDay = await tx.booking.findMany({
-          where: {
-            businessId: req.auth!.businessId,
-            professionalId: data.professionalId,
-            date: new Date(data.date),
-            status: { notIn: ['CANCELLED'] },
-          },
-          select: { startTime: true, endTime: true },
-        });
-        if (sameDay.some((b) => data.startTime < b.endTime && endTime > b.startTime)) {
-          return null;
-        }
-      }
-
-      return tx.booking.create({
-        data: {
-          date: new Date(data.date),
-          startTime: data.startTime,
-          endTime,
-          totalPrice: service.price,
-          source: data.source,
-          notes: data.notes,
-          clientId: data.clientId || req.auth!.userId,
-          professionalId: data.professionalId,
-          serviceId: data.serviceId,
-          businessId: req.auth!.businessId,
-        },
-        include: {
-          client: { select: { name: true, phone: true, email: true } },
-          professional: { include: { user: { select: { name: true } } } },
-          service: { select: { name: true, duration: true } },
-        },
-      });
-    });
-
-    if (!booking) {
-      throw new AppError(409, 'Ese horario ya está reservado para el profesional.');
-    }
+    // El motor de reservas (validación scoped + chequeo de conflictos + alta
+    // atómica) vive en el servicio, reutilizado por las automatizaciones.
+    const booking = await createBooking(req.auth!.businessId, data, req.auth!.userId);
 
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
 

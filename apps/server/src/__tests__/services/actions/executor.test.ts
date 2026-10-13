@@ -16,6 +16,7 @@ vi.mock('../../../lib/prisma', () => ({
     user: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
     business: { findUnique: vi.fn() },
     campaign: { findFirst: vi.fn() },
+    service: { findFirst: vi.fn() },
   },
 }));
 
@@ -24,6 +25,7 @@ vi.mock('../../../lib/password', () => ({ hashPassword: vi.fn(async () => 'hashe
 vi.mock('../../../services/mercadopago/config', () => ({ loadMpConfig: vi.fn() }));
 vi.mock('../../../services/mercadopago/client', () => ({ createPaymentPreference: vi.fn() }));
 vi.mock('../../../services/campaigns/send', () => ({ sendCampaign: vi.fn() }));
+vi.mock('../../../services/bookings/create', () => ({ createBooking: vi.fn() }));
 
 vi.mock('../../../services/notifications', () => ({
   createNotification: vi.fn(async () => ({ id: 'notif_1' })),
@@ -48,6 +50,7 @@ import { setClientStage } from '../../../services/clients/lifecycle';
 import { loadMpConfig } from '../../../services/mercadopago/config';
 import { createPaymentPreference } from '../../../services/mercadopago/client';
 import { sendCampaign } from '../../../services/campaigns/send';
+import { createBooking } from '../../../services/bookings/create';
 import { AppError } from '../../../middleware/errorHandler';
 import { executeAction, isExecutableAction } from '../../../services/actions/executor';
 
@@ -276,9 +279,57 @@ describe('executeAction — lanzar_campana (externo, gated)', () => {
   });
 });
 
+describe('executeAction — crear_reserva (externo, gated)', () => {
+  it('omite si faltan datos', async () => {
+    const r = await executeAction({ businessId: BIZ, action: 'crear_reserva', params: { serviceId: 'svc_1' }, mode: 'live' });
+    expect(r.status).toBe('omitido');
+  });
+
+  it('en dry_run SIMULA verificando que el servicio exista', async () => {
+    mock(prisma.service.findFirst).mockResolvedValue({ id: 'svc_1', name: 'Corte' });
+    const r = await executeAction({
+      businessId: BIZ,
+      action: 'crear_reserva',
+      params: { serviceId: 'svc_1', date: '2026-02-01', startTime: '10:00', clientId: 'c1', professionalId: 'p1' },
+      mode: 'dry_run',
+    });
+    expect(r.status).toBe('simulado');
+    expect(createBooking).not.toHaveBeenCalled();
+  });
+
+  it('en live crea la reserva vía el motor', async () => {
+    mock(createBooking).mockResolvedValue({ id: 'bk_1' });
+    const r = await executeAction({
+      businessId: BIZ,
+      action: 'crear_reserva',
+      params: { serviceId: 'svc_1', date: '2026-02-01', startTime: '10:00', clientId: 'c1', professionalId: 'p1' },
+      mode: 'live',
+    });
+    expect(r.status).toBe('ejecutado');
+    expect(r.data?.bookingId).toBe('bk_1');
+    expect(createBooking).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ serviceId: 'svc_1', clientId: 'c1', professionalId: 'p1' }),
+      '',
+    );
+  });
+
+  it('mapea AppError 409 del motor (solape) a omitido', async () => {
+    mock(createBooking).mockRejectedValue(new AppError(409, 'Ese horario ya está reservado para el profesional.'));
+    const r = await executeAction({
+      businessId: BIZ,
+      action: 'crear_reserva',
+      params: { serviceId: 'svc_1', date: '2026-02-01', startTime: '10:00', clientId: 'c1', professionalId: 'p1' },
+      mode: 'live',
+    });
+    expect(r.status).toBe('omitido');
+    expect(r.detail).toContain('reservado');
+  });
+});
+
 describe('executeAction — placeholders y desconocidas', () => {
   it('acción reconocida sin cableado → no_soportado', async () => {
-    const r = await executeAction({ businessId: BIZ, action: 'crear_reserva', params: {} });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: {} });
     expect(r.status).toBe('no_soportado');
     expect(r.ok).toBe(false);
   });
@@ -309,7 +360,8 @@ describe('isExecutableAction', () => {
     expect(isExecutableAction('crear_cliente')).toBe(true);
     expect(isExecutableAction('generar_link_pago')).toBe(true);
     expect(isExecutableAction('lanzar_campana')).toBe(true);
-    expect(isExecutableAction('crear_reserva')).toBe(false);
+    expect(isExecutableAction('crear_reserva')).toBe(true);
+    expect(isExecutableAction('asignar_agente')).toBe(false);
     expect(isExecutableAction('no_existe')).toBe(false);
   });
 });
