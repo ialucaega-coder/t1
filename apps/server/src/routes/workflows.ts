@@ -23,6 +23,7 @@ import {
   deleteWorkflow,
   runWorkflows,
 } from '../services/workflows';
+import { isAutomationLive, setAutomationLive } from '../services/workflows/settings';
 
 // Zod exige una tupla no vacía para z.enum; los catálogos nunca están vacíos.
 const triggerEnum = z.enum(TRIGGER_KEYS as [string, ...string[]]);
@@ -56,6 +57,8 @@ const runSchema = z.object({
   payload: z.record(z.unknown()).optional(),
   execute: z.boolean().optional(),
 });
+
+const settingsSchema = z.object({ live: z.boolean() });
 
 const router = Router();
 
@@ -127,6 +130,29 @@ router.post(
       execute ? 'live' : 'dry_run',
     );
     res.json({ trigger, mode: execute ? 'live' : 'dry_run', ...run });
+  })
+);
+
+// Ajuste del negocio: ¿los disparos AUTOMÁTICOS del pipeline corren en vivo?
+router.get(
+  '/settings',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const live = await isAutomationLive(req.auth!.businessId);
+    res.json({ live });
+  })
+);
+
+// Activa/desactiva la ejecución en vivo de las automatizaciones automáticas.
+// Solo ADMIN: en vivo produce efectos salientes reales (ej: enviar WhatsApp).
+router.put(
+  '/settings',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(settingsSchema),
+  asyncHandler(async (req, res) => {
+    const live = await setAutomationLive(req.auth!.businessId, req.body.live === true);
+    res.json({ live });
   })
 );
 

@@ -53,6 +53,11 @@ vi.mock('../../services/workflows', () => ({
   })),
 }));
 
+vi.mock('../../services/workflows/settings', () => ({
+  isAutomationLive: vi.fn(async () => false),
+  setAutomationLive: vi.fn(async (_biz: string, live: boolean) => live),
+}));
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
     req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
@@ -69,6 +74,7 @@ import {
   deleteWorkflow,
   runWorkflows,
 } from '../../services/workflows';
+import { isAutomationLive, setAutomationLive } from '../../services/workflows/settings';
 import { workflowsRouter } from '../../routes/workflows';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -232,6 +238,33 @@ describe('routes/workflows', () => {
 
       expect(res.status).toBe(400);
       expect(runWorkflows).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET/PUT /api/workflows/settings', () => {
+    it('GET devuelve el flag live del negocio', async () => {
+      mock(isAutomationLive).mockResolvedValueOnce(true);
+
+      const res = await request(app).get('/api/workflows/settings');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ live: true });
+      expect(isAutomationLive).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('PUT cambia el flag (scope por businessId)', async () => {
+      const res = await request(app).put('/api/workflows/settings').send({ live: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ live: true });
+      expect(setAutomationLive).toHaveBeenCalledWith('biz_1', true);
+    });
+
+    it('PUT devuelve 400 si falta el flag (validación Zod)', async () => {
+      const res = await request(app).put('/api/workflows/settings').send({});
+
+      expect(res.status).toBe(400);
+      expect(setAutomationLive).not.toHaveBeenCalled();
     });
   });
 });

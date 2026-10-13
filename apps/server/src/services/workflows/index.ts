@@ -21,6 +21,7 @@
 import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { executeAction, type ActionResult, type ExecMode } from '../actions/executor';
+import { getAutomationMode } from './settings';
 
 const WORKFLOWS_CONNECTION_TYPE = 'WORKFLOWS';
 const WORKFLOWS_CONNECTION_NAME = 'Automatizaciones';
@@ -371,4 +372,26 @@ export async function runWorkflows(
     results.push({ ruleId: rule.id, nombre: rule.nombre, accion: rule.accion, result });
   }
   return { matched: rules.length, results };
+}
+
+/**
+ * Disparo AUTOMÁTICO de un evento del pipeline (ej: nueva reserva, lead nuevo).
+ *
+ * Es el punto de entrada que usa el resto del backend: resuelve el MODO desde
+ * los ajustes del negocio (`live` → ejecuta las acciones externas; por defecto
+ * `dry_run` → las simula) y corre las reglas. Pensado para fire-and-forget:
+ * NUNCA lanza (captura todo), así un fallo de automatización jamás rompe el
+ * flujo principal que lo disparó (crear la reserva, el lead, etc.).
+ *
+ * Uso: `void dispatchEvent(businessId, { trigger, payload }).catch(() => {})`
+ * (el catch es redundante porque no lanza, pero deja la intención explícita).
+ */
+export async function dispatchEvent(businessId: string, event: WorkflowEvent): Promise<void> {
+  try {
+    const mode = await getAutomationMode(businessId);
+    await runWorkflows(businessId, event, mode);
+  } catch (err) {
+    console.error(`[Workflows] dispatchEvent "${event.trigger}" falló (ignorado):`,
+      err instanceof Error ? err.name : 'error');
+  }
 }

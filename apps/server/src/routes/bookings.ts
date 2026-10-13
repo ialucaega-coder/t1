@@ -9,6 +9,7 @@ import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendBookingCreated, sendBookingConfirmed, sendBookingCancelled } from '../services/notifications';
 import { syncBookingToCalcom } from '../services/calcom/sync';
+import { dispatchEvent } from '../services/workflows';
 
 const router = Router();
 
@@ -149,6 +150,14 @@ router.post(
     void sendBookingCreated(booking).catch((err) =>
       console.error('[Bookings] Error notificando alta de reserva:', err)
     );
+
+    // Dispara las automatizaciones del negocio para "nueva reserva". El modo
+    // (simular vs ejecutar) lo resuelve dispatchEvent según el ajuste del
+    // negocio; nunca lanza, así que no afecta la respuesta.
+    void dispatchEvent(req.auth!.businessId, {
+      trigger: 'nueva_reserva',
+      payload: { clientId: booking.clientId, phone: booking.client?.phone ?? undefined },
+    });
 
     // Sincroniza con Cal.com si el negocio lo tiene conectado. Best-effort:
     // no bloquea ni afecta la respuesta si Cal.com no está configurado o falla.

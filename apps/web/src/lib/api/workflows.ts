@@ -92,3 +92,17 @@ export function runWorkflow(trigger: string, opts?: RunWorkflowOptions) {
     execute: opts?.execute ?? false,
   });
 }
+
+export interface AutomationSettings {
+  live: boolean;
+}
+
+/** Lee si las automatizaciones automáticas del negocio corren en vivo. */
+export function getSettings() {
+  return httpClient.get<AutomationSettings>('/workflows/settings');
+}
+
+/** Activa/desactiva la ejecución en vivo de las automatizaciones (solo ADMIN). */
+export function setSettings(live: boolean) {
+  return httpClient.put<AutomationSettings>('/workflows/settings', { live });
+}

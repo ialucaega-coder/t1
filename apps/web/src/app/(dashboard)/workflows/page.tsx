@@ -68,16 +68,23 @@ export default function WorkflowsPage() {
   const [testLive, setTestLive] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<RunWorkflowResponse | null>(null);
+  // Ajuste: automatizaciones automáticas en vivo (del pipeline)
+  const [automationLive, setAutomationLive] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const { toast } = useToast();
 
   const refetch = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await workflowsApi.list();
+      const [data, settings] = await Promise.all([
+        workflowsApi.list(),
+        workflowsApi.getSettings().catch(() => ({ live: false })),
+      ]);
       setRules(data.rules);
       setTriggers(data.triggers);
       setActions(data.actions);
+      setAutomationLive(settings.live);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al cargar las automatizaciones');
     } finally {
@@ -146,6 +153,25 @@ export default function WorkflowsPage() {
     }
   }
 
+  async function handleToggleAutomation() {
+    const next = !automationLive;
+    setSavingSettings(true);
+    try {
+      const res = await workflowsApi.setSettings(next);
+      setAutomationLive(res.live);
+      toast({
+        type: res.live ? 'success' : 'info',
+        message: res.live
+          ? 'Automatizaciones EN VIVO: las reglas ahora efectúan acciones reales.'
+          : 'Automatizaciones en simulación: las acciones externas no se envían.',
+      });
+    } catch {
+      toast({ type: 'error', message: 'No se pudo cambiar el modo (¿sos admin?)' });
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
   async function handleRun() {
     const trigger = testTrigger || triggers[0]?.key;
     if (!trigger) return;
@@ -188,6 +214,45 @@ export default function WorkflowsPage() {
       </div>
 
       {error && <ErrorAlert message={error} onRetry={refetch} />}
+
+      {/* Modo de ejecución automática */}
+      <div
+        className={`flex items-start justify-between gap-4 rounded-xl border p-4 ${
+          automationLive
+            ? 'border-emerald-500/30 bg-emerald-500/5'
+            : 'border-slate-700 bg-slate-800/50'
+        }`}
+      >
+        <div className="flex-1">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+            {automationLive ? (
+              <Zap className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 text-slate-400" />
+            )}
+            Ejecución automática: {automationLive ? 'EN VIVO' : 'Simulación'}
+          </h2>
+          <p className="mt-1 text-xs text-slate-400">
+            {automationLive
+              ? 'Cuando pasa un evento (reserva, lead, mensaje, pago), las reglas efectúan acciones reales, incluido enviar WhatsApp a tus clientes.'
+              : 'Cuando pasa un evento, las reglas corren en simulación: las acciones internas (mover etapa, notificar) se ejecutan, las externas (enviar WhatsApp) NO se envían. Activá "en vivo" cuando quieras que efectúen de verdad.'}
+          </p>
+        </div>
+        <button
+          onClick={handleToggleAutomation}
+          disabled={savingSettings}
+          aria-label={automationLive ? 'Desactivar ejecución en vivo' : 'Activar ejecución en vivo'}
+          className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+            automationLive ? 'bg-emerald-500' : 'bg-slate-600'
+          }`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              automationLive ? 'translate-x-6' : 'translate-x-1'
+            }`}
+          />
+        </button>
+      </div>
 
       {rules.length === 0 ? (
         <EmptyState

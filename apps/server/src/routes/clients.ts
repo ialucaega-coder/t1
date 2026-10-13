@@ -28,6 +28,7 @@ import {
   stageFor,
   LIFECYCLE_STAGES,
 } from '../services/clients/lifecycle';
+import { dispatchEvent } from '../services/workflows';
 
 const router = Router();
 
@@ -445,6 +446,13 @@ router.post(
         businessId: req.auth!.businessId,
       },
       select: clientSelect,
+    });
+
+    // Dispara las automatizaciones de "lead nuevo". Fire-and-forget: el modo lo
+    // resuelve dispatchEvent según el ajuste del negocio y nunca lanza.
+    void dispatchEvent(req.auth!.businessId, {
+      trigger: 'lead_nuevo',
+      payload: { clientId: client.id, phone: data.phone || undefined },
     });
 
     res.status(201).json(client);
