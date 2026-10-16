@@ -16,7 +16,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
-import { OfficeCanvas, petForRole, type OfficeDesk } from '@/components/mrgo/OfficeCanvas';
+import { OfficeRoom, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeRoom';
+import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
   getMrGoAgents,
@@ -246,30 +247,25 @@ export default function OficinaPage() {
     return keys.map((k) => toolByKey.get(k)?.nombre ?? k);
   }
 
-  // Escritorios para la escena de la oficina (CEO aparte, destacado arriba).
-  const ceoDesk: OfficeDesk | null = useMemo(
-    () =>
-      ceo
-        ? {
-            key: ceo.key,
-            nombre: ceo.nombre,
-            rol: 'Director',
-            color: colorKeyForAgent(ceo.key),
-            emotion: emocionDe(ceo.key),
-            pet: 'jinx',
-            highlighted: resaltado === ceo.key,
-            director: true,
-            paused: pausados.has(ceo.key),
-            tools: toolsForRole(ceo.key),
-          }
-        : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ceo, emociones, resaltado, pausados, tools, toolByKey],
-  );
-
-  const teamDesks: OfficeDesk[] = useMemo(
-    () =>
-      equipo.map((a) => ({
+  // Agentes para la escena de la oficina (CEO con flag director, va al centro).
+  const roomAgents: RoomAgent[] = useMemo(() => {
+    const list: RoomAgent[] = [];
+    if (ceo) {
+      list.push({
+        key: ceo.key,
+        nombre: ceo.nombre,
+        rol: 'Director',
+        color: colorKeyForAgent(ceo.key),
+        emotion: emocionDe(ceo.key),
+        pet: 'jinx',
+        highlighted: resaltado === ceo.key,
+        director: true,
+        paused: pausados.has(ceo.key),
+        tools: toolsForRole(ceo.key),
+      });
+    }
+    for (const a of equipo) {
+      list.push({
         key: a.key,
         nombre: a.nombre,
         rol: a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente',
@@ -279,10 +275,22 @@ export default function OficinaPage() {
         highlighted: resaltado === a.key,
         paused: pausados.has(a.key),
         tools: toolsForRole(a.key),
-      })),
+      });
+    }
+    return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [equipo, emociones, resaltado, pausados, tools, toolByKey],
-  );
+  }, [ceo, equipo, emociones, resaltado, pausados, tools, toolByKey]);
+
+  // Layout del piso + "vida" (los agentes caminan al café / reunión y vuelven).
+  const layout = useMemo(() => buildOfficeLayout(roomAgents), [roomAgents]);
+  const life = useOfficeLife({
+    keys: roomAgents.map((a) => a.key),
+    deskSpots: layout.deskSpots,
+    coffeeSpot: layout.coffeeSpot,
+    meetingSpots: layout.meetingSpots,
+    paused: pausados,
+    enabled: true,
+  });
 
   /** Pausar / reactivar un agente (foco visual de la oficina). */
   function togglePausa(key: string) {
@@ -405,9 +413,9 @@ export default function OficinaPage() {
                 </span>
               </div>
 
-              <OfficeCanvas
-                director={ceoDesk}
-                desks={teamDesks}
+              <OfficeRoom
+                agents={roomAgents}
+                life={life}
                 selectedKey={seleccionado}
                 onSelect={(key) => setSeleccionado((prev) => (prev === key ? null : key))}
                 onOrderAgent={ordenarAAgente}
