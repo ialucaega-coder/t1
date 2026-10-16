@@ -54,6 +54,46 @@ export const MR_GO_COLORS: Record<MrGoColorKey, MrGoColorInfo> = {
   YELLOW: { hex: '#FFD93D', label: 'Contable' },
 };
 
+// Mascotas (clay-3D) que acompañan a cada Mr Go como "mini" espejo (30% escala).
+// Cada una tiene un accesorio-tema que mapea a un rol/superpoder del negocio.
+export type MrGoPetKey =
+  | 'jinx' // gato negro con corona — mascota del CEO (Mr Go principal)
+  | 'rayito' // perro gris con rayo — WhatsApp / notificaciones
+  | 'relojito' // pollito con reloj — turnos / reservas
+  | 'billetin' // perro marrón con bolsa de dinero — cobros / finanzas
+  | 'cerebrito' // ratón con anteojos y cerebro — análisis / superpoderes
+  | 'megafonito'; // oso con megáfono — marketing / campañas
+
+export interface MrGoPetInfo {
+  nombre: string;
+  /** Rol/área que representa (para tooltips). */
+  rol: string;
+}
+
+export const MR_GO_PETS: Record<MrGoPetKey, MrGoPetInfo> = {
+  jinx: { nombre: 'Jinx', rol: 'CEO / Principal' },
+  rayito: { nombre: 'Rayito', rol: 'WhatsApp / Avisos' },
+  relojito: { nombre: 'Relojito', rol: 'Turnos / Reservas' },
+  billetin: { nombre: 'Billetín', rol: 'Cobros / Finanzas' },
+  cerebrito: { nombre: 'Cerebrito', rol: 'Análisis / Superpoderes' },
+  megafonito: { nombre: 'Megafonito', rol: 'Marketing / Campañas' },
+};
+
+// Mascota por defecto según el color/rubro (el CEO lila va con Jinx).
+export const DEFAULT_PET_FOR_COLOR: Partial<Record<MrGoColorKey, MrGoPetKey>> = {
+  LILA: 'jinx',
+};
+
+// Emociones que existen como asset PNG dedicado para el LILA (hoja técnica).
+export const LILA_EMOTION_ASSETS: MrGoEmotion[] = [
+  'happy',
+  'thinking',
+  'nerd',
+  'angry',
+  'sleepy',
+  'love',
+];
+
 // Orden canónico de la familia, útil para iterar la grilla de previsualización.
 export const MR_GO_COLOR_ORDER: MrGoColorKey[] = [
   'LILA',

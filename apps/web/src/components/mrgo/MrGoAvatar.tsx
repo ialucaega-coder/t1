@@ -1,7 +1,15 @@
 'use client';
 
 import { useId } from 'react';
-import { MR_GO_COLORS, type MrGoColorKey, type MrGoEmotion } from './types';
+import {
+  MR_GO_COLORS,
+  MR_GO_PETS,
+  DEFAULT_PET_FOR_COLOR,
+  LILA_EMOTION_ASSETS,
+  type MrGoColorKey,
+  type MrGoEmotion,
+  type MrGoPetKey,
+} from './types';
 
 export interface MrGoAvatarProps {
   /** Color/rubro de la familia Mr Go que define el cuerpo (ej: 'LILA'). */
@@ -10,373 +18,165 @@ export interface MrGoAvatarProps {
   emotion?: MrGoEmotion;
   /** Alto renderizado en píxeles (el ancho se calcula por aspecto). Por defecto 120. */
   size?: number;
-  /** Si es true, dibuja una mascota mini (gatito) al lado con la misma emoción. */
+  /** Si es true, dibuja la mascota mini (espejo) al lado con la misma emoción. */
   pet?: boolean;
+  /** Mascota explícita; si se omite y pet=true, se usa la del color (LILA→Jinx). */
+  petKey?: MrGoPetKey;
   /** Texto accesible para el avatar (role="img"). Si falta, se arma uno por defecto. */
   label?: string;
   className?: string;
 }
 
-// Coordenadas internas fijas del dibujo (todo el escalado se hace por viewBox).
-const VB_HEIGHT = 140;
-const VB_WIDTH_BASE = 120; // solo Mr Go
-const VB_WIDTH_PET = 190; // Mr Go + mascota
+// Mapa de emoción → nombre amigable (para el aria-label).
+const EMOTION_ES: Record<MrGoEmotion, string> = {
+  happy: 'feliz',
+  working: 'trabajando',
+  thinking: 'pensando',
+  nerd: 'concentrado',
+  angry: 'enojado',
+  sleepy: 'durmiendo',
+  love: 'encantado',
+};
 
-const LEFT_EYE = { x: 48, y: 70 };
-const RIGHT_EYE = { x: 72, y: 70 };
-const EYE_R = 5;
+/**
+ * Ruta del PNG del cuerpo. El LILA tiene asset dedicado por emoción (hoja
+ * técnica). El resto de los colores existe en una sola pose (saludando), así que
+ * la emoción se transmite por animación CSS. 'working' reusa la pose de saludo.
+ */
+function bodySrc(color: MrGoColorKey, emotion: MrGoEmotion): string {
+  if (color === 'LILA') {
+    const emo = LILA_EMOTION_ASSETS.includes(emotion) ? emotion : 'happy';
+    return `/mrgo/body/LILA_${emo}.png`;
+  }
+  return `/mrgo/body/${color}.png`;
+}
 
-// Componente visual de marca "Mr Go": un personaje "clay 3D" en forma de gota,
-// dibujado 100% con SVG inline (sin PNGs externos) para que funcione ya.
+// Clase de animación por emoción (definida en el <style> de abajo).
+function animClass(emotion: MrGoEmotion, uid: string): string | undefined {
+  switch (emotion) {
+    case 'working':
+      return `mrgo-working-${uid}`;
+    case 'sleepy':
+      return `mrgo-sleepy-${uid}`;
+    case 'love':
+      return `mrgo-love-${uid}`;
+    case 'happy':
+      return `mrgo-float-${uid}`;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Avatar de marca "Mr Go": personaje clay-3D renderizado desde los PNG oficiales
+ * (14 colores + 6 emociones de LILA + 6 mascotas espejo), con animación sutil
+ * por emoción. Fondo transparente: se puede montar sobre cualquier superficie.
+ */
 export function MrGoAvatar({
   color,
   emotion = 'happy',
   size = 120,
   pet = false,
+  petKey,
   label,
   className,
 }: MrGoAvatarProps) {
-  // IDs únicos por instancia para que gradientes/filtros no colisionen en la grilla.
   const uid = useId().replace(/:/g, '');
-  const highlightId = `mrgo-hl-${uid}`;
-  const shadeId = `mrgo-sh-${uid}`;
-  const glowId = `mrgo-glow-${uid}`;
-
   const info = MR_GO_COLORS[color];
-  const bodyColor = info.hex;
-  const vbWidth = pet ? VB_WIDTH_PET : VB_WIDTH_BASE;
-  const height = size;
-  const width = (size * vbWidth) / VB_HEIGHT;
 
-  const emotionEs = EMOTION_LABELS_ES[emotion];
-  const resolvedLabel = label ?? `Mr Go ${info.label} (${emotionEs})`;
+  const resolvedPet: MrGoPetKey | undefined = pet
+    ? petKey ?? DEFAULT_PET_FOR_COLOR[color]
+    : undefined;
 
-  // Trazo de la gota (teardrop): punta arriba, base redonda abajo.
-  const teardrop =
-    'M60 8 C90 25 106 55 106 78 A46 46 0 0 1 14 78 C14 55 30 25 60 8 Z';
+  const aria = label ?? `Mr Go ${info.label} (${EMOTION_ES[emotion]})`;
+  const anim = animClass(emotion, uid);
+  const glow = emotion === 'working';
 
-  const showGlow = emotion === 'working';
+  // La mascota se dibuja al ~36% del alto, apoyada abajo a la derecha (espejo).
+  const petSize = Math.round(size * 0.36);
 
   return (
     <div
       role="img"
-      aria-label={resolvedLabel}
+      aria-label={aria}
       className={className}
-      style={{ display: 'inline-block', lineHeight: 0 }}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        height: size,
+        lineHeight: 0,
+      }}
     >
-      <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${vbWidth} ${VB_HEIGHT}`}
-        xmlns="http://www.w3.org/2000/svg"
-        aria-hidden="true"
-      >
-        {/* Animación de saludo (solo si el usuario no pidió movimiento reducido). */}
-        <style>{`
-          @media (prefers-reduced-motion: no-preference) {
-            .mrgo-wave-${uid} {
-              transform-box: fill-box;
-              transform-origin: 50% 88%;
-              animation: mrgo-wave-${uid} 1.1s ease-in-out infinite;
-            }
-          }
-          @keyframes mrgo-wave-${uid} {
-            0%, 100% { transform: rotate(-10deg); }
-            50% { transform: rotate(20deg); }
-          }
-        `}</style>
+      <style>{`
+        @keyframes mrgo-float-${uid} { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+        @keyframes mrgo-working-${uid} { 0%,100%{transform:rotate(-1.5deg)} 50%{transform:rotate(1.5deg)} }
+        @keyframes mrgo-sleepy-${uid} { 0%,100%{transform:translateY(0)} 50%{transform:translateY(2px)} }
+        @keyframes mrgo-love-${uid} { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+        .mrgo-float-${uid}{animation:mrgo-float-${uid} 4s ease-in-out infinite;transform-origin:center bottom}
+        .mrgo-working-${uid}{animation:mrgo-working-${uid} 1.1s ease-in-out infinite;transform-origin:50% 90%}
+        .mrgo-sleepy-${uid}{animation:mrgo-sleepy-${uid} 3.5s ease-in-out infinite;transform-origin:center bottom}
+        .mrgo-love-${uid}{animation:mrgo-love-${uid} 1.6s ease-in-out infinite;transform-origin:center bottom}
+        @media (prefers-reduced-motion: reduce){
+          .mrgo-float-${uid},.mrgo-working-${uid},.mrgo-sleepy-${uid},.mrgo-love-${uid}{animation:none}
+        }
+      `}</style>
 
-        <defs>
-          {/* Brillo superior izquierdo para el look clay 3D. */}
-          <radialGradient id={highlightId} cx="38%" cy="26%" r="62%">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.55" />
-            <stop offset="60%" stopColor="#ffffff" stopOpacity="0" />
-          </radialGradient>
-          {/* Sombra inferior derecha para dar volumen. */}
-          <radialGradient id={shadeId} cx="64%" cy="82%" r="60%">
-            <stop offset="0%" stopColor="#000000" stopOpacity="0.2" />
-            <stop offset="70%" stopColor="#000000" stopOpacity="0" />
-          </radialGradient>
-          {showGlow && (
-            <filter id={glowId} x="-40%" y="-40%" width="180%" height="180%">
-              <feGaussianBlur stdDeviation="4" result="b" />
-              <feMerge>
-                <feMergeNode in="b" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          )}
-        </defs>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={bodySrc(color, emotion)}
+        alt=""
+        className={anim}
+        draggable={false}
+        style={{
+          height: size,
+          width: 'auto',
+          objectFit: 'contain',
+          filter: glow
+            ? `drop-shadow(0 0 ${Math.round(size * 0.08)}px ${info.hex}aa)`
+            : 'drop-shadow(0 3px 4px rgba(0,0,0,0.18))',
+          userSelect: 'none',
+        }}
+      />
 
-        {/* Sombra de apoyo en el piso. */}
-        <ellipse cx="60" cy="128" rx="40" ry="7" fill="#000000" opacity="0.12" />
-
-        {/* Glow de "working" detrás del cuerpo (opcional). */}
-        {showGlow && (
-          <path d={teardrop} fill={bodyColor} opacity="0.35" filter={`url(#${glowId})`} />
-        )}
-
-        {/* Cuerpo gota + overlays de volumen. */}
-        <g>
-          <path d={teardrop} fill={bodyColor} stroke="rgba(0,0,0,0.14)" strokeWidth="1.5" />
-          <path d={teardrop} fill={`url(#${highlightId})`} />
-          <path d={teardrop} fill={`url(#${shadeId})`} />
-        </g>
-
-        {/* Cara: ojos, nariz, boca y extras según emoción. */}
-        <MrGoEyes emotion={emotion} left={LEFT_EYE} right={RIGHT_EYE} r={EYE_R} />
-        {emotion === 'angry' && <MrGoBrows left={LEFT_EYE} right={RIGHT_EYE} />}
-        {emotion === 'nerd' && <MrGoGlasses left={LEFT_EYE} right={RIGHT_EYE} />}
-        <MrGoNose x={60} y={83} />
-        <MrGoMouth emotion={emotion} />
-        {emotion === 'sleepy' && <MrGoZzz x={92} y={34} />}
-
-        {/* Mano saludando (5 dedos). Se anima en 'working'. */}
-        <g>
-          <g className={emotion === 'working' ? `mrgo-wave-${uid}` : undefined}>
-            <MrGoHand color={bodyColor} />
-          </g>
-        </g>
-
-        {/* Mascota mini (gatito) haciendo la misma emoción, espejada. */}
-        {pet && (
-          <g transform="translate(176 96) scale(-1 1)">
-            <MrGoPet emotion={emotion} color={bodyColor} />
-          </g>
-        )}
-      </svg>
-    </div>
-  );
-}
-
-// Etiquetas en español para armar el aria-label por defecto.
-const EMOTION_LABELS_ES: Record<MrGoEmotion, string> = {
-  happy: 'feliz',
-  working: 'trabajando',
-  thinking: 'pensando',
-  nerd: 'nerd',
-  angry: 'enojado',
-  sleepy: 'dormido',
-  love: 'enamorado',
-};
-
-type Pt = { x: number; y: number };
-
-// --- Piezas de la cara (sub-componentes internos, sin exportar) ---
-
-function MrGoEyes({
-  emotion,
-  left,
-  right,
-  r,
-}: {
-  emotion: MrGoEmotion;
-  left: Pt;
-  right: Pt;
-  r: number;
-}) {
-  if (emotion === 'sleepy') {
-    // Ojos cerrados: arcos hacia abajo.
-    return (
-      <g fill="none" stroke="#1f1f1f" strokeWidth="2.5" strokeLinecap="round">
-        <path d={`M${left.x - 5} ${left.y} Q${left.x} ${left.y + 5} ${left.x + 5} ${left.y}`} />
-        <path d={`M${right.x - 5} ${right.y} Q${right.x} ${right.y + 5} ${right.x + 5} ${right.y}`} />
-      </g>
-    );
-  }
-  if (emotion === 'love') {
-    // Ojos corazón rosas.
-    return (
-      <g fill="#FF4D8D">
-        <path d={heartPath(left.x, left.y, 6)} />
-        <path d={heartPath(right.x, right.y, 6)} />
-      </g>
-    );
-  }
-  // Ojitos normales: puntos negros.
-  return (
-    <g fill="#1f1f1f">
-      <circle cx={left.x} cy={left.y} r={r} />
-      <circle cx={right.x} cy={right.y} r={r} />
-      {/* Pequeño brillo para que se vean vivos. */}
-      <circle cx={left.x + 1.6} cy={left.y - 1.6} r={1.3} fill="#ffffff" />
-      <circle cx={right.x + 1.6} cy={right.y - 1.6} r={1.3} fill="#ffffff" />
-    </g>
-  );
-}
-
-function MrGoBrows({ left, right }: { left: Pt; right: Pt }) {
-  // Cejas enojadas: inclinadas hacia el centro.
-  return (
-    <g stroke="#1f1f1f" strokeWidth="3" strokeLinecap="round">
-      <line x1={left.x - 6} y1={left.y - 11} x2={left.x + 6} y2={left.y - 6} />
-      <line x1={right.x + 6} y1={right.y - 11} x2={right.x - 6} y2={right.y - 6} />
-    </g>
-  );
-}
-
-function MrGoGlasses({ left, right }: { left: Pt; right: Pt }) {
-  // Anteojos negros (nerd) encima de los ojos.
-  return (
-    <g fill="none" stroke="#1f1f1f" strokeWidth="2.5">
-      <rect x={left.x - 8} y={left.y - 8} width="16" height="16" rx="4" />
-      <rect x={right.x - 8} y={right.y - 8} width="16" height="16" rx="4" />
-      <line x1={left.x + 8} y1={left.y} x2={right.x - 8} y2={right.y} />
-    </g>
-  );
-}
-
-function MrGoNose({ x, y }: { x: number; y: number }) {
-  // Nariz bulbosa con brillo.
-  return (
-    <g>
-      <ellipse cx={x} cy={y} rx="7" ry="6" fill="rgba(0,0,0,0.12)" />
-      <ellipse cx={x} cy={y} rx="5.5" ry="4.8" fill="rgba(255,255,255,0.18)" />
-      <circle cx={x - 1.6} cy={y - 1.6} r="1.4" fill="#ffffff" opacity="0.8" />
-    </g>
-  );
-}
-
-function MrGoMouth({ emotion }: { emotion: MrGoEmotion }) {
-  const stroke = '#1f1f1f';
-  switch (emotion) {
-    case 'happy':
-    case 'love':
-      return (
-        <path
-          d="M45 93 Q60 110 75 93"
-          fill="none"
-          stroke={stroke}
-          strokeWidth="3"
-          strokeLinecap="round"
-        />
-      );
-    case 'working':
-    case 'nerd':
-      return (
-        <path
-          d="M49 94 Q60 103 71 94"
-          fill="none"
-          stroke={stroke}
-          strokeWidth="3"
-          strokeLinecap="round"
-        />
-      );
-    case 'thinking':
-      // Boca "o" chica.
-      return <circle cx="60" cy="97" r="4" fill="none" stroke={stroke} strokeWidth="2.5" />;
-    case 'angry':
-      // Boca recta.
-      return <line x1="50" y1="98" x2="70" y2="98" stroke={stroke} strokeWidth="3" strokeLinecap="round" />;
-    case 'sleepy':
-      // Boquita relajada.
-      return (
-        <path
-          d="M55 96 Q60 100 65 96"
-          fill="none"
-          stroke={stroke}
-          strokeWidth="2.5"
-          strokeLinecap="round"
-        />
-      );
-  }
-}
-
-function MrGoZzz({ x, y }: { x: number; y: number }) {
-  // "z z z" para la emoción sleepy.
-  return (
-    <g fill="#1f1f1f" fontFamily="sans-serif" fontWeight="700" opacity="0.7">
-      <text x={x} y={y} fontSize="8">z</text>
-      <text x={x + 7} y={y - 7} fontSize="10">z</text>
-      <text x={x + 16} y={y - 16} fontSize="13">z</text>
-    </g>
-  );
-}
-
-function MrGoHand({ color }: { color: string }) {
-  // Mano saludando con 5 dedos (4 dedos + pulgar) y palma redonda.
-  return (
-    <g stroke="rgba(0,0,0,0.14)" strokeWidth="1">
-      {/* Dedos (capsulas con linecap redondo). */}
-      <g stroke={color} strokeWidth="5.5" strokeLinecap="round">
-        <line x1="97" y1="50" x2="93" y2="37" />
-        <line x1="101" y1="47" x2="100" y2="32" />
-        <line x1="106" y1="47" x2="109" y2="32" />
-        <line x1="110" y1="49" x2="115" y2="37" />
-        {/* Pulgar. */}
-        <line x1="97" y1="59" x2="88" y2="53" strokeWidth="6" />
-      </g>
-      {/* Palma. */}
-      <ellipse cx="104" cy="58" rx="10" ry="11" fill={color} />
-    </g>
-  );
-}
-
-function MrGoPet({ emotion, color }: { emotion: MrGoEmotion; color: string }) {
-  // Gatito mini dibujado en coordenadas locales (centro ~0,0), ~30% del tamaño.
-  // El color del cuerpo es un poco más tenue que Mr Go pero de la misma familia.
-  const eyes = (() => {
-    if (emotion === 'sleepy') {
-      return (
-        <g fill="none" stroke="#1f1f1f" strokeWidth="1.5" strokeLinecap="round">
-          <path d="M-7 -2 Q-4 1 -1 -2" />
-          <path d="M1 -2 Q4 1 7 -2" />
-        </g>
-      );
-    }
-    if (emotion === 'love') {
-      return (
-        <g fill="#FF4D8D">
-          <path d={heartPath(-4, -2, 3)} />
-          <path d={heartPath(4, -2, 3)} />
-        </g>
-      );
-    }
-    return (
-      <g fill="#1f1f1f">
-        <circle cx="-4" cy="-2" r="2.2" />
-        <circle cx="4" cy="-2" r="2.2" />
-      </g>
-    );
-  })();
-
-  const mouth =
-    emotion === 'angry' ? (
-      <line x1="-3" y1="6" x2="3" y2="6" stroke="#1f1f1f" strokeWidth="1.5" strokeLinecap="round" />
-    ) : (
-      <path d="M-3 4 Q0 7 3 4" fill="none" stroke="#1f1f1f" strokeWidth="1.5" strokeLinecap="round" />
-    );
-
-  return (
-    <g transform="scale(0.85)">
-      <ellipse cx="0" cy="22" rx="12" ry="9" fill={color} opacity="0.92" />
-      {/* Orejas. */}
-      <path d="M-13 -11 L-7 -2 L-16 -2 Z" fill={color} />
-      <path d="M13 -11 L7 -2 L16 -2 Z" fill={color} />
-      {/* Cabeza. */}
-      <circle cx="0" cy="2" r="14" fill={color} />
-      <circle cx="0" cy="2" r="14" fill="rgba(255,255,255,0.12)" />
-      {/* Cola. */}
-      <path d="M11 26 Q22 24 20 14" fill="none" stroke={color} strokeWidth="4" strokeLinecap="round" />
-      {eyes}
-      {emotion === 'angry' && (
-        <g stroke="#1f1f1f" strokeWidth="1.5" strokeLinecap="round">
-          <line x1="-7" y1="-6" x2="-2" y2="-4" />
-          <line x1="7" y1="-6" x2="2" y2="-4" />
-        </g>
+      {resolvedPet && (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/mrgo/pet/${resolvedPet}.png`}
+            alt=""
+            className={anim}
+            draggable={false}
+            title={`${MR_GO_PETS[resolvedPet].nombre} · ${MR_GO_PETS[resolvedPet].rol}`}
+            style={{
+              height: petSize,
+              width: 'auto',
+              objectFit: 'contain',
+              marginLeft: Math.round(size * -0.06),
+              filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.18))',
+              userSelect: 'none',
+            }}
+          />
+        </>
       )}
-      {/* Naricita. */}
-      <circle cx="0" cy="2.5" r="1.6" fill="#1f1f1f" />
-      {mouth}
-    </g>
-  );
-}
 
-// Trazo de corazón centrado en (cx,cy) con "radio" s (para ojos love).
-function heartPath(cx: number, cy: number, s: number): string {
-  return (
-    `M${cx} ${cy + s * 0.9} ` +
-    `C${cx - s * 1.4} ${cy - s * 0.2} ${cx - s} ${cy - s} ${cx} ${cy - s * 0.3} ` +
-    `C${cx + s} ${cy - s} ${cx + s * 1.4} ${cy - s * 0.2} ${cx} ${cy + s * 0.9} Z`
+      {emotion === 'sleepy' && (
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: resolvedPet ? '28%' : '10%',
+            fontSize: Math.max(11, Math.round(size * 0.16)),
+            color: info.hex,
+            fontWeight: 800,
+            opacity: 0.8,
+          }}
+        >
+          z
+        </span>
+      )}
+    </div>
   );
 }
