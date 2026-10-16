@@ -23,7 +23,7 @@ function authRoleToTeamRole(role: string): 'ADMIN' | 'PROFESSIONAL' | 'VIEWER' {
  * mismo negocio. Si no hay override para ese miembro, devolvemos undefined y el
  * resolver cae al default del rol.
  */
-async function loadOverrideForUser(
+export async function loadOverrideForUser(
   businessId: string,
   userId: string
 ): Promise<string[] | undefined> {

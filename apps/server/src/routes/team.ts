@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
+import { loadOverrideForUser } from '../middleware/capability';
 import { prisma } from '../lib/prisma';
 import {
   PERMISSION_CATALOG,
@@ -137,8 +138,17 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const planTier = await loadBusinessPlanTier(businessId);
-    const roleCapabilities = resolveCapabilities(authRoleToTeamRole(req.auth!.role));
+    const teamRole = authRoleToTeamRole(req.auth!.role);
+    // Igual que requireCapability: el menú debe reflejar el override por miembro,
+    // no solo el default del rol. Si no, el menú muestra ítems que al entrar dan
+    // 403. ADMIN nunca se capa, así que ni cargamos su override.
+    const [planTier, override] = await Promise.all([
+      loadBusinessPlanTier(businessId),
+      teamRole === 'ADMIN'
+        ? Promise.resolve(undefined)
+        : loadOverrideForUser(businessId, req.auth!.userId),
+    ]);
+    const roleCapabilities = resolveCapabilities(teamRole, override);
     res.json({
       planTier,
       planLabel: PLAN_LABELS[planTier],
