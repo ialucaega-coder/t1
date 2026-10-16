@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
-import { OfficeRoom, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeRoom';
+import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
 import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
@@ -413,7 +413,7 @@ export default function OficinaPage() {
                 </span>
               </div>
 
-              <OfficeRoom
+              <OfficeFloor
                 agents={roomAgents}
                 life={life}
                 selectedKey={seleccionado}

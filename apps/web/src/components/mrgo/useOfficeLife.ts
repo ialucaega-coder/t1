@@ -117,6 +117,12 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
   // Ref que indica si el hook sigue montado (evita setState tras desmontar).
   const mountedRef = useRef(true);
 
+  // Ref SIEMPRE vigente con la vida actual. Clave: el bucle de vida corre dentro
+  // de un efecto cuyo closure captura `lives` en el momento de crearse (vacío en
+  // el primer render con agentes). Sin este ref, `startWander` leería ese `lives`
+  // obsoleto/vacío y nadie caminaría nunca. Lo sincronizamos en cada render.
+  const livesRef = useRef<Record<string, AgentLife>>({});
+
   // Memo estable de la lista de claves para dependencias de efectos.
   const keysSignature = useMemo(() => keys.join('|'), [keys]);
 
@@ -133,6 +139,7 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
   }, [keysSignature, deskSpots]);
 
   deskRef.current = safeDesks;
+  livesRef.current = lives;
   pausedRef.current = paused ?? new Set<string>();
   keysRef.current = new Set(keys);
   spotsRef.current = {
@@ -296,7 +303,8 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
 
     /** Fase 1: elige un destino y empieza a caminar hacia él. */
     const startWander = (key: string) => {
-      const cur = lives[key];
+      // Leemos del ref vigente, NO del closure `lives` (que puede estar obsoleto).
+      const cur = livesRef.current[key];
       if (!cur) return;
 
       const { coffee, meetings } = spotsRef.current;
