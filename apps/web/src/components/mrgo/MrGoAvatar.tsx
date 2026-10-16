@@ -22,6 +22,10 @@ export interface MrGoAvatarProps {
   pet?: boolean;
   /** Mascota explícita; si se omite y pet=true, se usa la del color (LILA→Jinx). */
   petKey?: MrGoPetKey;
+  /** Vida ambiente (respira + flota + parpadeo sutil). Por defecto true. */
+  alive?: boolean;
+  /** Multiplicador de velocidad de la vida (1 = normal; >1 más lento). */
+  rate?: number;
   /** Texto accesible para el avatar (role="img"). Si falta, se arma uno por defecto. */
   label?: string;
   className?: string;
@@ -51,26 +55,22 @@ function bodySrc(color: MrGoColorKey, emotion: MrGoEmotion): string {
   return `/mrgo/body/${color}.png`;
 }
 
-// Clase de animación por emoción (definida en el <style> de abajo).
-function animClass(emotion: MrGoEmotion, uid: string): string | undefined {
-  switch (emotion) {
-    case 'working':
-      return `mrgo-working-${uid}`;
-    case 'sleepy':
-      return `mrgo-sleepy-${uid}`;
-    case 'love':
-      return `mrgo-love-${uid}`;
-    case 'happy':
-      return `mrgo-float-${uid}`;
-    default:
-      return undefined;
+/** Hash estable [0,1) a partir de un string (para desincronizar la vida por instancia). */
+function hash01(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
+  return ((h >>> 0) % 1000) / 1000;
 }
 
 /**
  * Avatar de marca "Mr Go": personaje clay-3D renderizado desde los PNG oficiales
- * (14 colores + 6 emociones de LILA + 6 mascotas espejo), con animación sutil
- * por emoción. Fondo transparente: se puede montar sobre cualquier superficie.
+ * (14 colores + 6 emociones de LILA + 6 mascotas espejo), con "vida" ambiente
+ * (respira, flota, parpadea) y animación por emoción. Fondo transparente: se
+ * puede montar sobre cualquier superficie. Inspirado en el "blobatar" vivo de la
+ * oficina de Munder Difflin (respira/bob/expresión) adaptado a PNG.
  */
 export function MrGoAvatar({
   color,
@@ -78,6 +78,8 @@ export function MrGoAvatar({
   size = 120,
   pet = false,
   petKey,
+  alive = true,
+  rate = 1,
   label,
   className,
 }: MrGoAvatarProps) {
@@ -89,17 +91,25 @@ export function MrGoAvatar({
     : undefined;
 
   const aria = label ?? `Mr Go ${info.label} (${EMOTION_ES[emotion]})`;
-  const anim = animClass(emotion, uid);
   const glow = emotion === 'working';
-
-  // La mascota se dibuja al ~36% del alto, apoyada abajo a la derecha (espejo).
   const petSize = Math.round(size * 0.36);
+
+  // Fases por instancia: cada Mr Go respira/flota en su propio tiempo (como el
+  // --mo-phase de Munder Difflin), así una oficina llena no late al unísono.
+  const ph = hash01(uid);
+  const bobPhase = -(ph * 3.4).toFixed(2);
+  const breathePhase = -((1 - ph) * 2.8).toFixed(2);
+
+  // Ritmo según emoción (como --mo-rate): trabajar = más vivo; dormir = lento.
+  const r =
+    rate *
+    (emotion === 'working' ? 0.75 : emotion === 'sleepy' ? 1.8 : emotion === 'love' ? 0.7 : 1);
 
   return (
     <div
       role="img"
       aria-label={aria}
-      className={className}
+      className={`mrgo-av-${uid} ${className ?? ''}`}
       style={{
         position: 'relative',
         display: 'inline-flex',
@@ -110,56 +120,93 @@ export function MrGoAvatar({
       }}
     >
       <style>{`
-        @keyframes mrgo-float-${uid} { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
-        @keyframes mrgo-working-${uid} { 0%,100%{transform:rotate(-1.5deg)} 50%{transform:rotate(1.5deg)} }
-        @keyframes mrgo-sleepy-${uid} { 0%,100%{transform:translateY(0)} 50%{transform:translateY(2px)} }
-        @keyframes mrgo-love-${uid} { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
-        .mrgo-float-${uid}{animation:mrgo-float-${uid} 4s ease-in-out infinite;transform-origin:center bottom}
-        .mrgo-working-${uid}{animation:mrgo-working-${uid} 1.1s ease-in-out infinite;transform-origin:50% 90%}
-        .mrgo-sleepy-${uid}{animation:mrgo-sleepy-${uid} 3.5s ease-in-out infinite;transform-origin:center bottom}
-        .mrgo-love-${uid}{animation:mrgo-love-${uid} 1.6s ease-in-out infinite;transform-origin:center bottom}
+        /* Vida ambiente: flota (bob) + respira (breathe), desincronizadas. */
+        @keyframes mrgo-bob-${uid} { from{transform:translateY(0)} to{transform:translateY(-3.5px)} }
+        @keyframes mrgo-breathe-${uid} { from{transform:scaleX(1) scaleY(1)} to{transform:scaleX(1.03) scaleY(0.976)} }
+        /* Glow pulsante del "trabajando". */
+        @keyframes mrgo-glow-${uid} { 0%,100%{opacity:.55} 50%{opacity:1} }
+
+        .mrgo-av-${uid} .mrgo-bob-${uid}{
+          animation: mrgo-bob-${uid} ${(3.4 * r).toFixed(2)}s ease-in-out ${bobPhase}s infinite alternate;
+          transform-origin:center bottom;
+        }
+        .mrgo-av-${uid} .mrgo-body-${uid}{
+          animation: mrgo-breathe-${uid} ${(2.8 * r).toFixed(2)}s ease-in-out ${breathePhase}s infinite alternate;
+          transform-origin:center bottom;
+        }
+        .mrgo-av-${uid} .mrgo-glowlayer-${uid}{
+          animation: mrgo-glow-${uid} ${(1.6 * r).toFixed(2)}s ease-in-out infinite;
+        }
+        .mrgo-av-${uid}:hover .mrgo-bob-${uid}{ transform: translateY(-5px) scale(1.05); }
+        .mrgo-av-${uid}.mrgo-still .mrgo-bob-${uid},
+        .mrgo-av-${uid}.mrgo-still .mrgo-body-${uid}{ animation: none; }
         @media (prefers-reduced-motion: reduce){
-          .mrgo-float-${uid},.mrgo-working-${uid},.mrgo-sleepy-${uid},.mrgo-love-${uid}{animation:none}
+          .mrgo-av-${uid} .mrgo-bob-${uid},
+          .mrgo-av-${uid} .mrgo-body-${uid},
+          .mrgo-av-${uid} .mrgo-glowlayer-${uid}{ animation: none; }
         }
       `}</style>
 
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={bodySrc(color, emotion)}
-        alt=""
-        className={anim}
-        draggable={false}
-        style={{
-          height: size,
-          width: 'auto',
-          objectFit: 'contain',
-          filter: glow
-            ? `drop-shadow(0 0 ${Math.round(size * 0.08)}px ${info.hex}aa)`
-            : 'drop-shadow(0 3px 4px rgba(0,0,0,0.18))',
-          userSelect: 'none',
-        }}
-      />
-
-      {resolvedPet && (
-        <>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={`/mrgo/pet/${resolvedPet}.png`}
-            alt=""
-            className={anim}
-            draggable={false}
-            title={`${MR_GO_PETS[resolvedPet].nombre} · ${MR_GO_PETS[resolvedPet].rol}`}
+      {/* Capa bob (flota) → dentro, la capa breathe (respira) con la imagen. */}
+      <div
+        className={alive ? `mrgo-bob-${uid}` : undefined}
+        style={{ position: 'relative', display: 'inline-flex', alignItems: 'flex-end', lineHeight: 0 }}
+      >
+        {/* glow de "trabajando" detrás del cuerpo */}
+        {glow && (
+          <span
+            aria-hidden
+            className={alive ? `mrgo-glowlayer-${uid}` : undefined}
             style={{
-              height: petSize,
-              width: 'auto',
-              objectFit: 'contain',
-              marginLeft: Math.round(size * -0.06),
-              filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.18))',
-              userSelect: 'none',
+              position: 'absolute',
+              inset: '8% 8% 2% 8%',
+              borderRadius: '50%',
+              background: `radial-gradient(circle, ${info.hex}55 0%, transparent 70%)`,
+              filter: 'blur(6px)',
+              zIndex: 0,
             }}
           />
-        </>
-      )}
+        )}
+
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={bodySrc(color, emotion)}
+          alt=""
+          className={alive ? `mrgo-body-${uid}` : undefined}
+          draggable={false}
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            height: size,
+            width: 'auto',
+            objectFit: 'contain',
+            filter: 'drop-shadow(0 3px 4px rgba(0,0,0,0.22))',
+            userSelect: 'none',
+          }}
+        />
+
+        {resolvedPet && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`/mrgo/pet/${resolvedPet}.png`}
+              alt=""
+              draggable={false}
+              title={`${MR_GO_PETS[resolvedPet].nombre} · ${MR_GO_PETS[resolvedPet].rol}`}
+              style={{
+                position: 'relative',
+                zIndex: 1,
+                height: petSize,
+                width: 'auto',
+                objectFit: 'contain',
+                marginLeft: Math.round(size * -0.06),
+                filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.2))',
+                userSelect: 'none',
+              }}
+            />
+          </>
+        )}
+      </div>
 
       {emotion === 'sleepy' && (
         <span
@@ -171,7 +218,7 @@ export function MrGoAvatar({
             fontSize: Math.max(11, Math.round(size * 0.16)),
             color: info.hex,
             fontWeight: 800,
-            opacity: 0.8,
+            opacity: 0.85,
           }}
         >
           z

@@ -13,7 +13,7 @@
  * activos, CEO destacado). Derecha = centro de comandos (input + feed).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeCanvas, petForRole, type OfficeDesk } from '@/components/mrgo/OfficeCanvas';
@@ -57,6 +57,20 @@ interface FeedEvent {
   esFallback: boolean;
   hora: string;
 }
+
+// Tools permitidos por rol (espeja ROLE_TOOLS del backend: services/mrgo/agents.ts).
+// El CEO coordina y puede todo (se resuelve con el catálogo completo).
+const ROLE_TOOL_KEYS: Record<string, string[]> = {
+  ventas: ['generar_link_pago', 'crear_cliente', 'enviar_whatsapp'],
+  finanzas: ['generar_link_pago'],
+  reservas: ['crear_reserva', 'enviar_whatsapp'],
+  cobros: ['generar_link_pago', 'enviar_whatsapp'],
+  soporte: ['enviar_whatsapp'],
+  inbox: ['enviar_whatsapp'],
+  crm: ['mover_lifecycle', 'crear_cliente'],
+  marketing: ['lanzar_campana'],
+  campanas: ['lanzar_campana', 'enviar_whatsapp'],
+};
 
 // Límites de la memoria de Mr Go (espejan los del backend).
 const MEMORY_PROFILE_MAX = 2000;
@@ -106,9 +120,12 @@ export default function OficinaPage() {
   const [emociones, setEmociones] = useState<Record<string, MrGoEmotion>>({});
   // Agente resaltado tras la última orden (se le ilumina el escritorio).
   const [resaltado, setResaltado] = useState<string | null>(null);
-  // Escritorio seleccionado por click (solo foco visual en la oficina).
+  // Escritorio seleccionado por click (abre el panel del agente).
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
+  // Agentes pausados (solo foco visual de la oficina; no cambia el backend).
+  const [pausados, setPausados] = useState<Set<string>>(new Set());
   const [feed, setFeed] = useState<FeedEvent[]>([]);
+  const ordenRef = useRef<HTMLTextAreaElement>(null);
 
   // Memoria de Mr Go (profile + facts). Se carga aparte de los agentes.
   const [memProfile, setMemProfile] = useState('');
@@ -223,6 +240,12 @@ export default function OficinaPage() {
     return emociones[key] ?? 'working';
   }
 
+  /** Nombres de los tools que un rol puede ejecutar (CEO = todos). */
+  function toolsForRole(key: string): string[] {
+    const keys = key === CEO_AGENT_KEY ? tools.map((t) => t.key) : ROLE_TOOL_KEYS[key] ?? [];
+    return keys.map((k) => toolByKey.get(k)?.nombre ?? k);
+  }
+
   // Escritorios para la escena de la oficina (CEO aparte, destacado arriba).
   const ceoDesk: OfficeDesk | null = useMemo(
     () =>
@@ -236,10 +259,12 @@ export default function OficinaPage() {
             pet: 'jinx',
             highlighted: resaltado === ceo.key,
             director: true,
+            paused: pausados.has(ceo.key),
+            tools: toolsForRole(ceo.key),
           }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ceo, emociones, resaltado],
+    [ceo, emociones, resaltado, pausados, tools, toolByKey],
   );
 
   const teamDesks: OfficeDesk[] = useMemo(
@@ -252,10 +277,36 @@ export default function OficinaPage() {
         emotion: emocionDe(a.key),
         pet: petForRole(a.key),
         highlighted: resaltado === a.key,
+        paused: pausados.has(a.key),
+        tools: toolsForRole(a.key),
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [equipo, emociones, resaltado],
+    [equipo, emociones, resaltado, pausados, tools, toolByKey],
   );
+
+  /** Pausar / reactivar un agente (foco visual de la oficina). */
+  function togglePausa(key: string) {
+    setPausados((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  /** Darle una orden directa a un agente: prefija el comando y enfoca. */
+  function ordenarAAgente(key: string) {
+    const nombre = roleByKey.get(key)?.nombre ?? key;
+    setOrden((prev) => (prev.trim() ? prev : `${nombre}: `));
+    setSeleccionado(null);
+    requestAnimationFrame(() => {
+      const el = ordenRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  }
 
   async function enviarOrden() {
     const text = orden.trim();
@@ -359,6 +410,8 @@ export default function OficinaPage() {
                 desks={teamDesks}
                 selectedKey={seleccionado}
                 onSelect={(key) => setSeleccionado((prev) => (prev === key ? null : key))}
+                onOrderAgent={ordenarAAgente}
+                onTogglePause={togglePausa}
               />
             </div>
           </section>
@@ -371,6 +424,7 @@ export default function OficinaPage() {
                 Centro de comandos
               </h2>
               <textarea
+                ref={ordenRef}
                 value={orden}
                 onChange={(e) => setOrden(e.target.value)}
                 onKeyDown={onKeyDown}
