@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
+import { OfficeCanvas, petForRole, type OfficeDesk } from '@/components/mrgo/OfficeCanvas';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
   getMrGoAgents,
@@ -105,6 +106,8 @@ export default function OficinaPage() {
   const [emociones, setEmociones] = useState<Record<string, MrGoEmotion>>({});
   // Agente resaltado tras la última orden (se le ilumina el escritorio).
   const [resaltado, setResaltado] = useState<string | null>(null);
+  // Escritorio seleccionado por click (solo foco visual en la oficina).
+  const [seleccionado, setSeleccionado] = useState<string | null>(null);
   const [feed, setFeed] = useState<FeedEvent[]>([]);
 
   // Memoria de Mr Go (profile + facts). Se carga aparte de los agentes.
@@ -220,6 +223,40 @@ export default function OficinaPage() {
     return emociones[key] ?? 'working';
   }
 
+  // Escritorios para la escena de la oficina (CEO aparte, destacado arriba).
+  const ceoDesk: OfficeDesk | null = useMemo(
+    () =>
+      ceo
+        ? {
+            key: ceo.key,
+            nombre: ceo.nombre,
+            rol: 'Director',
+            color: colorKeyForAgent(ceo.key),
+            emotion: emocionDe(ceo.key),
+            pet: 'jinx',
+            highlighted: resaltado === ceo.key,
+            director: true,
+          }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ceo, emociones, resaltado],
+  );
+
+  const teamDesks: OfficeDesk[] = useMemo(
+    () =>
+      equipo.map((a) => ({
+        key: a.key,
+        nombre: a.nombre,
+        rol: a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente',
+        color: colorKeyForAgent(a.key),
+        emotion: emocionDe(a.key),
+        pet: petForRole(a.key),
+        highlighted: resaltado === a.key,
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [equipo, emociones, resaltado],
+  );
+
   async function enviarOrden() {
     const text = orden.trim();
     if (!text || enviando) return;
@@ -305,37 +342,24 @@ export default function OficinaPage() {
           <section className="lg:col-span-7">
             <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
                   La oficina
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                    <Radio className="h-3 w-3" />
+                    En vivo
+                  </span>
                 </h2>
                 <span className="text-xs text-slate-500">
                   {(ceo ? 1 : 0) + equipo.length} en funciones
                 </span>
               </div>
 
-              {/* CEO destacado */}
-              {ceo && (
-                <DeskCard
-                  agent={ceo}
-                  emotion={emocionDe(ceo.key)}
-                  highlighted={resaltado === ceo.key}
-                  destacado
-                />
-              )}
-
-              {/* Resto del equipo */}
-              {equipo.length > 0 && (
-                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-                  {equipo.map((a) => (
-                    <DeskCard
-                      key={a.key}
-                      agent={a}
-                      emotion={emocionDe(a.key)}
-                      highlighted={resaltado === a.key}
-                    />
-                  ))}
-                </div>
-              )}
+              <OfficeCanvas
+                director={ceoDesk}
+                desks={teamDesks}
+                selectedKey={seleccionado}
+                onSelect={(key) => setSeleccionado((prev) => (prev === key ? null : key))}
+              />
             </div>
           </section>
 
@@ -547,50 +571,6 @@ export default function OficinaPage() {
             </div>
           </section>
         </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Tarjeta de "escritorio" de un agente: su avatar Mr Go + nombre + rol. Se
- * ilumina (borde brand) cuando el orquestador le derivó la última orden.
- */
-function DeskCard({
-  agent,
-  emotion,
-  highlighted,
-  destacado = false,
-}: {
-  agent: DeskAgent;
-  emotion: MrGoEmotion;
-  highlighted: boolean;
-  destacado?: boolean;
-}) {
-  return (
-    <div
-      className={[
-        'flex flex-col items-center rounded-xl border p-4 text-center transition-all',
-        destacado ? 'bg-brand-400/5' : 'bg-slate-900/30',
-        highlighted
-          ? 'border-brand-400 ring-2 ring-brand-400/40 shadow-lg shadow-brand-400/10'
-          : 'border-slate-700',
-      ].join(' ')}
-    >
-      <MrGoAvatar
-        color={colorKeyForAgent(agent.key)}
-        emotion={emotion}
-        size={destacado ? 120 : 72}
-        pet={destacado}
-        label={`${agent.nombre} (${emotion})`}
-      />
-      <h3 className={`mt-2 font-semibold text-white ${destacado ? 'text-base' : 'text-sm'}`}>
-        {agent.nombre}
-      </h3>
-      {agent.descripcion && (
-        <p className={`mt-0.5 text-slate-400 ${destacado ? 'text-xs max-w-md' : 'text-[11px] line-clamp-2'}`}>
-          {agent.descripcion}
-        </p>
       )}
     </div>
   );
