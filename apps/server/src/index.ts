@@ -64,6 +64,7 @@ import { manychatRouter } from './routes/manychat';
 import { composioRouter } from './routes/composio';
 import { workflowsRouter } from './routes/workflows';
 import { mrgoRouter } from './routes/mrgo';
+import { mcpRouter } from './routes/mcp';
 import { platformRouter } from './routes/platform';
 import { restoreActiveBots } from './services/telegram/bot';
 import { startScheduler } from './services/scheduler';
@@ -304,6 +305,7 @@ app.use('/api/manychat', manychatRouter);
 app.use('/api/composio', composioRouter);
 app.use('/api/workflows', workflowsRouter);
 app.use('/api/mrgo', mrgoRouter);
+app.use('/api/mcp', mcpRouter);
 // Super Admin (panel del dueño de la plataforma): cross-tenant, detrás de la
 // allowlist por email de PLATFORM_ADMIN_EMAILS (ver middleware/platformAdmin.ts).
 app.use('/api/platform', requireAuth, requirePlatformAdmin, platformRouter);
