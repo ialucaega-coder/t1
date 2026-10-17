@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   MessageSquare, Clock, X, ChevronRight, User, Filter, Search,
   Send, Loader2, AlertTriangle, Bot, Phone, Mail, Wifi, WifiOff,
-  Tag, StickyNote, UserPlus, Plus, Info, Check,
+  Tag, StickyNote, UserPlus, Plus, Info, Check, Sparkles, RefreshCw,
 } from 'lucide-react';
 import { useConversations, useConversationDetail } from '@/hooks/use-conversations';
 import { useSocket, useSocketEvent } from '@/hooks/use-socket';
@@ -116,6 +116,9 @@ export default function ConversacionesPage() {
   const [noteInput, setNoteInput] = useState('');
   const [savingNote, setSavingNote] = useState(false);
   const [savingTag, setSavingTag] = useState(false);
+  // Copiloto del inbox: resumen + respuesta sugerida por la IA del negocio.
+  const [copilot, setCopilot] = useState<conversationsApi.CopilotResult | null>(null);
+  const [copilotLoading, setCopilotLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { business, user } = useAuth();
@@ -188,6 +191,26 @@ export default function ConversacionesPage() {
       inputRef.current?.focus();
     }
   }, [selectedId, detail]);
+
+  // Al cambiar de conversación, limpiamos el copiloto (el resumen/sugerencia
+  // anterior ya no aplica a la nueva charla).
+  useEffect(() => {
+    setCopilot(null);
+    setCopilotLoading(false);
+  }, [selectedId]);
+
+  async function handleCopilot() {
+    if (!selectedId || copilotLoading) return;
+    setCopilotLoading(true);
+    try {
+      const result = await conversationsApi.copilot(selectedId);
+      setCopilot(result);
+    } catch {
+      toast({ type: 'error', message: 'El copiloto de IA no está disponible en este momento.' });
+    } finally {
+      setCopilotLoading(false);
+    }
+  }
 
   const handleSelect = useCallback(async (id: string) => {
     setSelectedId(id);
@@ -645,6 +668,84 @@ export default function ConversacionesPage() {
               {/* Reply input */}
               {detail.status !== 'CLOSED' && (
                 <div className="p-3 border-t border-slate-700/50">
+                  {/* Copiloto IA: resumen + respuesta sugerida para el agente */}
+                  <div className="mb-2">
+                    {!copilot && (
+                      <button
+                        onClick={handleCopilot}
+                        disabled={copilotLoading}
+                        className="btn-secondary text-xs py-1.5 w-full justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Pedí a la IA un resumen de la charla y una respuesta sugerida"
+                      >
+                        {copilotLoading ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> El copiloto está pensando...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5 text-brand-400" /> Copiloto IA · resumir y sugerir respuesta
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {copilot && (
+                      <div className="rounded-xl border border-brand-400/25 bg-brand-400/5 p-3 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-400 uppercase tracking-wide">
+                            <Sparkles className="h-3.5 w-3.5" /> Copiloto IA
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={handleCopilot}
+                              disabled={copilotLoading}
+                              className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 disabled:opacity-50"
+                              title="Regenerar"
+                            >
+                              {copilotLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                              Regenerar
+                            </button>
+                            <button
+                              onClick={() => setCopilot(null)}
+                              className="text-slate-500 hover:text-white ml-1"
+                              title="Cerrar copiloto"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {copilot.summary && (
+                          <div>
+                            <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Resumen</p>
+                            <p className="text-xs text-slate-200 whitespace-pre-wrap">{copilot.summary}</p>
+                          </div>
+                        )}
+
+                        {copilot.suggestedReply && (
+                          <div>
+                            <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Respuesta sugerida</p>
+                            <p className="text-xs text-slate-200 whitespace-pre-wrap rounded-lg bg-slate-800/60 border border-slate-700/50 px-2.5 py-2">
+                              {copilot.suggestedReply}
+                            </p>
+                            <div className="flex items-center gap-2 mt-2">
+                              <button
+                                onClick={() => {
+                                  setReplyText(copilot.suggestedReply);
+                                  inputRef.current?.focus();
+                                }}
+                                className="btn-primary text-xs py-1"
+                              >
+                                <Check className="h-3 w-3" /> Usar esta respuesta
+                              </button>
+                              <span className="text-[10px] text-slate-500">Podés editarla antes de enviar.</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex items-center gap-2">
                     <input
                       ref={inputRef}

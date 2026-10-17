@@ -26,9 +26,16 @@ vi.mock('../../lib/socket', () => ({
   getIO: vi.fn(() => null),
 }));
 
+// El copiloto usa el motor de IA real; acá lo mockeamos para probar el contrato
+// de la ruta (200 / 404 / 503) sin llamar a ningún proveedor.
+vi.mock('../../services/ai/copilot', () => ({
+  generateCopilot: vi.fn(),
+}));
+
 import { prisma } from '../../lib/prisma';
 import { conversationsRouter } from '../../routes/conversations';
 import { errorHandler } from '../../middleware/errorHandler';
+import { generateCopilot } from '../../services/ai/copilot';
 
 const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'test-secret';
 const token = jwt.sign({ userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' }, JWT_SECRET);
@@ -228,6 +235,56 @@ describe('routes/conversations (inbox)', () => {
       const readBy = updatedMeta().readBy as Record<string, string>;
       expect(readBy.user_2).toBe('2026-01-01T00:00:00.000Z'); // intacta
       expect(readBy.user_1).toBeTruthy(); // la del usuario actual
+    });
+  });
+
+  describe('POST /api/conversations/:id/copilot', () => {
+    it('devuelve resumen + respuesta sugerida (200) scopeado al negocio del token', async () => {
+      (generateCopilot as ReturnType<typeof vi.fn>).mockResolvedValue({
+        summary: 'El cliente quiere un turno para el sábado.',
+        suggestedReply: 'Hola, con gusto. ¿Preferís a la mañana o a la tarde?',
+      });
+
+      const res = await request(app)
+        .post('/api/conversations/c1/copilot')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        summary: 'El cliente quiere un turno para el sábado.',
+        suggestedReply: 'Hola, con gusto. ¿Preferís a la mañana o a la tarde?',
+      });
+      // Scope multi-tenant: se usa el businessId del token, no uno del request.
+      expect(generateCopilot).toHaveBeenCalledWith('biz_1', 'c1');
+    });
+
+    it('devuelve 404 cuando la conversación no es del negocio', async () => {
+      (generateCopilot as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/conversations/nope/copilot')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(404);
+    });
+
+    it('devuelve 503 (sin romper el inbox) si el motor de IA falla', async () => {
+      (generateCopilot as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('sin motor de IA'));
+
+      const res = await request(app)
+        .post('/api/conversations/c1/copilot')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBeTruthy();
+    });
+
+    it('requiere autenticación (401 sin token)', async () => {
+      const res = await request(app).post('/api/conversations/c1/copilot').send({});
+      expect(res.status).toBe(401);
     });
   });
 });

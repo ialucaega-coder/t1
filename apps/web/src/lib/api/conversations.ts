@@ -98,6 +98,16 @@ export function markRead(id: string) {
   return httpClient.patch<{ metadata: ConversationMeta }>(`/conversations/${id}/read`, {});
 }
 
+// Copiloto del inbox: pide a la IA del negocio un resumen de la conversación y
+// una respuesta sugerida para el agente. Solo lectura: no envía nada al cliente.
+export interface CopilotResult {
+  summary: string;
+  suggestedReply: string;
+}
+export function copilot(id: string) {
+  return httpClient.post<CopilotResult>(`/conversations/${id}/copilot`, {});
+}
+
 // Toma la conversación: pausa el bot en esta conversación para responder como humano.
 export function take(id: string) {
   return httpClient.post<{ metadata: ConversationMeta }>(`/conversations/${id}/take`, {});

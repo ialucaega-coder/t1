@@ -6,6 +6,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
+import { generateCopilot } from '../services/ai/copilot';
 
 const replySchema = z.object({
   text: z.string().min(1).max(5000).transform((v) => v.trim()),
@@ -480,6 +481,27 @@ router.post(
     });
 
     res.json({ metadata: outcome.metadata });
+  })
+);
+
+// Copiloto del inbox: genera un resumen de la conversación + una respuesta
+// sugerida para el agente humano (reusa el motor de IA del negocio). Es de solo
+// lectura: no crea mensajes ni envía nada al cliente, solo devuelve texto para
+// que el agente lo lea/edite. Gap de competencia "copiloto del agente".
+router.post(
+  '/:id/copilot',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    try {
+      const result = await generateCopilot(req.auth!.businessId, req.params.id as string);
+      if (!result) return res.status(404).json({ error: 'Conversation not found' });
+      res.json(result);
+    } catch (err) {
+      // Si no hay motor de IA disponible o el proveedor falla, no rompemos el
+      // inbox: devolvemos 503 con un mensaje claro para la UI.
+      console.error('Error generando copiloto de conversación:', (err as Error).message);
+      res.status(503).json({ error: 'El copiloto de IA no está disponible en este momento.' });
+    }
   })
 );
 
