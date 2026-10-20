@@ -23,6 +23,17 @@ export interface ConversationMeta {
   pausedBy?: string | null;
   pausedByName?: string | null;
   pausedAt?: string | null;
+  /** Último lead score calculado (intención de compra). */
+  leadScore?: LeadScore;
+}
+
+/** Lead scoring de intención de compra (temperatura + puntaje 0-100). */
+export type LeadTemperature = 'CALIENTE' | 'TIBIO' | 'FRIO';
+export interface LeadScore {
+  temperature: LeadTemperature;
+  score: number;
+  reason: string;
+  at: string;
 }
 
 /** Vistas del Inbox estilo respond.io. */
@@ -106,6 +117,12 @@ export interface CopilotResult {
 }
 export function copilot(id: string) {
   return httpClient.post<CopilotResult>(`/conversations/${id}/copilot`, {});
+}
+
+// Lead scoring: pide a la IA del negocio estimar la intención de compra del
+// cliente. Persiste el resultado en metadata y lo devuelve para mostrarlo.
+export function leadScore(id: string) {
+  return httpClient.post<LeadScore>(`/conversations/${id}/lead-score`, {});
 }
 
 // Toma la conversación: pausa el bot en esta conversación para responder como humano.

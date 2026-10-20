@@ -32,10 +32,17 @@ vi.mock('../../services/ai/copilot', () => ({
   generateCopilot: vi.fn(),
 }));
 
+// El lead scoring también usa el motor de IA real; lo mockeamos para probar el
+// contrato de la ruta (200 / 404 / 503) y la persistencia en metadata.
+vi.mock('../../services/ai/lead-score', () => ({
+  generateLeadScore: vi.fn(),
+}));
+
 import { prisma } from '../../lib/prisma';
 import { conversationsRouter } from '../../routes/conversations';
 import { errorHandler } from '../../middleware/errorHandler';
 import { generateCopilot } from '../../services/ai/copilot';
+import { generateLeadScore } from '../../services/ai/lead-score';
 
 const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'test-secret';
 const token = jwt.sign({ userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' }, JWT_SECRET);
@@ -284,6 +291,60 @@ describe('routes/conversations (inbox)', () => {
 
     it('requiere autenticación (401 sin token)', async () => {
       const res = await request(app).post('/api/conversations/c1/copilot').send({});
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe('POST /api/conversations/:id/lead-score', () => {
+    const scoreResult = {
+      temperature: 'CALIENTE' as const,
+      score: 85,
+      reason: 'Pidió precio y disponibilidad para el sábado.',
+      at: '2026-10-20T12:00:00.000Z',
+    };
+
+    it('calcula el score (200), lo persiste en metadata y lo devuelve, scopeado al negocio', async () => {
+      (generateLeadScore as ReturnType<typeof vi.fn>).mockResolvedValue(scoreResult);
+
+      const res = await request(app)
+        .post('/api/conversations/c1/lead-score')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject(scoreResult);
+      // Scope multi-tenant: se usa el businessId del token, no uno del request.
+      expect(generateLeadScore).toHaveBeenCalledWith('biz_1', 'c1');
+      // Se persistió en metadata.leadScore (dentro del lock, vía conversation.update).
+      expect(updatedMeta().leadScore).toMatchObject({ temperature: 'CALIENTE', score: 85 });
+    });
+
+    it('devuelve 404 cuando la conversación no es del negocio', async () => {
+      (generateLeadScore as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/conversations/nope/lead-score')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(404);
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 503 (sin romper el inbox) si el motor de IA falla', async () => {
+      (generateLeadScore as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('sin motor de IA'));
+
+      const res = await request(app)
+        .post('/api/conversations/c1/lead-score')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBeTruthy();
+    });
+
+    it('requiere autenticación (401 sin token)', async () => {
+      const res = await request(app).post('/api/conversations/c1/lead-score').send({});
       expect(res.status).toBe(401);
     });
   });

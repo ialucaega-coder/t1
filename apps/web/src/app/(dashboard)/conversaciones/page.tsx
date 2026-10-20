@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   MessageSquare, Clock, X, ChevronRight, User, Filter, Search,
   Send, Loader2, AlertTriangle, Bot, Phone, Mail, Wifi, WifiOff,
-  Tag, StickyNote, UserPlus, Plus, Info, Check, Sparkles, RefreshCw,
+  Tag, StickyNote, UserPlus, Plus, Info, Check, Sparkles, RefreshCw, Flame,
 } from 'lucide-react';
 import { useConversations, useConversationDetail } from '@/hooks/use-conversations';
 import { useSocket, useSocketEvent } from '@/hooks/use-socket';
@@ -19,6 +19,13 @@ const STATUS_COLORS: Record<string, { label: string; class: string; dot: string 
   OPEN: { label: 'Abierta', class: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', dot: 'bg-emerald-400' },
   CLOSED: { label: 'Cerrada', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20', dot: 'bg-slate-500' },
   HANDOFF: { label: 'Derivada', class: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', dot: 'bg-yellow-400' },
+};
+
+// Estilo del badge de temperatura del lead (intención de compra).
+const TEMP_STYLE: Record<conversationsApi.LeadTemperature, { label: string; class: string; dot: string }> = {
+  CALIENTE: { label: 'Caliente', class: 'bg-red-500/10 text-red-400 border-red-500/20', dot: 'bg-red-400' },
+  TIBIO: { label: 'Tibio', class: 'bg-amber-500/10 text-amber-400 border-amber-500/20', dot: 'bg-amber-400' },
+  FRIO: { label: 'Frío', class: 'bg-sky-500/10 text-sky-400 border-sky-500/20', dot: 'bg-sky-400' },
 };
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -119,6 +126,8 @@ export default function ConversacionesPage() {
   // Copiloto del inbox: resumen + respuesta sugerida por la IA del negocio.
   const [copilot, setCopilot] = useState<conversationsApi.CopilotResult | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
+  // Lead scoring: intención de compra calculada por la IA (se persiste en metadata).
+  const [scoring, setScoring] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { business, user } = useAuth();
@@ -209,6 +218,21 @@ export default function ConversacionesPage() {
       toast({ type: 'error', message: 'El copiloto de IA no está disponible en este momento.' });
     } finally {
       setCopilotLoading(false);
+    }
+  }
+
+  async function handleLeadScore() {
+    if (!selectedId || scoring) return;
+    setScoring(true);
+    try {
+      const result = await conversationsApi.leadScore(selectedId);
+      refetchDetail();
+      refetch();
+      toast({ type: 'success', message: `Interés: ${TEMP_STYLE[result.temperature].label} · ${result.score}/100` });
+    } catch {
+      toast({ type: 'error', message: 'El scoring de IA no está disponible en este momento.' });
+    } finally {
+      setScoring(false);
     }
   }
 
@@ -522,6 +546,14 @@ export default function ConversacionesPage() {
                     </div>
                   )}
                   <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-600 flex-wrap">
+                    {conv.metadata?.leadScore && (
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-medium ${TEMP_STYLE[conv.metadata.leadScore.temperature].class}`}
+                        title={`Intención de compra: ${conv.metadata.leadScore.score}/100`}
+                      >
+                        <Flame className="h-2.5 w-2.5" /> {TEMP_STYLE[conv.metadata.leadScore.temperature].label}
+                      </span>
+                    )}
                     <span>{CHANNEL_LABELS[channelOf(conv)] || channelOf(conv)}</span>
                     <span>·</span>
                     <span>{conv._count?.messages ?? 0} msgs</span>
@@ -606,6 +638,23 @@ export default function ConversacionesPage() {
                   <span className={`badge border text-[9px] ${(STATUS_COLORS[detail.status] || STATUS_COLORS.OPEN).class}`}>
                     {(STATUS_COLORS[detail.status] || STATUS_COLORS.OPEN).label}
                   </span>
+                  {detail.metadata?.leadScore && (
+                    <span
+                      className={`badge border text-[9px] ${TEMP_STYLE[detail.metadata.leadScore.temperature].class}`}
+                      title={detail.metadata.leadScore.reason}
+                    >
+                      <Flame className="h-3 w-3" /> {TEMP_STYLE[detail.metadata.leadScore.temperature].label} · {detail.metadata.leadScore.score}
+                    </span>
+                  )}
+                  <button
+                    onClick={handleLeadScore}
+                    disabled={scoring}
+                    className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Estimar la intención de compra del cliente con IA"
+                  >
+                    {scoring ? <Loader2 className="h-3 w-3 animate-spin" /> : <Flame className="h-3 w-3 text-red-400" />}
+                    {detail.metadata?.leadScore ? 'Re-medir' : 'Medir interés'}
+                  </button>
                   <button
                     onClick={() => setShowDetails((v) => !v)}
                     className={`btn-secondary text-xs py-1 ${showDetails ? 'text-brand-400' : ''}`}
@@ -774,6 +823,37 @@ export default function ConversacionesPage() {
           {/* Details / side panel */}
           {selectedId && detail && showDetails && (
             <div className="hidden lg:flex w-72 shrink-0 flex-col border-l border-slate-700/50 bg-slate-900/40 overflow-y-auto">
+              {/* Intención de compra (lead scoring) */}
+              <div className="p-4 border-b border-slate-700/50">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 mb-2">
+                  <Flame className="h-3 w-3" /> Intención de compra
+                </p>
+                {detail.metadata?.leadScore ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`badge border text-[9px] ${TEMP_STYLE[detail.metadata.leadScore.temperature].class}`}>
+                        {TEMP_STYLE[detail.metadata.leadScore.temperature].label}
+                      </span>
+                      <span className="text-xs font-semibold text-white">{detail.metadata.leadScore.score}/100</span>
+                    </div>
+                    {detail.metadata.leadScore.reason && (
+                      <p className="text-xs text-slate-300 whitespace-pre-wrap">{detail.metadata.leadScore.reason}</p>
+                    )}
+                    <p className="text-[9px] text-slate-600">Calculado hace {timeAgo(detail.metadata.leadScore.at)}</p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-600">Todavía no se midió. Usá &quot;Medir interés&quot; arriba.</p>
+                )}
+                <button
+                  onClick={handleLeadScore}
+                  disabled={scoring}
+                  className="mt-2 w-full btn-secondary text-xs py-1.5 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {scoring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  {detail.metadata?.leadScore ? 'Recalcular' : 'Medir ahora'}
+                </button>
+              </div>
+
               {/* Asignación */}
               <div className="p-4 border-b border-slate-700/50">
                 <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 mb-2">

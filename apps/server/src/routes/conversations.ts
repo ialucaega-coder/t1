@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 import { generateCopilot } from '../services/ai/copilot';
+import { generateLeadScore, type LeadScore } from '../services/ai/lead-score';
 
 const replySchema = z.object({
   text: z.string().min(1).max(5000).transform((v) => v.trim()),
@@ -62,6 +63,11 @@ interface ConversationMeta {
    * conversación; el Inbox lo usa para mostrar/filtrar el canal correcto.
    */
   realChannel?: string;
+  /**
+   * Último lead score calculado para esta conversación (intención de compra).
+   * Lo escribe POST /:id/lead-score; el Inbox lo muestra como badge de temperatura.
+   */
+  leadScore?: LeadScore;
   [key: string]: unknown;
 }
 
@@ -502,6 +508,43 @@ router.post(
       console.error('Error generando copiloto de conversación:', (err as Error).message);
       res.status(503).json({ error: 'El copiloto de IA no está disponible en este momento.' });
     }
+  })
+);
+
+// Lead scoring de intención de compra: la IA del negocio estima qué tan cerca de
+// comprar/reservar está el cliente (temperatura CALIENTE/TIBIO/FRÍO + puntaje
+// 0-100 + motivo). Es de solo lectura sobre los mensajes; el resultado se
+// persiste en metadata.leadScore con el mismo lock que el resto del inbox, para
+// mostrarlo como badge sin recalcular. Gap de competencia "lead scoring".
+router.post(
+  '/:id/lead-score',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+    const conversationId = req.params.id as string;
+
+    let score: LeadScore | null;
+    try {
+      score = await generateLeadScore(businessId, conversationId);
+    } catch (err) {
+      // Sin motor de IA o proveedor caído: no rompemos el inbox.
+      console.error('Error calculando lead score:', (err as Error).message);
+      return res.status(503).json({ error: 'El scoring de IA no está disponible en este momento.' });
+    }
+    if (!score) return res.status(404).json({ error: 'Conversation not found' });
+
+    // Persistimos el resultado en metadata (con lock) para listarlo después.
+    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
+      meta.leadScore = score as LeadScore;
+      return { meta, result: null };
+    });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+
+    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
+      conversationId,
+    });
+
+    res.json(score);
   })
 );
 

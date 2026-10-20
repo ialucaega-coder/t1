@@ -87,14 +87,15 @@ describe('services/ai/copilot', () => {
 
       expect(result).toEqual({ summary: 'Quiere turno.', suggestedReply: 'Claro, ¿qué día?' });
       // El transcript (primer argumento) etiqueta por rol y respeta el orden cronológico.
-      const instruction = generateResponse.mock.calls[0][0] as string;
+      const calls = generateResponse.mock.calls as unknown as unknown[][];
+      const instruction = calls[0][0] as string;
       expect(instruction).toContain('Negocio: ¡Hola! ¿En qué te ayudo?');
       expect(instruction).toContain('Cliente: Quiero un turno.');
       expect(instruction.indexOf('Cliente: Quiero un turno.')).toBeGreaterThan(
         instruction.indexOf('Negocio: ¡Hola! ¿En qué te ayudo?'),
       );
       // Historial vacío: la charla va como texto en un único turno de usuario.
-      const context = generateResponse.mock.calls[0][1] as { history: unknown[] };
+      const context = calls[0][1] as { history: unknown[] };
       expect(context.history).toEqual([]);
     });
   });
