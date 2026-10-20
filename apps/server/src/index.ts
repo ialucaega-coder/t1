@@ -53,6 +53,7 @@ import { onboardingRouter } from './routes/onboarding';
 import { billingRouter } from './routes/billing';
 import { plansRouter } from './routes/plans';
 import { templatesRouter } from './routes/templates';
+import { waTemplatesRouter } from './routes/waTemplates';
 import { webhooksRouter } from './routes/webhooks';
 import { posRouter } from './routes/pos';
 import { voiceRouter } from './routes/voice';
@@ -286,6 +287,7 @@ app.use('/api/marketplace', requireAuth, requireCapability('tools'), marketplace
 app.use('/api/agency', agencyRouter);
 app.use('/api/analytics', requireAuth, requireCapability('analytics'), analyticsRouter);
 app.use('/api/campaigns', requireAuth, requireCapability('marketing'), campaignsRouter);
+app.use('/api/wa-templates', requireAuth, requireCapability('marketing'), waTemplatesRouter);
 app.use('/api/whitelabel', whitelabelRouter);
 app.use('/api/arena', requireAuth, requireCapability('tools'), arenaRouter);
 app.use('/api/conversations', requireAuth, requireStaff, requireCapability('conversations'), conversationsRouter);
