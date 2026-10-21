@@ -208,4 +208,69 @@ describe('routes/analytics', () => {
     const res = await request(app).get('/api/analytics/kpi');
     expect(res.status).not.toBe(404);
   });
+
+  describe('GET /attribution (embudo por origen CTWA)', () => {
+    // Helper: una conversación con (o sin) atribución en su metadata.
+    const conv = (attribution?: Record<string, unknown> | null) => ({ metadata: attribution ? { attribution } : null });
+
+    it('sin conversaciones atribuidas devuelve attributed:0, bySource:[] y byAd:[]', async () => {
+      mock(prisma.conversation.findMany).mockResolvedValue([
+        conv(),
+        conv({ foo: 'bar' }), // metadata sin attribution
+        { metadata: null },
+        { metadata: 'no-objeto' }, // metadata no-objeto: debe tolerarse
+      ]);
+
+      const res = await request(app).get('/api/analytics/attribution');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ total: 4, attributed: 0, bySource: [], byAd: [] });
+    });
+
+    it('agrega por origen y arma el top de anuncios ordenado por count desc', async () => {
+      mock(prisma.conversation.findMany).mockResolvedValue([
+        conv({ source: 'ctwa', sourceId: 'ad_1', headline: 'Promo verano' }),
+        conv({ source: 'ctwa', sourceId: 'ad_1', headline: 'Promo verano' }),
+        conv({ source: 'ctwa', sourceId: 'ad_1', headline: 'Promo verano' }),
+        conv({ source: 'ctwa', sourceId: 'ad_2', headline: 'Descuento otoño' }),
+        conv({ source: 'ctwa', sourceId: 'ad_2', headline: 'Descuento otoño' }),
+        conv({ source: 'ctwa', sourceId: 'ad_3' }), // sin headline
+        conv(), // sin atribución
+      ]);
+
+      const res = await request(app).get('/api/analytics/attribution');
+
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(7);
+      expect(res.body.attributed).toBe(6);
+      expect(res.body.bySource).toEqual([{ source: 'ctwa', count: 6 }]);
+      // byAd ordenado por volumen: ad_1 (3) > ad_2 (2) > ad_3 (1).
+      expect(res.body.byAd).toEqual([
+        { sourceId: 'ad_1', headline: 'Promo verano', count: 3 },
+        { sourceId: 'ad_2', headline: 'Descuento otoño', count: 2 },
+        { sourceId: 'ad_3', count: 1 },
+      ]);
+    });
+
+    it('la consulta está acotada por businessId', async () => {
+      mock(prisma.conversation.findMany).mockResolvedValue([]);
+      await request(app).get('/api/analytics/attribution');
+      const calls = mock(prisma.conversation.findMany).mock.calls as unknown as unknown[][];
+      const [arg] = calls[0] as [{ where: { businessId: string } }];
+      expect(arg.where.businessId).toBe('biz_1');
+    });
+  });
+
+  it('GET /attribution responde 401 sin token (requireAuth real)', async () => {
+    // El resto del archivo mockea requireAuth; acá montamos el middleware REAL
+    // como gate del router (igual que en index.ts) para verificar el 401.
+    const actualAuth = await vi.importActual<typeof import('../../middleware/auth')>('../../middleware/auth');
+    const realApp = express();
+    realApp.use(express.json());
+    realApp.use('/api/analytics', actualAuth.requireAuth, analyticsRouter);
+    realApp.use(errorHandler);
+
+    const res = await request(realApp).get('/api/analytics/attribution');
+    expect(res.status).toBe(401);
+  });
 });

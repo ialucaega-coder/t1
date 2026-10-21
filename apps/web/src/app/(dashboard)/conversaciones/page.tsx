@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   MessageSquare, Clock, X, ChevronRight, User, Filter, Search,
   Send, Loader2, AlertTriangle, Bot, Phone, Mail, Wifi, WifiOff,
-  Tag, StickyNote, UserPlus, Plus, Info, Check, Sparkles, RefreshCw, Flame,
+  Tag, StickyNote, UserPlus, Plus, Info, Check, Sparkles, RefreshCw, Flame, Megaphone,
 } from 'lucide-react';
 import { useConversations, useConversationDetail } from '@/hooks/use-conversations';
 import { useSocket, useSocketEvent } from '@/hooks/use-socket';
@@ -546,6 +546,14 @@ export default function ConversacionesPage() {
                     </div>
                   )}
                   <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-600 flex-wrap">
+                    {conv.metadata?.attribution && (
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-medium bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20"
+                        title={conv.metadata.attribution.headline || conv.metadata.attribution.sourceUrl || 'Vino de un anuncio (Click-to-WhatsApp)'}
+                      >
+                        <Megaphone className="h-2.5 w-2.5" /> Anuncio
+                      </span>
+                    )}
                     {conv.metadata?.leadScore && (
                       <span
                         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-medium ${TEMP_STYLE[conv.metadata.leadScore.temperature].class}`}
@@ -638,6 +646,14 @@ export default function ConversacionesPage() {
                   <span className={`badge border text-[9px] ${(STATUS_COLORS[detail.status] || STATUS_COLORS.OPEN).class}`}>
                     {(STATUS_COLORS[detail.status] || STATUS_COLORS.OPEN).label}
                   </span>
+                  {detail.metadata?.attribution && (
+                    <span
+                      className="badge border text-[9px] bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20"
+                      title={detail.metadata.attribution.headline || detail.metadata.attribution.sourceUrl || 'Vino de un anuncio (Click-to-WhatsApp)'}
+                    >
+                      <Megaphone className="h-3 w-3" /> Anuncio
+                    </span>
+                  )}
                   {detail.metadata?.leadScore && (
                     <span
                       className={`badge border text-[9px] ${TEMP_STYLE[detail.metadata.leadScore.temperature].class}`}

@@ -1,10 +1,61 @@
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getFunnel, type LifecycleStage } from '../services/clients/lifecycle';
 
 const router = Router();
+
+/**
+ * Forma de la atribución Click-to-WhatsApp guardada en
+ * `Conversation.metadata.attribution`. La DEFINIMOS localmente a propósito: el
+ * backend de captura (que escribe este objeto) vive en otro archivo que se está
+ * construyendo en paralelo; acá sólo LEEMOS la metadata (un `Prisma.JsonValue`)
+ * de forma tolerante. Espejo del contrato de la feature CTWA.
+ */
+interface ConversationAttribution {
+  source: string;
+  sourceType?: string;
+  sourceId?: string;
+  sourceUrl?: string;
+  headline?: string;
+  body?: string;
+  ctwaClid?: string;
+  mediaType?: string;
+  at?: string;
+}
+
+/**
+ * Lee `metadata.attribution` tolerando null, no-objeto, arrays o formas
+ * inesperadas (la metadata es Json libre). Devuelve `null` si no hay una
+ * atribución válida (sin `source`). Recorta y descarta valores no-string.
+ */
+function readAttribution(
+  metadata: Prisma.JsonValue | null | undefined
+): ConversationAttribution | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const attr = (metadata as Record<string, unknown>).attribution;
+  if (!attr || typeof attr !== 'object' || Array.isArray(attr)) return null;
+  const a = attr as Record<string, unknown>;
+  if (typeof a.source !== 'string' || !a.source.trim()) return null;
+  const str = (v: unknown): string | undefined => {
+    if (typeof v !== 'string') return undefined;
+    const trimmed = v.trim();
+    return trimmed ? trimmed : undefined;
+  };
+  return {
+    source: a.source.trim(),
+    sourceType: str(a.sourceType),
+    sourceId: str(a.sourceId),
+    sourceUrl: str(a.sourceUrl),
+    headline: str(a.headline),
+    body: str(a.body),
+    ctwaClid: str(a.ctwaClid),
+    mediaType: str(a.mediaType),
+    at: str(a.at),
+  };
+}
 
 /** Etiquetas en español para cada etapa del embudo (orden de LIFECYCLE_STAGES). */
 const STAGE_LABELS: Record<LifecycleStage, string> = {
@@ -438,6 +489,63 @@ router.get(
     });
 
     res.json({ total, stages: funnel });
+  })
+);
+
+/**
+ * Embudo por origen (Click-to-WhatsApp Ads). Agrega las conversaciones del
+ * negocio por su `metadata.attribution`: cuántas vinieron de un anuncio, el
+ * desglose por origen y el top de anuncios por volumen.
+ *
+ * Traemos sólo `metadata` de las conversaciones del negocio y agregamos en
+ * memoria: es lo más simple y correcto (la metadata es Json libre, sin índice
+ * por el JSON path de `attribution`). Scope multi-tenant por `businessId`.
+ */
+router.get(
+  '/attribution',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+
+    const conversations = await prisma.conversation.findMany({
+      where: { businessId },
+      select: { metadata: true },
+    });
+
+    const total = conversations.length;
+    let attributed = 0;
+    const bySourceMap = new Map<string, number>();
+    // Agrupa por anuncio. Clave: sourceId si existe; si no, el headline (para no
+    // perder los ads sin id). `sourceId` en la salida queda vacío en ese caso.
+    const byAdMap = new Map<string, { sourceId: string; headline?: string; count: number }>();
+
+    for (const { metadata } of conversations) {
+      const attr = readAttribution(metadata);
+      if (!attr) continue;
+      attributed++;
+      bySourceMap.set(attr.source, (bySourceMap.get(attr.source) ?? 0) + 1);
+
+      const key = attr.sourceId || (attr.headline ? `headline:${attr.headline}` : null);
+      if (key) {
+        const existing = byAdMap.get(key);
+        if (existing) {
+          existing.count++;
+          if (!existing.headline && attr.headline) existing.headline = attr.headline;
+        } else {
+          byAdMap.set(key, { sourceId: attr.sourceId ?? '', headline: attr.headline, count: 1 });
+        }
+      }
+    }
+
+    const bySource = Array.from(bySourceMap.entries())
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const byAd = Array.from(byAdMap.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    res.json({ total, attributed, bySource, byAd });
   })
 );
 

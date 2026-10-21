@@ -16,6 +16,7 @@ import {
   isTwilioMediaUrl,
 } from '../services/whatsapp/client';
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
+import { parseWhatsAppReferral } from '../services/whatsapp/attribution';
 import { requireAuth, requireStaff } from '../middleware/auth';
 
 const sendMessageSchema = z.object({
@@ -135,12 +136,18 @@ router.post(
         orderBy: { updatedAt: 'desc' },
       });
 
+      // Atribución Click-to-WhatsApp: si el cliente vino de un anuncio, Twilio
+      // agrega los campos Referral* al body. Se captura sólo al CREAR la
+      // conversación (processMessage lo decide con conversationId).
+      const attribution = parseWhatsAppReferral(req.body);
+
       const result = await processMessage(businessId, finalBody, 'WHATSAPP', {
         conversationId: existingConversation?.id,
         botId,
         contactName: profileName,
         contactPhone: from,
         ...(visionImages.length ? { images: visionImages } : {}),
+        ...(attribution ? { attribution } : {}),
       });
 
       // Responde DESDE el número del negocio (el `To` al que escribió el

@@ -16,6 +16,7 @@ import { loadFaqItems, buildFaqPrompt } from './faq/config';
 import { loadSystemPrompt } from './ai/system-prompt';
 import { getMessageQuota } from './billing/quota';
 import { dispatchEvent } from './workflows';
+import type { ConversationAttribution } from './whatsapp/attribution';
 
 /**
  * Lee si el negocio superó el cupo de mensajes, SIN romper el flujo del bot: si
@@ -114,6 +115,12 @@ export interface ProcessMessageOptions {
    * negocio; en caso contrario se ignoran.
    */
   images?: ImageInput[];
+  /**
+   * Atribución Click-to-WhatsApp (de qué anuncio vino la conversación). Sólo lo
+   * pasa el webhook de WhatsApp cuando el body trae campos Referral*. Se guarda
+   * en metadata.attribution al CREAR la conversación (origen de la charla).
+   */
+  attribution?: ConversationAttribution;
 }
 
 /**
@@ -680,11 +687,14 @@ async function getOrCreateConversation(
   };
   const realChannel = realChannelMap[channel];
 
-  // metadata guarda el canal real (cuando no tiene enum propio) y el
-  // subscriberId del canal externo, para poder reusar la conversación luego.
-  const metadata: Record<string, string> = {};
+  // metadata guarda el canal real (cuando no tiene enum propio), el
+  // subscriberId del canal externo (para reusar la conversación luego) y la
+  // atribución Click-to-WhatsApp (de qué anuncio vino). Es Record<string,
+  // unknown> porque la atribución es un objeto, no un string.
+  const metadata: Record<string, unknown> = {};
   if (realChannel) metadata.realChannel = realChannel;
   if (options.subscriberId) metadata.subscriberId = options.subscriberId;
+  if (options.attribution) metadata.attribution = options.attribution;
 
   return prisma.conversation.create({
     data: {
@@ -694,7 +704,7 @@ async function getOrCreateConversation(
       contactName: options.contactName,
       contactPhone: options.contactPhone,
       status: 'OPEN',
-      ...(Object.keys(metadata).length ? { metadata } : {}),
+      ...(Object.keys(metadata).length ? { metadata: metadata as Prisma.InputJsonValue } : {}),
     },
   });
 }

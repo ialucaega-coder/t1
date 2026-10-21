@@ -105,6 +105,31 @@ describe('services/chatbot — canal real en metadata', () => {
       expect.objectContaining({ trigger: 'mensaje_entrante', payload: expect.objectContaining({ channel: 'WHATSAPP', conversationId: 'c1' }) }),
     );
   });
+
+  it('CTWA: persiste la atribución en metadata.attribution al CREAR la conversación', async () => {
+    const attribution = {
+      source: 'ctwa' as const,
+      sourceType: 'ad',
+      sourceId: 'ad_123',
+      headline: 'Oferta de verano',
+      ctwaClid: 'clid_abc',
+      at: '2026-10-20T00:00:00.000Z',
+    };
+
+    await processMessage('biz_1', 'precio', 'WHATSAPP', { history: [], botId: 'bot_1', attribution });
+
+    const data = createData();
+    expect(data.channel).toBe('WHATSAPP');
+    const metadata = data.metadata as Record<string, unknown>;
+    expect(metadata.attribution).toEqual(attribution);
+  });
+
+  it('sin atribución: no agrega metadata.attribution', async () => {
+    await run('WHATSAPP');
+    const data = createData();
+    // WHATSAPP no genera realChannel ni subscriberId, así que metadata queda vacío/omitido.
+    expect(data.metadata).toBeUndefined();
+  });
 });
 
 describe('services/chatbot — scoping del nombre de cliente (anti IDOR)', () => {

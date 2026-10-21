@@ -57,3 +57,22 @@ export interface AnalyticsFunnel {
   total: number;
   stages: AnalyticsFunnelStage[];
 }
+
+/** Un anuncio del top por volumen en el embudo por origen (CTWA). */
+export interface AnalyticsAttributionAd {
+  sourceId: string;
+  headline?: string;
+  count: number;
+}
+
+/**
+ * Embudo por origen Click-to-WhatsApp: cuántas conversaciones del negocio
+ * vinieron de un anuncio vs. el total, el desglose por origen y el top de
+ * anuncios por volumen.
+ */
+export interface AnalyticsAttribution {
+  total: number;
+  attributed: number;
+  bySource: { source: string; count: number }[];
+  byAd: AnalyticsAttributionAd[];
+}

@@ -8,6 +8,7 @@ import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 import { generateCopilot } from '../services/ai/copilot';
 import { generateLeadScore, type LeadScore } from '../services/ai/lead-score';
+import type { ConversationAttribution } from '../services/whatsapp/attribution';
 
 const replySchema = z.object({
   text: z.string().min(1).max(5000).transform((v) => v.trim()),
@@ -68,6 +69,12 @@ interface ConversationMeta {
    * Lo escribe POST /:id/lead-score; el Inbox lo muestra como badge de temperatura.
    */
   leadScore?: LeadScore;
+  /**
+   * Atribución Click-to-WhatsApp: de qué anuncio vino la conversación. La
+   * escribe el chatbot al crear la conversación (sólo canal WhatsApp con ad);
+   * el Inbox la usa para el badge "Anuncio".
+   */
+  attribution?: ConversationAttribution;
   [key: string]: unknown;
 }
 

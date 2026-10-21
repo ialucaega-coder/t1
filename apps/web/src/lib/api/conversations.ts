@@ -7,6 +7,25 @@ export interface ConversationNote {
   byName?: string;
 }
 
+/**
+ * Atribución Click-to-WhatsApp (CTWA): de qué anuncio/campaña vino la
+ * conversación. Se captura al crear la charla y se guarda en
+ * `Conversation.metadata.attribution`. Espejo del contrato de la feature.
+ */
+export interface ConversationAttribution {
+  /** Origen. 'ctwa' = vino de un Click-to-WhatsApp Ad. */
+  source: 'ctwa';
+  sourceType?: string;
+  sourceId?: string;
+  sourceUrl?: string;
+  headline?: string;
+  body?: string;
+  ctwaClid?: string;
+  mediaType?: string;
+  /** ISO de cuándo se capturó (creación de la conversación). */
+  at: string;
+}
+
 // Datos extra guardados dentro de Conversation.metadata (campo Json del schema).
 export interface ConversationMeta {
   assignedTo?: string | null;
@@ -25,6 +44,8 @@ export interface ConversationMeta {
   pausedAt?: string | null;
   /** Último lead score calculado (intención de compra). */
   leadScore?: LeadScore;
+  /** Atribución CTWA: de qué anuncio vino la conversación (si vino de uno). */
+  attribution?: ConversationAttribution;
 }
 
 /** Lead scoring de intención de compra (temperatura + puntaje 0-100). */

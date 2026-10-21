@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock, CheckCircle2, LineChart, Filter, ChevronDown } from 'lucide-react';
 import { useAnalytics } from '@/hooks/use-analytics';
-import type { AnalyticsTimeseriesPoint, AnalyticsFunnel } from '@/types/analytics';
+import type { AnalyticsTimeseriesPoint, AnalyticsFunnel, AnalyticsAttribution } from '@/types/analytics';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -202,8 +202,66 @@ function FunnelChart({ funnel }: { funnel: AnalyticsFunnel }) {
   );
 }
 
+/**
+ * Embudo por origen Click-to-WhatsApp: total atribuidas vs total + el top de
+ * anuncios (headline + count, como barras). Si no hay conversaciones atribuidas,
+ * muestra un empty state que explica qué es CTWA.
+ */
+function AttributionPanel({ attribution }: { attribution: AnalyticsAttribution | null }) {
+  if (!attribution || attribution.attributed === 0) {
+    return (
+      <EmptyState
+        icon={Megaphone}
+        title="Todavía no hay conversaciones desde anuncios"
+        description="Click-to-WhatsApp (CTWA) registra de qué anuncio de Meta vino cada charla. Cuando un cliente te escriba tocando un anuncio, vas a ver acá qué campañas traen más conversaciones y cerrás el loop de ROI."
+      />
+    );
+  }
+
+  const { total, attributed, byAd } = attribution;
+  const pct = total > 0 ? Math.round((attributed / total) * 100) : 0;
+  const maxCount = Math.max(...byAd.map((a) => a.count), 1);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-2xl font-bold text-white">
+          {attributed}
+          <span className="text-sm font-normal text-slate-500"> / {total} conversaciones</span>
+        </p>
+        <p className="text-[10px] text-slate-500">{pct}% vino de un anuncio (Click-to-WhatsApp)</p>
+        <div className="h-2 bg-surface-100 rounded-full overflow-hidden mt-2">
+          <div className="h-full bg-brand-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+
+      {byAd.length > 0 ? (
+        <div className="space-y-2">
+          <p className="mono-label">TOP ANUNCIOS POR VOLUMEN</p>
+          {byAd.map((ad, i) => (
+            <div key={ad.sourceId || ad.headline || i}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-xs text-slate-300 truncate flex items-center gap-1.5">
+                  <Megaphone className="h-3 w-3 text-brand-400 shrink-0" />
+                  {ad.headline || ad.sourceId || 'Anuncio sin título'}
+                </span>
+                <span className="text-[10px] text-slate-500 shrink-0">{ad.count}</span>
+              </div>
+              <div className="h-1.5 bg-surface-100 rounded-full overflow-hidden">
+                <div className="h-full bg-brand-400 rounded-full transition-all" style={{ width: `${(ad.count / maxCount) * 100}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">Hay conversaciones atribuidas pero sin datos del anuncio.</p>
+      )}
+    </div>
+  );
+}
+
 export default function AnalisisPage() {
-  const { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, isLoading, error, refetch } = useAnalytics();
+  const { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, attribution, isLoading, error, refetch } = useAnalytics();
   const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
@@ -346,26 +404,35 @@ export default function AnalisisPage() {
       )}
 
       {activeTab === 'reportes' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="card-accent">
-            <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
-              <LineChart className="h-4 w-4 text-brand-400" /> Actividad últimos 14 días
-            </h3>
-            <p className="mono-label mb-4">MENSAJES Y CONVERSACIONES NUEVAS POR DÍA</p>
-            <TimeSeriesChart data={timeseries} />
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="card-accent">
+              <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
+                <LineChart className="h-4 w-4 text-brand-400" /> Actividad últimos 14 días
+              </h3>
+              <p className="mono-label mb-4">MENSAJES Y CONVERSACIONES NUEVAS POR DÍA</p>
+              <TimeSeriesChart data={timeseries} />
+            </div>
+            <div className="card-accent">
+              <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
+                <Filter className="h-4 w-4 text-brand-400" /> Embudo de conversión
+              </h3>
+              <p className="mono-label mb-4">
+                CICLO DE VIDA CRM{funnel ? ` · ${funnel.total} contactos` : ''}
+              </p>
+              {funnel ? (
+                <FunnelChart funnel={funnel} />
+              ) : (
+                <p className="text-xs text-slate-500">Sin datos del embudo.</p>
+              )}
+            </div>
           </div>
           <div className="card-accent">
             <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
-              <Filter className="h-4 w-4 text-brand-400" /> Embudo de conversión
+              <Megaphone className="h-4 w-4 text-brand-400" /> Origen de las conversaciones (Click-to-WhatsApp)
             </h3>
-            <p className="mono-label mb-4">
-              CICLO DE VIDA CRM{funnel ? ` · ${funnel.total} contactos` : ''}
-            </p>
-            {funnel ? (
-              <FunnelChart funnel={funnel} />
-            ) : (
-              <p className="text-xs text-slate-500">Sin datos del embudo.</p>
-            )}
+            <p className="mono-label mb-4">DE QUÉ ANUNCIO VINO CADA CHARLA</p>
+            <AttributionPanel attribution={attribution} />
           </div>
         </div>
       )}

@@ -7,6 +7,7 @@ import type {
   AnalyticsCost,
   AnalyticsTimeseriesPoint,
   AnalyticsFunnel,
+  AnalyticsAttribution,
 } from '@/types/analytics';
 
 export function getKpi() {
@@ -39,4 +40,9 @@ export function getTimeseries() {
 
 export function getFunnel() {
   return httpClient.get<AnalyticsFunnel>('/analytics/funnel');
+}
+
+// Embudo por origen (Click-to-WhatsApp): de qué anuncio vinieron las charlas.
+export function getAttribution() {
+  return httpClient.get<AnalyticsAttribution>('/analytics/attribution');
 }
