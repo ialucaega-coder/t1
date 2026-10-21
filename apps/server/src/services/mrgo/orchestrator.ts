@@ -21,6 +21,7 @@ import {
   type AgentConfig,
 } from './agents';
 import { loadMemory, buildMemoryPrompt } from './memory';
+import { extractJson } from './json';
 
 /** Entrada del orquestador. */
 export interface OrchestrateInput {
@@ -79,32 +80,6 @@ function buildRoutingSystemPrompt(activeAgents: AgentConfig[]): string {
     'Respondé SOLO un JSON válido, sin texto adicional, con esta forma exacta:',
     '{ "nextAgent": "<clave>", "emotion": "<estado>", "reasoning": "<breve>", "tool": "<clave|opcional>", "toolParams": { } }',
   ].join('\n');
-}
-
-/**
- * Extrae un objeto JSON de la respuesta del LLM de forma defensiva: intenta
- * `JSON.parse` directo y, si falla (el modelo rodeó el JSON de texto), recorta
- * desde la primera `{` hasta la última `}`. Devuelve null si no hay JSON usable.
- */
-function extractJson(raw: string): Record<string, unknown> | null {
-  const tryParse = (s: string): Record<string, unknown> | null => {
-    try {
-      const parsed = JSON.parse(s);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const direct = tryParse(raw.trim());
-  if (direct) return direct;
-
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start !== -1 && end > start) return tryParse(raw.slice(start, end + 1));
-  return null;
 }
 
 /** Decisión de respaldo cuando el LLM falla o devuelve algo inusable. */

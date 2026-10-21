@@ -431,6 +431,16 @@ export function isExecutableAction(action: string): boolean {
 }
 
 /**
+ * Naturaleza de una acción (`interno`/`externo`) sin ejecutarla. La usa el loop
+ * agéntico de Mr Go para decidir, ANTES de ejecutar, si una acción saliente en
+ * modo `live` requiere confirmación del dueño. Devuelve undefined si la acción
+ * no existe.
+ */
+export function actionKind(action: string): ActionKind | undefined {
+  return HANDLERS[action]?.kind;
+}
+
+/**
  * Ejecuta (o simula) una acción. Punto de entrada único para Workflows y Mr Go.
  * NUNCA lanza: cualquier excepción del servicio se captura y se reporta como
  * `status: 'error'` con un detalle sin PII.
