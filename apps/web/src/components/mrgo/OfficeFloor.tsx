@@ -1,26 +1,36 @@
 'use client';
 
 /**
- * OfficeFloor — la oficina de Mr Go como un PLANO ESPACIAL CENITAL (top-down),
- * al estilo de Munder Difflin / AI Town pero adaptado a los Mr Go clay.
+ * OfficeFloor — la oficina de Mr Go como un PLANO CENITAL (top-down) estilo
+ * CENTRO DE OPERACIONES oscuro (command-center premium), espacioso y legible.
  *
- * A diferencia de la grilla de tarjetas (que no era "espacial"), acá el piso es
- * un MAPA: hay salas separadas por paredes (Dirección, Café, Sala de reunión),
- * zonas de departamento con sus escritorios como muebles, y cada agente está
- * UBICADO POR COORDENADAS sobre el mapa. Los agentes no están quietos: con la
- * "vida" (`useOfficeLife`) se levantan y CAMINAN al café o a una reunión y luego
- * vuelven a su escritorio — igual que "un día en la oficina" de MD.
+ * El piso es un MAPA oscuro: zonas de departamento amplias (con aire), un par de
+ * salas destacadas (Dirección con glow lila, Café y Reunión como estaciones) y
+ * cada agente UBICADO POR COORDENADAS. Con la "vida" (`useOfficeLife`) los
+ * agentes se levantan y CAMINAN al café o a una reunión y luego vuelven a su
+ * puesto. Los personajes son los Mr Go clay reales (`MrGoAvatar`), más grandes
+ * y bien separados; NUNCA se dibujan gotas/blobs propios.
  *
- * Todo el mapa se dibuja con CSS (sin imágenes generadas): piso con baldosas,
- * paredes, muebles cenitales (escritorio + monitor que prende cuando trabaja).
- * Es consistente y crujiente en cualquier tamaño.
+ * Todo el mapa se dibuja con CSS sobre una escena `#0a0d18` con grilla sutil.
+ * La calidez/personalidad la dan los personajes clay, no el fondo.
  *
  * FASE 0 (prototipo del look): la "vida" es simulada en el cliente; todavía no
  * hay motor de IA ni reflejo del backend real (eso son fases siguientes).
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Pause, Play, Wrench, X, Coffee, Users, Monitor } from 'lucide-react';
+import {
+  Send,
+  Pause,
+  Play,
+  Wrench,
+  X,
+  Coffee,
+  Users,
+  Crown,
+  Activity,
+  Cpu,
+} from 'lucide-react';
 import { MrGoAvatar } from './MrGoAvatar';
 import { MR_GO_PETS, type MrGoColorKey, type MrGoEmotion, type MrGoPetKey } from './types';
 import type { AgentLife, LifeState, Spot } from './useOfficeLife';
@@ -45,16 +55,37 @@ export interface OfficeFloorProps {
   onSelect?: (key: string) => void;
   onOrderAgent?: (key: string) => void;
   onTogglePause?: (key: string) => void;
+  /** Muestra el panel de detalle inline bajo el piso. Default true. Se apaga
+   *  cuando el detalle se delega a un CommandPanel externo (evita duplicarlo). */
+  showDetailPanel?: boolean;
   className?: string;
 }
 
 // Proporción del mapa (ancho:alto). Un poco más alto que 16:9 para que entren
-// las salas de arriba + las zonas de abajo.
+// la banda de salas de arriba + las zonas de departamento abajo con AIRE.
 const FLOOR_W = 1280;
-const FLOOR_H = 860;
+const FLOOR_H = 900;
 
 // ---------------------------------------------------------------------------
-// Departamentos (salas/zonas). El CEO va en "Dirección".
+// Paleta de la escena (command-center oscuro). Hex directos (tema oscuro).
+// ---------------------------------------------------------------------------
+
+const SCENE = {
+  floor: '#0a0d18',
+  surface: '#0f1322',
+  node: '#141a2b',
+  hairline: 'rgba(150,165,215,0.12)',
+  hairlineStrong: 'rgba(150,165,215,0.22)',
+  grid: 'rgba(150,165,215,0.05)',
+  ink: '#eaeefb',
+  inkMuted: '#a9b2cc',
+  inkDim: '#6c7694',
+  brand: '#a855f7',
+  glow: 'rgba(168,85,247,0.45)',
+} as const;
+
+// ---------------------------------------------------------------------------
+// Departamentos (zonas). El CEO va en "Dirección".
 // ---------------------------------------------------------------------------
 
 interface Depto {
@@ -64,11 +95,11 @@ interface Depto {
 }
 
 const DEPTOS: Record<string, Depto> = {
-  direccion: { id: 'direccion', nombre: 'Dirección', accent: '#A855F7' },
-  ventas: { id: 'ventas', nombre: 'Ventas & Cobros', accent: '#FFD93D' },
-  atencion: { id: 'atencion', nombre: 'Atención', accent: '#7EC8E3' },
-  marketing: { id: 'marketing', nombre: 'Marketing', accent: '#FF8EC7' },
-  equipo: { id: 'equipo', nombre: 'Equipo', accent: '#6BCB77' },
+  direccion: { id: 'direccion', nombre: 'Dirección', accent: '#a855f7' },
+  ventas: { id: 'ventas', nombre: 'Ventas & Cobros', accent: '#f5b740' },
+  atencion: { id: 'atencion', nombre: 'Atención', accent: '#7dd3fc' },
+  marketing: { id: 'marketing', nombre: 'Marketing', accent: '#f472b6' },
+  equipo: { id: 'equipo', nombre: 'Equipo', accent: '#6bcb77' },
 };
 
 const ROLE_TO_DEPTO: Record<string, string> = {
@@ -93,26 +124,26 @@ function deptoDe(a: { key: string; director?: boolean }): string {
   return ROLE_TO_DEPTO[a.key] ?? 'equipo';
 }
 
-// Acento del monitor según el color/rubro del agente.
+// Acento del puesto según el color/rubro del agente.
 const MR_GO_ACCENT: Record<MrGoColorKey, string> = {
-  LILA: '#A855F7',
-  RED: '#EF4444',
-  PINK: '#FF8EC7',
-  LIGHT_BLUE: '#7EC8E3',
-  WHITE: '#CBD5E1',
-  ORANGE: '#FF8C42',
-  BROWN: '#B07A4A',
-  BEIGE: '#E6D5B8',
-  TURQUOISE: '#40E0D0',
-  GREEN: '#6BCB77',
-  LIME: '#A8E063',
-  BLACK: '#64748B',
-  BLUE: '#4A90E2',
-  YELLOW: '#FFD93D',
+  LILA: '#a855f7',
+  RED: '#ef4444',
+  PINK: '#f472b6',
+  LIGHT_BLUE: '#7dd3fc',
+  WHITE: '#cbd5e1',
+  ORANGE: '#ff8c42',
+  BROWN: '#b07a4a',
+  BEIGE: '#e6d5b8',
+  TURQUOISE: '#40e0d0',
+  GREEN: '#6bcb77',
+  LIME: '#a8e063',
+  BLACK: '#64748b',
+  BLUE: '#4a90e2',
+  YELLOW: '#f5b740',
 };
 
 // ---------------------------------------------------------------------------
-// Cálculo del plano: ubica salas, escritorios (por coordenadas %) y destinos.
+// Cálculo del plano: ubica salas, puestos (por coordenadas %) y destinos.
 // ---------------------------------------------------------------------------
 
 interface ZoneRect {
@@ -123,7 +154,7 @@ interface ZoneRect {
   y: number;
   w: number;
   h: number;
-  enclosed: boolean; // true = sala con paredes (café, reunión, dirección)
+  enclosed: boolean; // true = sala destacada (café, reunión, dirección)
 }
 
 export interface FloorLayout {
@@ -133,10 +164,11 @@ export interface FloorLayout {
   meetingSpots: Spot[];
 }
 
-// Banda superior (salas): café (izq) · Dirección (centro) · Reunión (der).
-const TOP = { y: 5, h: 27 };
-// Área principal (zonas de departamento con escritorios).
-const MAIN = { x0: 4, y0: 40, x1: 96, y1: 95 };
+// Banda superior (salas): Café (izq) · Dirección (centro) · Reunión (der).
+// Más aire que antes: la banda ocupa de 4% a 30%.
+const TOP = { y: 4, h: 26 };
+// Área principal (zonas de departamento con puestos). Respira hasta el 96%.
+const MAIN = { x0: 4, y0: 37, x1: 96, y1: 96 };
 
 /** Calcula todo el plano a partir de los agentes presentes. */
 export function computeFloor(agents: RoomAgent[]): FloorLayout {
@@ -144,29 +176,29 @@ export function computeFloor(agents: RoomAgent[]): FloorLayout {
   const desks: Record<string, Spot> = {};
 
   // --- Banda superior ---
-  // Café (nicho, izquierda)
-  zones.push({ id: 'cafe', label: 'Café', accent: '#FBBF24', x: 4, y: TOP.y, w: 16, h: TOP.h, enclosed: true });
-  const coffeeSpot: Spot = { x: 12, y: TOP.y + TOP.h - 7 };
+  // Café (estación, izquierda)
+  zones.push({ id: 'cafe', label: 'Café', accent: '#f5b740', x: 4, y: TOP.y, w: 16, h: TOP.h, enclosed: true });
+  const coffeeSpot: Spot = { x: 11, y: TOP.y + TOP.h - 8 };
 
-  // Dirección (centro) — el CEO
+  // Dirección (centro, amplia) — el CEO
   const ceo = agents.find((a) => a.director);
   zones.push({
     id: 'direccion',
     label: DEPTOS.direccion.nombre,
     accent: DEPTOS.direccion.accent,
-    x: 38,
+    x: 35,
     y: TOP.y,
-    w: 24,
+    w: 30,
     h: TOP.h,
     enclosed: true,
   });
   if (ceo) desks[ceo.key] = { x: 50, y: TOP.y + TOP.h - 9 };
 
   // Sala de reunión (derecha)
-  zones.push({ id: 'reunion', label: 'Reunión', accent: '#A5B4FC', x: 78, y: TOP.y, w: 18, h: TOP.h, enclosed: true });
+  zones.push({ id: 'reunion', label: 'Reunión', accent: '#7dd3fc', x: 80, y: TOP.y, w: 16, h: TOP.h, enclosed: true });
   const meetingSpots: Spot[] = [
-    { x: 84, y: TOP.y + TOP.h - 9 },
-    { x: 90, y: TOP.y + TOP.h - 9 },
+    { x: 85, y: TOP.y + TOP.h - 9 },
+    { x: 91, y: TOP.y + TOP.h - 9 },
   ];
 
   // --- Área principal: zonas de departamento, de izquierda a derecha ---
@@ -175,11 +207,11 @@ export function computeFloor(agents: RoomAgent[]): FloorLayout {
     miembros: agents.filter((a) => !a.director && deptoDe(a) === id),
   })).filter((d) => d.miembros.length > 0);
 
-  // Cada depto necesita un ancho proporcional a sus "columnas" de escritorios.
+  // Cada depto necesita un ancho proporcional a sus "columnas" de puestos.
   const colsOf = (n: number) => (n <= 1 ? 1 : n <= 4 ? 2 : 3);
   const weights = deptos.map((d) => colsOf(d.miembros.length));
   const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
-  const gap = 2.5;
+  const gap = 3; // más separación entre zonas → más aire
   const availW = MAIN.x1 - MAIN.x0 - gap * Math.max(0, deptos.length - 1);
 
   let cursorX = MAIN.x0;
@@ -203,12 +235,12 @@ export function computeFloor(agents: RoomAgent[]): FloorLayout {
       enclosed: false,
     });
 
-    // Área interna para los escritorios (deja aire para el rótulo arriba).
-    const padX = 2;
+    // Área interna para los puestos (deja aire arriba para el rótulo chip).
+    const padX = 3;
     const innerX0 = zx + padX;
     const innerW = zw - padX * 2;
-    const innerY0 = zy + 9; // bajo el rótulo
-    const innerH = zh - 12;
+    const innerY0 = zy + 12; // bajo el rótulo
+    const innerH = zh - 16;
 
     d.miembros.forEach((m, i) => {
       const c = i % cols;
@@ -221,7 +253,7 @@ export function computeFloor(agents: RoomAgent[]): FloorLayout {
     cursorX += zoneW + gap;
   });
 
-  // Fallback: cualquier agente sin puesto cae al centro.
+  // Fallback: cualquier agente sin puesto cae al centro del área.
   for (const a of agents) {
     if (!desks[a.key]) desks[a.key] = { x: 50, y: 70 };
   }
@@ -269,7 +301,7 @@ function estadoDePuesto(agent: RoomAgent, state: LifeState): EstadoPuesto {
     case 'coffee':
       return { label: 'En el café', dotCls: 'bg-amber-400', textCls: 'text-amber-300', emotion: 'happy', away: true, screenOn: false };
     case 'meeting':
-      return { label: 'En reunión', dotCls: 'bg-indigo-400', textCls: 'text-indigo-300', emotion: 'thinking', away: true, screenOn: false };
+      return { label: 'En reunión', dotCls: 'bg-sky-400', textCls: 'text-sky-300', emotion: 'thinking', away: true, screenOn: false };
     case 'walking':
       return { label: 'Yendo…', dotCls: 'bg-sky-400', textCls: 'text-sky-300', emotion: 'happy', away: true, screenOn: false };
     case 'idle':
@@ -291,10 +323,12 @@ export function OfficeFloor({
   onSelect,
   onOrderAgent,
   onTogglePause,
+  showDetailPanel = true,
   className,
 }: OfficeFloorProps) {
   const layout = computeFloor(agents);
   const selected = selectedKey ? agents.find((a) => a.key === selectedKey) ?? null : null;
+  const direccion = layout.zones.find((z) => z.id === 'direccion');
 
   // Medimos el ancho del piso para dimensionar muebles/avatares en px.
   const floorRef = useRef<HTMLDivElement>(null);
@@ -320,16 +354,16 @@ export function OfficeFloor({
       {/* Mini-dashboard del piso */}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 font-medium text-emerald-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          {trabajando} trabajando
+          <Activity className="h-3 w-3" />
+          <span className="font-mono tabular-nums">{trabajando}</span> trabajando
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 font-medium text-amber-300">
           <Coffee className="h-3 w-3" />
-          {fuera} fuera del puesto
+          <span className="font-mono tabular-nums">{fuera}</span> fuera del puesto
         </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-700/40 px-2.5 py-1 font-medium text-slate-300">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-600/70 bg-slate-700/40 px-2.5 py-1 font-medium text-slate-300">
           <Pause className="h-3 w-3" />
-          {enPausa} en pausa
+          <span className="font-mono tabular-nums">{enPausa}</span> en pausa
         </span>
       </div>
 
@@ -342,24 +376,42 @@ export function OfficeFloor({
           aspectRatio: `${FLOOR_W} / ${FLOOR_H}`,
           borderRadius: 16,
           overflow: 'hidden',
-          backgroundColor: '#1a1526',
-          backgroundImage:
-            'linear-gradient(rgba(168,120,247,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(168,120,247,0.06) 1px, transparent 1px)',
-          backgroundSize: '3.2% 4.8%',
-          boxShadow: 'inset 0 0 120px rgba(80,40,120,0.35)',
-          border: '1px solid rgba(120,90,160,0.3)',
+          backgroundColor: SCENE.floor,
+          backgroundImage: `linear-gradient(${SCENE.grid} 1px, transparent 1px), linear-gradient(90deg, ${SCENE.grid} 1px, transparent 1px)`,
+          backgroundSize: '4% 5.5%',
+          boxShadow: 'inset 0 0 160px rgba(0,0,0,0.55)',
+          border: `1px solid ${SCENE.hairline}`,
         }}
       >
+        {/* Glow lila difuso detrás de Dirección */}
+        {direccion && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: `${direccion.x + direccion.w / 2}%`,
+              top: `${direccion.y + direccion.h / 2}%`,
+              width: '46%',
+              height: '58%',
+              transform: 'translate(-50%, -50%)',
+              background: `radial-gradient(ellipse at center, ${SCENE.glow} 0%, transparent 68%)`,
+              filter: 'blur(26px)',
+              pointerEvents: 'none',
+              zIndex: 0,
+            }}
+          />
+        )}
+
         {/* Salas / zonas */}
         {layout.zones.map((z) => (
           <ZoneView key={z.id} zone={z} />
         ))}
 
-        {/* Muebles de café y reunión */}
-        <CoffeeBar spot={layout.coffeeSpot} floorW={floorW} />
-        <MeetingTable spots={layout.meetingSpots} floorW={floorW} />
+        {/* Estaciones de café y reunión (nodos limpios) */}
+        <StationNode spot={layout.coffeeSpot} floorW={floorW} accent="#f5b740" label="Café" icon={Coffee} />
+        <MeetingStation spots={layout.meetingSpots} floorW={floorW} accent="#7dd3fc" />
 
-        {/* Escritorios (muebles) */}
+        {/* Puestos (muebles) */}
         {floorW > 0 &&
           agents.map((a) => {
             const home = layout.desks[a.key];
@@ -371,7 +423,7 @@ export function OfficeFloor({
                 x={home.x}
                 y={home.y}
                 floorW={floorW}
-                accent={MR_GO_ACCENT[a.color] ?? '#A855F7'}
+                accent={MR_GO_ACCENT[a.color] ?? SCENE.brand}
                 on={st.screenOn}
                 big={Boolean(a.director)}
               />
@@ -405,7 +457,7 @@ export function OfficeFloor({
           })}
       </div>
 
-      {selected && (
+      {showDetailPanel && selected && (
         <AgentPanel
           agent={selected}
           estado={estadoDePuesto(selected, life?.[selected.key]?.state ?? (selected.paused ? 'idle' : 'working'))}
@@ -418,7 +470,7 @@ export function OfficeFloor({
   );
 }
 
-/** Una sala/zona: rectángulo con piso tintado + rótulo tipo placa de puerta. */
+/** Una sala/zona: superficie oscura, borde de acento arriba (2px) y chip mono. */
 function ZoneView({ zone }: { zone: ZoneRect }) {
   return (
     <div
@@ -429,41 +481,65 @@ function ZoneView({ zone }: { zone: ZoneRect }) {
         top: `${zone.y}%`,
         width: `${zone.w}%`,
         height: `${zone.h}%`,
-        borderRadius: zone.enclosed ? 8 : 12,
-        border: zone.enclosed ? `2px solid ${zone.accent}66` : `1px dashed ${zone.accent}44`,
+        borderRadius: 12,
+        borderTop: `2px solid ${zone.accent}`,
+        borderRight: `1px solid ${SCENE.hairline}`,
+        borderBottom: `1px solid ${SCENE.hairline}`,
+        borderLeft: `1px solid ${SCENE.hairline}`,
         background: zone.enclosed
-          ? `linear-gradient(180deg, ${zone.accent}18 0%, rgba(10,8,18,0.25) 100%)`
-          : `linear-gradient(180deg, ${zone.accent}10 0%, rgba(10,8,18,0.15) 100%)`,
-        boxShadow: zone.enclosed ? `inset 0 0 24px ${zone.accent}22` : 'none',
+          ? `linear-gradient(180deg, ${zone.accent}1f 0%, rgba(15,19,34,0.55) 55%)`
+          : `linear-gradient(180deg, ${zone.accent}12 0%, rgba(15,19,34,0.35) 60%)`,
+        boxShadow: zone.enclosed
+          ? `inset 0 0 40px ${zone.accent}1a, 0 10px 30px rgba(0,0,0,0.35)`
+          : 'inset 0 0 24px rgba(0,0,0,0.25)',
+        zIndex: 1,
       }}
     >
+      {/* Rótulo tipo chip mono (en la esquina superior izquierda) */}
       <span
+        className="font-mono"
         style={{
           position: 'absolute',
-          top: 0,
+          top: 8,
           left: 8,
-          transform: 'translateY(-50%)',
-          padding: '1px 8px',
-          borderRadius: 999,
-          background: zone.accent,
-          color: '#120a1c',
-          fontSize: 'clamp(8px, 0.85vw, 11px)',
-          fontWeight: 800,
-          letterSpacing: '0.03em',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '2px 8px',
+          borderRadius: 8,
+          background: 'rgba(8,10,20,0.72)',
+          border: `1px solid ${zone.accent}55`,
+          color: zone.accent,
+          fontSize: 'clamp(8px, 0.82vw, 11px)',
+          fontWeight: 600,
+          letterSpacing: '0.08em',
           textTransform: 'uppercase',
           whiteSpace: 'nowrap',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+          backdropFilter: 'blur(2px)',
         }}
       >
+        <span style={{ width: 5, height: 5, borderRadius: '50%', background: zone.accent, display: 'inline-block' }} />
         {zone.label}
       </span>
     </div>
   );
 }
 
-/** Barra de café (mueble cenital en el nicho). */
-function CoffeeBar({ spot, floorW }: { spot: Spot; floorW: number }) {
-  const w = Math.max(28, floorW * 0.07);
+/** Estación limpia (café): cuadrado redondeado oscuro + ícono lucide + mono. */
+function StationNode({
+  spot,
+  floorW,
+  accent,
+  label,
+  icon: Icon,
+}: {
+  spot: Spot;
+  floorW: number;
+  accent: string;
+  label: string;
+  icon: typeof Coffee;
+}) {
+  const s = Math.max(30, floorW * 0.058);
   return (
     <div
       aria-hidden
@@ -471,30 +547,52 @@ function CoffeeBar({ spot, floorW }: { spot: Spot; floorW: number }) {
         position: 'absolute',
         left: `${spot.x}%`,
         top: `${spot.y}%`,
-        transform: 'translate(-50%, -50%)',
-        width: w,
-        height: w * 0.5,
-        borderRadius: 6,
-        background: 'linear-gradient(180deg, #3b2f26 0%, #241c16 100%)',
-        border: '1px solid rgba(0,0,0,0.4)',
-        boxShadow: '0 4px 10px rgba(0,0,0,0.4)',
+        transform: 'translate(-50%, 18%)',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
-        color: '#fbbf24',
+        gap: 4,
+        zIndex: 2,
       }}
     >
-      <Coffee style={{ width: w * 0.3, height: w * 0.3 }} />
+      <div
+        style={{
+          width: s,
+          height: s,
+          borderRadius: 12,
+          background: SCENE.node,
+          border: `1px solid ${SCENE.hairline}`,
+          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 14px rgba(0,0,0,0.4)`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: accent,
+        }}
+      >
+        <Icon style={{ width: s * 0.42, height: s * 0.42 }} strokeWidth={1.6} />
+      </div>
+      <span
+        className="font-mono"
+        style={{
+          fontSize: Math.max(8, Math.round(s * 0.2)),
+          color: SCENE.inkDim,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </span>
     </div>
   );
 }
 
-/** Mesa de reunión (mueble cenital). */
-function MeetingTable({ spots, floorW }: { spots: Spot[]; floorW: number }) {
+/** Estación de reunión (mesa) centrada entre las sillas. */
+function MeetingStation({ spots, floorW, accent }: { spots: Spot[]; floorW: number; accent: string }) {
   if (spots.length === 0) return null;
   const cx = spots.reduce((a, s) => a + s.x, 0) / spots.length;
   const cy = spots.reduce((a, s) => a + s.y, 0) / spots.length;
-  const w = Math.max(34, floorW * 0.1);
+  const w = Math.max(40, floorW * 0.09);
   return (
     <div
       aria-hidden
@@ -502,25 +600,47 @@ function MeetingTable({ spots, floorW }: { spots: Spot[]; floorW: number }) {
         position: 'absolute',
         left: `${cx}%`,
         top: `${cy}%`,
-        transform: 'translate(-50%, -50%)',
-        width: w,
-        height: w * 0.55,
-        borderRadius: 999,
-        background: 'linear-gradient(180deg, #4a4030 0%, #2e2820 100%)',
-        border: '1px solid rgba(0,0,0,0.4)',
-        boxShadow: '0 4px 10px rgba(0,0,0,0.4)',
+        transform: 'translate(-50%, 16%)',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
-        color: '#a5b4fc',
+        gap: 4,
+        zIndex: 2,
       }}
     >
-      <Users style={{ width: w * 0.22, height: w * 0.22 }} />
+      <div
+        style={{
+          width: w,
+          height: w * 0.56,
+          borderRadius: 14,
+          background: SCENE.node,
+          border: `1px solid ${SCENE.hairline}`,
+          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 14px rgba(0,0,0,0.4)`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: accent,
+        }}
+      >
+        <Users style={{ width: w * 0.26, height: w * 0.26 }} strokeWidth={1.6} />
+      </div>
+      <span
+        className="font-mono"
+        style={{
+          fontSize: Math.max(8, Math.round(w * 0.13)),
+          color: SCENE.inkDim,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        Reunión
+      </span>
     </div>
   );
 }
 
-/** Escritorio cenital (tablero + monitor que prende), dibujado en el mapa. */
+/** Puesto cenital premium (tablero oscuro + pantalla que prende al trabajar). */
 function DeskFurniture({
   x,
   y,
@@ -536,7 +656,7 @@ function DeskFurniture({
   on: boolean;
   big: boolean;
 }) {
-  const w = Math.max(30, floorW * (big ? 0.1 : 0.082));
+  const w = Math.max(38, floorW * (big ? 0.12 : 0.1));
   const h = w * 0.5;
   return (
     <div
@@ -546,36 +666,38 @@ function DeskFurniture({
         left: `${x}%`,
         top: `${y}%`,
         // El mueble se dibuja un poco por delante (abajo) del punto del agente.
-        transform: `translate(-50%, ${h * 0.35}px)`,
+        transform: `translate(-50%, ${h * 0.42}px)`,
         width: w,
         height: h,
         zIndex: Math.round(y * 10) - 1,
       }}
     >
-      {/* Tablero */}
+      {/* Tablero (superficie oscura tipo estación de trabajo) */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
-          borderRadius: '8px 8px 10px 10px',
-          background: 'linear-gradient(180deg, #6b4a32 0%, #4a3220 100%)',
-          boxShadow: '0 5px 12px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08)',
-          border: '1px solid rgba(0,0,0,0.3)',
+          borderRadius: 12,
+          background: `linear-gradient(180deg, ${SCENE.node} 0%, ${SCENE.surface} 100%)`,
+          border: `1px solid ${SCENE.hairline}`,
+          boxShadow: on
+            ? `inset 0 1px 0 rgba(255,255,255,0.04), 0 6px 16px rgba(0,0,0,0.45), 0 0 18px ${accent}33`
+            : 'inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 16px rgba(0,0,0,0.45)',
         }}
       />
-      {/* Monitor contra el borde del fondo */}
+      {/* Pantalla contra el borde del fondo */}
       <div
         style={{
           position: 'absolute',
-          top: h * 0.14,
+          top: h * 0.16,
           left: '50%',
           transform: 'translateX(-50%)',
-          width: w * 0.4,
-          height: h * 0.42,
-          borderRadius: 3,
-          background: '#0c0a14',
-          border: '2px solid #1f1a2e',
-          boxShadow: on ? `0 0 10px ${accent}aa` : 'none',
+          width: w * 0.42,
+          height: h * 0.4,
+          borderRadius: 4,
+          background: '#070912',
+          border: `1px solid ${SCENE.hairlineStrong}`,
+          boxShadow: on ? `0 0 12px ${accent}aa` : 'none',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -584,10 +706,12 @@ function DeskFurniture({
         <div
           style={{
             width: '80%',
-            height: '66%',
+            height: '64%',
             borderRadius: 2,
-            background: on ? `linear-gradient(135deg, ${accent} 0%, ${accent}55 100%)` : 'linear-gradient(135deg,#1a1726,#0e0c16)',
-            opacity: on ? 1 : 0.6,
+            background: on
+              ? `linear-gradient(135deg, ${accent} 0%, ${accent}55 100%)`
+              : 'linear-gradient(135deg,#12172a,#0a0d18)',
+            opacity: on ? 1 : 0.5,
           }}
         />
       </div>
@@ -619,7 +743,9 @@ function AgentView({
 }) {
   const clickable = Boolean(onSelect);
   const active = selected || agent.highlighted;
-  const avatarPx = Math.max(26, floorW * (agent.director ? 0.092 : 0.072));
+  // Avatares MÁS GRANDES (~35% respecto al diseño anterior) y bien separados.
+  const avatarPx = Math.max(38, floorW * (agent.director ? 0.125 : 0.097));
+  const labelFs = Math.max(10, Math.round(avatarPx * 0.17));
 
   return (
     <div
@@ -637,11 +763,12 @@ function AgentView({
           : undefined
       }
       aria-label={`${agent.nombre} — ${agent.rol} · ${estado.label}`}
+      className="mrgo-agent"
       style={{
         position: 'absolute',
         left: `${x}%`,
         top: `${y}%`,
-        transform: 'translate(-50%, -88%)',
+        transform: 'translate(-50%, -86%)',
         transition: 'left 2.6s ease-in-out, top 2.6s ease-in-out',
         zIndex: Math.round(y * 10),
         width: avatarPx,
@@ -651,53 +778,35 @@ function AgentView({
         cursor: clickable ? 'pointer' : 'default',
       }}
     >
-      {/* Etiqueta flotante (siempre visible, chica) */}
+      {/* UNA etiqueta limpia con el nombre (Crown lucide si es director) */}
       <div
         style={{
-          padding: '1px 6px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 8px',
           borderRadius: 999,
-          background: active ? 'rgba(168,120,247,0.96)' : 'rgba(12,10,22,0.82)',
-          border: `1px solid ${active ? 'rgba(168,120,247,0.6)' : 'rgba(120,90,160,0.4)'}`,
-          fontSize: Math.max(8, Math.round(avatarPx * 0.14)),
-          fontWeight: 700,
-          color: '#fff',
+          background: active ? 'rgba(168,85,247,0.95)' : 'rgba(10,13,24,0.85)',
+          border: `1px solid ${active ? 'rgba(199,155,255,0.7)' : SCENE.hairline}`,
+          fontSize: labelFs,
+          fontWeight: 600,
+          color: active ? '#fff' : SCENE.ink,
           whiteSpace: 'nowrap',
-          marginBottom: 1,
-          boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+          marginBottom: 3,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
           pointerEvents: 'none',
         }}
       >
-        {agent.director ? '★ ' : ''}
+        {agent.director && <Crown style={{ width: labelFs, height: labelFs }} strokeWidth={2} />}
         {agent.nombre}
       </div>
-
-      {/* Burbuja de tarea cuando recibió una orden */}
-      {agent.highlighted && !agent.paused && (
-        <div
-          style={{
-            position: 'absolute',
-            top: -6,
-            right: -4,
-            zIndex: 6,
-            padding: '1px 6px',
-            borderRadius: 999,
-            background: 'rgba(168,120,247,0.98)',
-            color: '#fff',
-            fontSize: Math.max(7, Math.round(avatarPx * 0.12)),
-            fontWeight: 800,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-          }}
-        >
-          ● tarea
-        </div>
-      )}
 
       {/* Avatar (respira/flota; se espeja al caminar a la izquierda) */}
       <div
         style={{
           transform: facing === 'left' ? 'scaleX(-1)' : undefined,
-          filter: active ? 'drop-shadow(0 0 9px rgba(168,120,247,0.85))' : undefined,
-          opacity: agent.paused ? 0.6 : 1,
+          filter: active ? 'drop-shadow(0 0 12px rgba(168,85,247,0.9))' : undefined,
+          opacity: agent.paused ? 0.55 : 1,
           lineHeight: 0,
         }}
       >
@@ -715,26 +824,32 @@ function AgentView({
       <div
         aria-hidden
         style={{
-          width: '56%',
-          height: Math.max(4, Math.round(avatarPx * 0.1)),
+          width: '58%',
+          height: Math.max(5, Math.round(avatarPx * 0.1)),
           marginTop: -Math.round(avatarPx * 0.03),
           borderRadius: '50%',
-          background: 'radial-gradient(ellipse, rgba(20,10,35,0.5) 0%, transparent 72%)',
-          filter: 'blur(1px)',
+          background: 'radial-gradient(ellipse, rgba(0,0,0,0.55) 0%, transparent 72%)',
+          filter: 'blur(1.5px)',
           animation: walking ? 'mrgo-step 0.6s ease-in-out infinite' : undefined,
         }}
       />
 
-      {/* Chip de estado (puntito) */}
+      {/* Chip de estado chico (punto + texto) */}
       <span
-        className={`mt-0.5 inline-flex items-center gap-1 rounded-full px-1.5 py-[1px] text-[9px] font-medium ${estado.textCls}`}
-        style={{ background: 'rgba(8,6,16,0.72)', border: '1px solid rgba(100,80,140,0.3)', whiteSpace: 'nowrap', pointerEvents: 'none' }}
+        className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-medium ${estado.textCls}`}
+        style={{ background: 'rgba(8,10,20,0.78)', border: `1px solid ${SCENE.hairline}`, whiteSpace: 'nowrap', pointerEvents: 'none' }}
       >
-        <span className={`h-1 w-1 rounded-full ${estado.dotCls}`} />
+        <span className={`h-1.5 w-1.5 rounded-full ${estado.dotCls}`} />
         {estado.label}
       </span>
 
-      <style>{`@keyframes mrgo-step{0%,100%{transform:scaleX(1);opacity:.5}50%{transform:scaleX(.8);opacity:.32}}`}</style>
+      <style>{`
+        @keyframes mrgo-step{0%,100%{transform:scaleX(1);opacity:.55}50%{transform:scaleX(.8);opacity:.34}}
+        .mrgo-agent{transition:left 2.6s ease-in-out, top 2.6s ease-in-out;}
+        @media (prefers-reduced-motion: reduce){
+          .mrgo-agent{transition:none !important;}
+        }
+      `}</style>
     </div>
   );
 }
@@ -762,12 +877,12 @@ function AgentPanel({
     <div className="mt-3 rounded-xl border border-brand-400/40 bg-slate-900/60 p-4">
       <div className="flex items-start gap-3">
         <div className="shrink-0">
-          <MrGoAvatar color={agent.color} emotion={estado.emotion} size={56} pet petKey={agent.pet} />
+          <MrGoAvatar color={agent.color} emotion={estado.emotion} size={64} pet petKey={agent.pet} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="truncate text-sm font-semibold text-white">
-              {agent.director ? '★ ' : ''}
+            <h3 className="flex items-center gap-1.5 truncate text-sm font-semibold text-white">
+              {agent.director && <Crown className="h-4 w-4 text-brand-400" />}
               {agent.nombre}
             </h3>
             <button
@@ -796,13 +911,13 @@ function AgentPanel({
           {agent.tools && agent.tools.length > 0 && (
             <div className="mt-2">
               <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
-                <Monitor className="h-3 w-3" /> Puede ejecutar
+                <Cpu className="h-3 w-3" /> Puede ejecutar
               </span>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {agent.tools.map((t) => (
                   <span
                     key={t}
-                    className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-[10px] text-amber-300"
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800/60 px-2 py-0.5 font-mono text-[10px] text-amber-300"
                   >
                     <Wrench className="h-2.5 w-2.5 text-amber-400" />
                     {t}

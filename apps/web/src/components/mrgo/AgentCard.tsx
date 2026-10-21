@@ -11,9 +11,12 @@
  * del piso, no van en la tarjeta.
  *
  * La actividad en vivo viene de `useAgentActivity` (playback de la traza real).
+ * Estética alineada al contrato del command-center (superficies #0f1322/#141a2b,
+ * hairlines, tinta fría, radios 12px, font-mono para datos; íconos lucide, CERO
+ * emojis). Firma de props y comportamiento sin cambios: es sólo pulido visual.
  */
 
-import { Send, Wrench, Cpu, AlertTriangle } from 'lucide-react';
+import { Send, Wrench, Cpu, AlertTriangle, Star } from 'lucide-react';
 import { MrGoAvatar } from './MrGoAvatar';
 import type { MrGoColorKey } from './types';
 import type { AgentActivity } from './useAgentActivity';
@@ -37,24 +40,44 @@ export interface AgentCardProps {
   onOrder?: () => void;
 }
 
-/** Punto + etiqueta + color de texto según el estado de actividad. */
-function statusView(activity: AgentActivity | undefined, paused?: boolean) {
-  if (paused) return { label: 'En pausa', dot: 'bg-slate-500', text: 'text-slate-400' };
+// ─── Paleta del command-center (tokens del contrato) ─────────────────────────
+const C = {
+  card: '#0f1322',
+  card2: '#141a2b',
+  hair: 'rgba(150,165,215,.12)',
+  hairStrong: 'rgba(150,165,215,.22)',
+  ink: '#eaeefb',
+  ink2: '#a9b2cc',
+  muted: '#6c7694',
+  brand: '#a855f7',
+  green: '#34d399',
+  amber: '#f5b740',
+  sky: '#7dd3fc',
+  red: '#f87171',
+  slate: '#6c7694',
+} as const;
+
+/** Etiqueta + color + pulso según el estado de actividad. */
+function statusView(
+  activity: AgentActivity | undefined,
+  paused?: boolean,
+): { label: string; color: string; pulse: boolean } {
+  if (paused) return { label: 'En pausa', color: C.slate, pulse: false };
   switch (activity?.state) {
     case 'alert':
-      return { label: 'Atendiendo', dot: 'bg-brand-400 animate-pulse', text: 'text-brand-300' };
+      return { label: 'Atendiendo', color: C.brand, pulse: true };
     case 'thinking':
-      return { label: 'Pensando', dot: 'bg-sky-400 animate-pulse', text: 'text-sky-300' };
+      return { label: 'Pensando', color: C.sky, pulse: true };
     case 'working':
-      return { label: 'Trabajando', dot: 'bg-emerald-400 animate-pulse', text: 'text-emerald-300' };
+      return { label: 'Trabajando', color: C.green, pulse: true };
     case 'success':
-      return { label: 'Listo', dot: 'bg-emerald-400', text: 'text-emerald-300' };
+      return { label: 'Listo', color: C.green, pulse: false };
     case 'blocked':
-      return { label: 'Espera tu OK', dot: 'bg-amber-400 animate-pulse', text: 'text-amber-300' };
+      return { label: 'Espera tu OK', color: C.amber, pulse: true };
     case 'error':
-      return { label: 'Error', dot: 'bg-red-500', text: 'text-red-400' };
+      return { label: 'Error', color: C.red, pulse: false };
     default:
-      return { label: 'Disponible', dot: 'bg-sky-400', text: 'text-sky-300' };
+      return { label: 'Disponible', color: C.sky, pulse: false };
   }
 }
 
@@ -101,7 +124,8 @@ export function AgentCard({
   const emotion = paused ? 'sleepy' : activity?.emotion ?? 'working';
   const total = activity?.totalSteps ?? 0;
   const done = activity?.stepIndex ?? 0;
-  const running = activity?.state === 'thinking' || activity?.state === 'working' || activity?.state === 'alert';
+  const running =
+    activity?.state === 'thinking' || activity?.state === 'working' || activity?.state === 'alert';
   const motor = engine ? `${engine}${model ? ` · ${model}` : ''}` : 'Motor del negocio';
 
   return (
@@ -119,11 +143,15 @@ export function AgentCard({
             }
           : undefined
       }
-      className={`group relative flex flex-col gap-2 rounded-xl border bg-slate-900/50 p-3 text-left transition-colors ${
-        selected
-          ? 'border-brand-400/70 ring-1 ring-brand-400/40'
-          : 'border-slate-700 hover:border-slate-600'
-      } ${onSelect ? 'cursor-pointer' : ''}`}
+      className={`group relative flex flex-col gap-2.5 p-3 text-left transition-[border-color,box-shadow] duration-200 ${
+        onSelect ? 'cursor-pointer' : ''
+      }`}
+      style={{
+        background: C.card,
+        borderRadius: 12,
+        border: `1px solid ${selected ? `${C.brand}b3` : C.hair}`,
+        boxShadow: selected ? `0 0 0 1px ${C.brand}66` : 'none',
+      }}
     >
       {/* Encabezado: avatar + nombre + estado */}
       <div className="flex items-start gap-2.5">
@@ -132,23 +160,36 @@ export function AgentCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            {director && <span className="text-amber-400" aria-hidden>★</span>}
-            <span className="truncate text-sm font-semibold text-white">{nombre}</span>
+            {director && <Star className="h-3 w-3 shrink-0" style={{ color: C.amber }} aria-hidden />}
+            <span className="truncate text-sm font-semibold" style={{ color: C.ink }}>
+              {nombre}
+            </span>
           </div>
-          <p className="truncate text-[11px] text-slate-500">{rol}</p>
+          <p className="truncate text-[11px]" style={{ color: C.muted }}>
+            {rol}
+          </p>
         </div>
         <span
-          className={`shrink-0 inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/70 px-1.5 py-0.5 text-[10px] font-medium ${st.text}`}
+          className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium"
+          style={{
+            borderRadius: 999,
+            border: `1px solid ${st.color}3d`,
+            background: `${st.color}14`,
+            color: st.color,
+          }}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${st.pulse ? 'animate-pulse' : ''}`}
+            style={{ background: st.color }}
+          />
           {st.label}
         </span>
       </div>
 
       {/* Motor + modelo de IA */}
-      <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+      <div className="flex items-center gap-1.5 text-[10px]" style={{ color: C.muted }}>
         <Cpu className="h-3 w-3 shrink-0" />
-        <span className="truncate" title={motor}>
+        <span className="truncate font-mono" title={motor}>
           {motor}
         </span>
       </div>
@@ -156,22 +197,21 @@ export function AgentCard({
       {/* Acción actual */}
       <div className="flex items-center gap-1.5 text-[11px]">
         {running && activity?.currentTool ? (
-          <Wrench className="h-3 w-3 shrink-0 text-amber-400" />
+          <Wrench className="h-3 w-3 shrink-0" style={{ color: C.amber }} />
         ) : null}
-        <span className={`truncate ${running ? 'text-amber-200' : 'text-slate-400'}`}>
+        <span className="truncate" style={{ color: running ? C.amber : C.ink2 }}>
           {actionLine(activity, toolLabel)}
         </span>
       </div>
 
       {/* Medidor de progreso: un puntito por paso de la corrida */}
       {total > 0 && (
-        <div className="flex items-center gap-1" aria-label={`Paso ${done} de ${total}`}>
+        <div className="flex items-center gap-1 font-mono" aria-label={`Paso ${done} de ${total}`}>
           {Array.from({ length: Math.min(total, 10) }).map((_, i) => (
             <span
               key={i}
-              className={`h-1.5 flex-1 rounded-full transition-colors ${
-                i < done ? 'bg-brand-400' : 'bg-slate-700'
-              }`}
+              className="h-1.5 flex-1 rounded-full transition-colors duration-200"
+              style={{ background: i < done ? C.brand : C.hairStrong }}
             />
           ))}
         </div>
@@ -179,9 +219,18 @@ export function AgentCard({
 
       {/* Tira de crash cuando un paso falló */}
       {activity?.lastError && activity.state === 'error' && (
-        <div className="flex items-start gap-1.5 rounded-md border border-red-500/30 bg-red-500/5 px-2 py-1.5">
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-red-400" />
-          <span className="line-clamp-2 text-[10px] text-red-300">{activity.lastError}</span>
+        <div
+          className="flex items-start gap-1.5 px-2 py-1.5"
+          style={{
+            borderRadius: 10,
+            border: `1px solid ${C.red}4d`,
+            background: `${C.red}0d`,
+          }}
+        >
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" style={{ color: C.red }} />
+          <span className="line-clamp-2 text-[10px]" style={{ color: C.red }}>
+            {activity.lastError}
+          </span>
         </div>
       )}
 
@@ -193,7 +242,13 @@ export function AgentCard({
             e.stopPropagation();
             onOrder();
           }}
-          className="mt-0.5 inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/60 px-2.5 py-1.5 text-[11px] font-medium text-slate-200 opacity-0 transition-opacity hover:bg-slate-700 focus:opacity-100 group-hover:opacity-100"
+          className="mt-0.5 inline-flex cursor-pointer items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium opacity-0 transition-[opacity,border-color,background] duration-200 focus:opacity-100 group-hover:opacity-100"
+          style={{
+            borderRadius: 10,
+            border: `1px solid ${C.hairStrong}`,
+            background: C.card2,
+            color: C.ink2,
+          }}
         >
           <Send className="h-3 w-3" />
           Darle una orden

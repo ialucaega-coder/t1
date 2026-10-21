@@ -14,11 +14,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save, Check, Users } from 'lucide-react';
+import { Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
 import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
 import { AgentCard } from '@/components/mrgo/AgentCard';
+import { CommandPanel, type CommandPanelAgent } from '@/components/mrgo/CommandPanel';
 import { useAgentActivity } from '@/components/mrgo/useAgentActivity';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
@@ -89,24 +90,6 @@ const ROLE_TOOL_KEYS: Record<string, string[]> = {
 const MEMORY_PROFILE_MAX = 2000;
 const MEMORY_FACT_MAX = 300;
 const MEMORY_FACTS_MAX = 50;
-
-/** Clases + etiqueta del badge según el estado de ejecución de la acción. */
-function statusBadge(status: ActionResult['status']): { label: string; cls: string } {
-  switch (status) {
-    case 'ejecutado':
-      return { label: 'Ejecutado', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
-    case 'simulado':
-      return { label: 'Simulado', cls: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20' };
-    case 'omitido':
-      return { label: 'Omitido', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
-    case 'no_soportado':
-      return { label: 'No soportado', cls: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
-    case 'error':
-      return { label: 'Error', cls: 'bg-red-500/10 text-red-400 border-red-500/20' };
-    default:
-      return { label: status, cls: 'bg-slate-500/10 text-slate-400 border-slate-500/20' };
-  }
-}
 
 export default function OficinaPage() {
   const { toast } = useToast();
@@ -238,6 +221,34 @@ export default function OficinaPage() {
     return m;
   }, [agents]);
 
+  // Evento más reciente del agente seleccionado: alimenta el CommandPanel
+  // (log de pasos + acción pendiente de ese agente).
+  const selEvent = useMemo(
+    () => (seleccionado ? feed.find((e) => e.agentKey === seleccionado) ?? null : null),
+    [seleccionado, feed],
+  );
+
+  // Datos del agente seleccionado para el CommandPanel (null = estado vacío).
+  const selAgent: CommandPanelAgent | null = useMemo(() => {
+    if (!seleccionado) return null;
+    const role = roleByKey.get(seleccionado);
+    const eng = engineByKey.get(seleccionado);
+    const rol =
+      seleccionado === CEO_AGENT_KEY
+        ? 'Director'
+        : role?.descripcion
+          ? role.descripcion.split(/[,.]/)[0]
+          : 'Agente';
+    return {
+      key: seleccionado,
+      nombre: role?.nombre ?? seleccionado,
+      rol,
+      color: colorKeyForAgent(seleccionado),
+      engine: eng?.engine,
+      model: eng?.model,
+    };
+  }, [seleccionado, roleByKey, engineByKey]);
+
   // Agentes activos listos para pintar, con CEO siempre primero.
   const { ceo, equipo } = useMemo(() => {
     const activos: DeskAgent[] = agents
@@ -354,8 +365,10 @@ export default function OficinaPage() {
       const emotion = mapEmotion(res.emotion);
       const esFallback = res.stoppedReason === 'no_engine';
 
-      // Ilumina el escritorio del agente que corrió y actualiza su emoción.
+      // Ilumina el escritorio del agente que corrió, lo selecciona (para que el
+      // CommandPanel muestre su detalle) y actualiza su emoción.
       setResaltado(res.agent);
+      setSeleccionado(res.agent);
       setEmociones((prev) => ({ ...prev, [res.agent]: emotion }));
 
       // Reproduce la traza real sobre la tarjeta del agente (pensando →
@@ -480,6 +493,7 @@ export default function OficinaPage() {
                 onSelect={(key) => setSeleccionado((prev) => (prev === key ? null : key))}
                 onOrderAgent={ordenarAAgente}
                 onTogglePause={togglePausa}
+                showDetailPanel={false}
               />
             </div>
           </section>
@@ -526,124 +540,64 @@ export default function OficinaPage() {
               </label>
             </div>
 
-            {/* Feed — Lo que está pasando */}
+            {/* CommandPanel — detalle del agente seleccionado + log + confirmación */}
+            <CommandPanel
+              agent={selAgent}
+              activity={seleccionado ? activity[seleccionado] : undefined}
+              steps={selEvent?.steps}
+              pending={selEvent?.pending ?? null}
+              confirming={selEvent ? confirmando === selEvent.id : false}
+              toolLabel={toolNombre}
+              onConfirm={selEvent ? () => confirmarPendiente(selEvent) : undefined}
+              onDiscard={selEvent ? () => cancelarPendiente(selEvent) : undefined}
+            />
+
+            {/* Actividad reciente — historial compacto. El detalle vivo (log +
+                confirmación) de cada corrida vive en el CommandPanel de arriba;
+                acá sólo el registro clickeable para volver a abrir un agente. */}
             <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
               <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
                 <Radio className="h-4 w-4 text-brand-400" />
-                Lo que está pasando
+                Actividad reciente
               </h2>
 
               {feed.length === 0 ? (
-                <p className="py-6 text-center text-xs text-slate-500">
+                <p className="py-4 text-center text-xs text-slate-500">
                   Todavía no diste ninguna orden. Escribí arriba y Mr Go repartirá el trabajo.
                 </p>
               ) : (
-                <ul className="space-y-3">
-                  {feed.map((ev) => (
-                    <li
-                      key={ev.id}
-                      className="rounded-lg border border-slate-700 bg-slate-900/40 p-3"
-                    >
-                      <div className="flex items-start gap-3">
+                <ul className="space-y-2">
+                  {feed.slice(0, 8).map((ev) => (
+                    <li key={ev.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSeleccionado(ev.agentKey)}
+                        className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                          seleccionado === ev.agentKey
+                            ? 'border-brand-400/60 bg-slate-900/60'
+                            : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'
+                        }`}
+                      >
                         <div className="shrink-0">
-                          <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={44} />
+                          <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={28} alive={false} />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-sm font-medium text-white">
-                              {ev.agentNombre}
-                            </span>
+                            <span className="truncate text-xs font-medium text-white">{ev.agentNombre}</span>
                             <span className="shrink-0 text-[10px] text-slate-500">{ev.hora}</span>
                           </div>
-                          {ev.finalMessage && (
-                            <p className="mt-0.5 text-xs text-slate-300">{ev.finalMessage}</p>
-                          )}
-
-                          {/* Traza de pasos del loop: cada tool + su resultado */}
-                          {ev.steps.length > 0 && (
-                            <ol className="mt-2 space-y-1.5">
-                              {ev.steps.map((step, i) => {
-                                const badge = statusBadge(step.result.status);
-                                return (
-                                  <li key={i} className="rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1.5">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="flex items-center gap-1.5 text-[11px] text-amber-300">
-                                        <Wrench className="h-3 w-3 text-amber-400" />
-                                        <span className="text-slate-500">{i + 1}.</span> {toolNombre(step.tool)}
-                                      </span>
-                                      <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${badge.cls}`}>
-                                        {badge.label}
-                                      </span>
-                                    </div>
-                                    {step.thought && (
-                                      <p className="mt-1 text-[10px] italic text-slate-500">{step.thought}</p>
-                                    )}
-                                    <p className="mt-1 text-[10px] text-slate-400">{step.result.detail}</p>
-                                  </li>
-                                );
-                              })}
-                            </ol>
-                          )}
-
-                          {/* Acción pendiente de confirmación (externa en vivo) */}
-                          {ev.pending && (
-                            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
-                              <p className="flex items-center gap-1.5 text-[11px] font-medium text-amber-300">
-                                <AlertTriangle className="h-3 w-3" />
-                                Acción que requiere tu confirmación
-                              </p>
-                              <p className="mt-1 text-[11px] text-slate-300">
-                                <span className="text-amber-300">{toolNombre(ev.pending.tool)}</span>
-                                {ev.pending.thought ? ` — ${ev.pending.thought}` : ''}
-                              </p>
-                              <div className="mt-2 flex items-center gap-2">
-                                <button
-                                  onClick={() => confirmarPendiente(ev)}
-                                  disabled={confirmando === ev.id}
-                                  className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
-                                >
-                                  {confirmando === ev.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                                  Confirmar y ejecutar
-                                </button>
-                                <button
-                                  onClick={() => cancelarPendiente(ev)}
-                                  disabled={confirmando === ev.id}
-                                  className="rounded-md border border-slate-600 px-2.5 py-1 text-[11px] text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
-                                >
-                                  Descartar
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Resultado tras confirmar la acción pendiente */}
-                          {ev.pendingResult && (
-                            <div className="mt-2 rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1.5">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="flex items-center gap-1.5 text-[11px] text-slate-300">
-                                  <Check className="h-3 w-3 text-emerald-400" /> {toolNombre(ev.pendingResult.action)}
-                                </span>
-                                <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusBadge(ev.pendingResult.status).cls}`}>
-                                  {statusBadge(ev.pendingResult.status).label}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-[10px] text-slate-400">{ev.pendingResult.detail}</p>
-                            </div>
-                          )}
-
-                          {/* Corrida sin pasos ni final (ej: maxSteps/empty) */}
-                          {ev.steps.length === 0 && !ev.pending && !ev.pendingResult && !ev.finalMessage && (
-                            <p className="mt-0.5 text-xs text-slate-500">Mr Go no realizó acciones.</p>
-                          )}
-
-                          {ev.esFallback && (
-                            <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-500">
-                              <Info className="h-3 w-3" />
-                              Sin motor de IA configurado.
-                            </div>
-                          )}
+                          <p className="truncate text-[11px] text-slate-400">
+                            {ev.esFallback
+                              ? 'Sin motor de IA'
+                              : ev.pending
+                                ? 'Dejó una acción esperando tu OK'
+                                : ev.finalMessage || `${ev.steps.length} paso(s)`}
+                          </p>
                         </div>
-                      </div>
+                        {ev.pending && !ev.pendingResult && (
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        )}
+                      </button>
                     </li>
                   ))}
                 </ul>
