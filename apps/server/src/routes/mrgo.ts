@@ -26,8 +26,10 @@ import {
   MAX_MODEL_LEN,
   loadAgents,
   saveAgents,
+  isValidToolKey,
 } from '../services/mrgo/agents';
 import { orchestrate } from '../services/mrgo/orchestrator';
+import { runAgentLoop } from '../services/mrgo/agent-loop';
 import { executeAction } from '../services/actions/executor';
 import { loadMemory, saveMemory, MAX_PROFILE_LEN, MAX_FACT_LEN, MAX_FACTS } from '../services/mrgo/memory';
 
@@ -51,6 +53,21 @@ const orchestrateSchema = z.object({
   // Si viene true y la decisión propone un tool, se EJECUTA (acciones externas
   // en vivo). Por defecto no ejecuta (o simula las externas): solo rutea.
   execute: z.boolean().optional(),
+});
+
+const runSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  channel: z.string().trim().max(40).optional(),
+  // execute:true → el loop corre EN VIVO (y las acciones externas pausan
+  // esperando confirmación). Por defecto dry_run (externas simuladas).
+  execute: z.boolean().optional(),
+  // Tope de pasos del loop (default 5 en el servicio; techo duro 10).
+  maxSteps: z.number().int().min(1).max(10).optional(),
+});
+
+const confirmSchema = z.object({
+  tool: z.string().trim().min(1).max(60),
+  params: z.record(z.unknown()).optional(),
 });
 
 const memorySchema = z.object({
@@ -112,6 +129,47 @@ router.post(
       : null;
 
     res.json({ ...decision, execution });
+  })
+);
+
+// Loop agéntico (tool-calling real): Mr Go encadena tools hasta resolver el
+// pedido o pausar. Sin `execute` corre en dry_run (externas simuladas, sirve de
+// vista previa); con execute:true va en vivo y las acciones EXTERNAS pausan el
+// loop (stoppedReason:'needs_confirmation' + pending) para que el dueño las
+// confirme con POST /confirm. Devuelve la traza completa de pasos.
+router.post(
+  '/run',
+  requireAuth,
+  validate(runSchema),
+  asyncHandler(async (req, res) => {
+    const result = await runAgentLoop({
+      businessId: req.auth!.businessId,
+      text: req.body.text,
+      channel: req.body.channel,
+      mode: req.body.execute ? 'live' : 'dry_run',
+      maxSteps: req.body.maxSteps,
+    });
+    res.json(result);
+  })
+);
+
+// Confirma y EJECUTA EN VIVO una acción sensible que el loop dejó pendiente
+// (link de pago, WhatsApp, campaña, reserva). El dueño aprueba explícitamente
+// cada acción saliente: sin esto, el loop nunca manda nada al exterior solo.
+router.post(
+  '/confirm',
+  requireAuth,
+  validate(confirmSchema),
+  asyncHandler(async (req, res) => {
+    const { tool, params } = req.body as { tool: string; params?: Record<string, unknown> };
+    if (!isValidToolKey(tool)) return res.status(400).json({ error: 'Tool desconocido' });
+    const result = await executeAction({
+      businessId: req.auth!.businessId,
+      action: tool,
+      params: params ?? {},
+      mode: 'live',
+    });
+    res.json(result);
   })
 );
 
