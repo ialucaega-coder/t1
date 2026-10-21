@@ -14,14 +14,15 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save } from 'lucide-react';
+import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save, Check } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
 import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
   getMrGoAgents,
-  orchestrate,
+  runMrGo,
+  confirmMrGo,
   getMrGoMemory,
   saveMrGoMemory,
   colorKeyForAgent,
@@ -30,7 +31,9 @@ import {
   type MrGoAgentConfig,
   type MrGoRole,
   type MrGoTool,
-  type OrchestratorDecision,
+  type AgentStep,
+  type PendingAction,
+  type StopReason,
   type ActionResult,
 } from '@/lib/api/mrgo';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -46,15 +49,22 @@ interface DeskAgent {
   activo: boolean;
 }
 
-/** Un evento del feed "Lo que está pasando". */
+/** Un evento del feed "Lo que está pasando": una CORRIDA del loop agéntico. */
 interface FeedEvent {
   id: string;
   agentKey: string;
   agentNombre: string;
   emotion: MrGoEmotion;
-  reasoning: string;
-  toolNombre?: string;
-  execution?: ActionResult | null;
+  /** Respuesta final de Mr Go (vacía si pausó por confirmación). */
+  finalMessage: string;
+  /** Traza de pasos ejecutados/simulados, en orden. */
+  steps: AgentStep[];
+  stoppedReason: StopReason;
+  /** Acción pendiente de confirmación (externa en vivo), si la hay. */
+  pending?: PendingAction;
+  /** Resultado tras confirmar la acción pendiente (una vez aprobada). */
+  pendingResult?: ActionResult | null;
+  /** true si el motor de IA no estaba disponible (no_engine). */
   esFallback: boolean;
   hora: string;
 }
@@ -77,11 +87,6 @@ const ROLE_TOOL_KEYS: Record<string, string[]> = {
 const MEMORY_PROFILE_MAX = 2000;
 const MEMORY_FACT_MAX = 300;
 const MEMORY_FACTS_MAX = 50;
-
-/** Detecta si la decisión degradó al routing por defecto (sin LLM / falló). */
-function esDecisionFallback(d: OrchestratorDecision): boolean {
-  return d.reasoning.trim().toLowerCase().startsWith('routing por defecto');
-}
 
 /** Clases + etiqueta del badge según el estado de ejecución de la acción. */
 function statusBadge(status: ActionResult['status']): { label: string; cls: string } {
@@ -126,6 +131,8 @@ export default function OficinaPage() {
   // Agentes pausados (solo foco visual de la oficina; no cambia el backend).
   const [pausados, setPausados] = useState<Set<string>>(new Set());
   const [feed, setFeed] = useState<FeedEvent[]>([]);
+  // Id del evento cuya acción pendiente se está confirmando (para el spinner).
+  const [confirmando, setConfirmando] = useState<string | null>(null);
   const ordenRef = useRef<HTMLTextAreaElement>(null);
 
   // Memoria de Mr Go (profile + facts). Se carga aparte de los agentes.
@@ -316,40 +323,49 @@ export default function OficinaPage() {
     });
   }
 
+  /** Nombre legible de un tool (del catálogo) o su clave si no está. */
+  function toolNombre(key: string): string {
+    return toolByKey.get(key)?.nombre ?? key;
+  }
+
   async function enviarOrden() {
     const text = orden.trim();
     if (!text || enviando) return;
     setEnviando(true);
     try {
-      const decision = await orchestrate(text, undefined, ejecutarEnVivo);
-      const role = roleByKey.get(decision.nextAgent);
-      const emotion = mapEmotion(decision.emotion);
-      const esFallback = esDecisionFallback(decision);
+      // El loop encadena tools hasta resolver o pausar. execute=true → en vivo
+      // (las acciones externas pausan esperando confirmación).
+      const res = await runMrGo(text, undefined, ejecutarEnVivo);
+      const role = roleByKey.get(res.agent);
+      const emotion = mapEmotion(res.emotion);
+      const esFallback = res.stoppedReason === 'no_engine';
 
-      // Ilumina el escritorio del agente elegido y actualiza su emoción.
-      setResaltado(decision.nextAgent);
-      setEmociones((prev) => ({ ...prev, [decision.nextAgent]: emotion }));
+      // Ilumina el escritorio del agente que corrió y actualiza su emoción.
+      setResaltado(res.agent);
+      setEmociones((prev) => ({ ...prev, [res.agent]: emotion }));
 
       const evento: FeedEvent = {
         id: crypto.randomUUID(),
-        agentKey: decision.nextAgent,
-        agentNombre: role?.nombre ?? decision.nextAgent,
+        agentKey: res.agent,
+        agentNombre: role?.nombre ?? res.agent,
         emotion,
-        reasoning: decision.reasoning || 'Sin explicación.',
-        toolNombre: decision.tool ? toolByKey.get(decision.tool)?.nombre ?? decision.tool : undefined,
-        execution: decision.execution,
+        finalMessage: res.finalMessage,
+        steps: res.steps,
+        stoppedReason: res.stoppedReason,
+        pending: res.pending,
         esFallback,
         hora: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
       };
       setFeed((prev) => [evento, ...prev].slice(0, 30));
       setOrden('');
 
-      toast({
-        type: esFallback ? 'info' : 'success',
-        message: esFallback
-          ? `Sin IA configurada: la orden fue a ${evento.agentNombre} por defecto.`
-          : `Mr Go derivó la orden a ${evento.agentNombre}.`,
-      });
+      if (esFallback) {
+        toast({ type: 'info', message: 'Sin motor de IA configurado: Mr Go no pudo ejecutar la orden.' });
+      } else if (res.stoppedReason === 'needs_confirmation') {
+        toast({ type: 'info', message: `Mr Go dejó una acción esperando tu confirmación.` });
+      } else {
+        toast({ type: 'success', message: `Mr Go resolvió la orden en ${res.steps.length} paso(s).` });
+      }
     } catch (err) {
       toast({
         type: 'error',
@@ -358,6 +374,31 @@ export default function OficinaPage() {
     } finally {
       setEnviando(false);
     }
+  }
+
+  /** Confirma la acción pendiente de un evento: la ejecuta EN VIVO y guarda el resultado. */
+  async function confirmarPendiente(ev: FeedEvent) {
+    if (!ev.pending || confirmando) return;
+    setConfirmando(ev.id);
+    try {
+      const result = await confirmMrGo(ev.pending.tool, ev.pending.params);
+      setFeed((prev) =>
+        prev.map((e) => (e.id === ev.id ? { ...e, pending: undefined, pendingResult: result } : e)),
+      );
+      toast({
+        type: result.ok ? 'success' : 'error',
+        message: result.ok ? 'Acción confirmada y ejecutada.' : `No se pudo ejecutar: ${result.detail}`,
+      });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo confirmar la acción.' });
+    } finally {
+      setConfirmando(null);
+    }
+  }
+
+  /** Descarta la acción pendiente sin ejecutarla. */
+  function cancelarPendiente(ev: FeedEvent) {
+    setFeed((prev) => prev.map((e) => (e.id === ev.id ? { ...e, pending: undefined } : e)));
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -495,33 +536,91 @@ export default function OficinaPage() {
                             </span>
                             <span className="shrink-0 text-[10px] text-slate-500">{ev.hora}</span>
                           </div>
-                          <p className="mt-0.5 text-xs text-slate-400">{ev.reasoning}</p>
+                          {ev.finalMessage && (
+                            <p className="mt-0.5 text-xs text-slate-300">{ev.finalMessage}</p>
+                          )}
 
-                          {ev.toolNombre && (
+                          {/* Traza de pasos del loop: cada tool + su resultado */}
+                          {ev.steps.length > 0 && (
+                            <ol className="mt-2 space-y-1.5">
+                              {ev.steps.map((step, i) => {
+                                const badge = statusBadge(step.result.status);
+                                return (
+                                  <li key={i} className="rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1.5">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="flex items-center gap-1.5 text-[11px] text-amber-300">
+                                        <Wrench className="h-3 w-3 text-amber-400" />
+                                        <span className="text-slate-500">{i + 1}.</span> {toolNombre(step.tool)}
+                                      </span>
+                                      <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${badge.cls}`}>
+                                        {badge.label}
+                                      </span>
+                                    </div>
+                                    {step.thought && (
+                                      <p className="mt-1 text-[10px] italic text-slate-500">{step.thought}</p>
+                                    )}
+                                    <p className="mt-1 text-[10px] text-slate-400">{step.result.detail}</p>
+                                  </li>
+                                );
+                              })}
+                            </ol>
+                          )}
+
+                          {/* Acción pendiente de confirmación (externa en vivo) */}
+                          {ev.pending && (
+                            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+                              <p className="flex items-center gap-1.5 text-[11px] font-medium text-amber-300">
+                                <AlertTriangle className="h-3 w-3" />
+                                Acción que requiere tu confirmación
+                              </p>
+                              <p className="mt-1 text-[11px] text-slate-300">
+                                <span className="text-amber-300">{toolNombre(ev.pending.tool)}</span>
+                                {ev.pending.thought ? ` — ${ev.pending.thought}` : ''}
+                              </p>
+                              <div className="mt-2 flex items-center gap-2">
+                                <button
+                                  onClick={() => confirmarPendiente(ev)}
+                                  disabled={confirmando === ev.id}
+                                  className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                                >
+                                  {confirmando === ev.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                                  Confirmar y ejecutar
+                                </button>
+                                <button
+                                  onClick={() => cancelarPendiente(ev)}
+                                  disabled={confirmando === ev.id}
+                                  className="rounded-md border border-slate-600 px-2.5 py-1 text-[11px] text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
+                                >
+                                  Descartar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Resultado tras confirmar la acción pendiente */}
+                          {ev.pendingResult && (
                             <div className="mt-2 rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1.5">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="flex items-center gap-1.5 text-[11px] text-amber-300">
-                                  <Wrench className="h-3 w-3 text-amber-400" />
-                                  {ev.toolNombre}
+                                <span className="flex items-center gap-1.5 text-[11px] text-slate-300">
+                                  <Check className="h-3 w-3 text-emerald-400" /> {toolNombre(ev.pendingResult.action)}
                                 </span>
-                                {ev.execution && (
-                                  <span
-                                    className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusBadge(ev.execution.status).cls}`}
-                                  >
-                                    {statusBadge(ev.execution.status).label}
-                                  </span>
-                                )}
+                                <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusBadge(ev.pendingResult.status).cls}`}>
+                                  {statusBadge(ev.pendingResult.status).label}
+                                </span>
                               </div>
-                              {ev.execution && (
-                                <p className="mt-1 text-[10px] text-slate-400">{ev.execution.detail}</p>
-                              )}
+                              <p className="mt-1 text-[10px] text-slate-400">{ev.pendingResult.detail}</p>
                             </div>
+                          )}
+
+                          {/* Corrida sin pasos ni final (ej: maxSteps/empty) */}
+                          {ev.steps.length === 0 && !ev.pending && !ev.pendingResult && !ev.finalMessage && (
+                            <p className="mt-0.5 text-xs text-slate-500">Mr Go no realizó acciones.</p>
                           )}
 
                           {ev.esFallback && (
                             <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-500">
                               <Info className="h-3 w-3" />
-                              Decisión por defecto (sin motor de IA configurado).
+                              Sin motor de IA configurado.
                             </div>
                           )}
                         </div>

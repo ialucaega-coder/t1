@@ -146,6 +146,57 @@ export function saveMrGoAgents(agents: MrGoAgentConfig[]) {
   return httpClient.put<{ agents: MrGoAgentConfig[] }>('/mrgo/agents', { agents });
 }
 
+// ─── Loop agéntico (tool-calling real) ───────────────────────────────────────
+
+/** Un paso ya ejecutado (o simulado) del loop: el tool, sus params y el resultado. */
+export interface AgentStep {
+  tool: string;
+  params: Record<string, unknown>;
+  /** Razonamiento breve del modelo para ese paso (opcional). */
+  thought?: string;
+  result: ActionResult;
+}
+
+/** Acción propuesta que quedó PENDIENTE de confirmación (externa en modo live). */
+export interface PendingAction {
+  tool: string;
+  params: Record<string, unknown>;
+  thought?: string;
+  kind: 'interno' | 'externo';
+}
+
+/** Por qué se detuvo el loop. */
+export type StopReason = 'final' | 'max_steps' | 'needs_confirmation' | 'no_engine' | 'empty';
+
+/** Resultado de POST /mrgo/run: la traza completa de la corrida del loop. */
+export interface AgentLoopResult {
+  /** Agente-rol que corrió el loop. */
+  agent: string;
+  emotion: string;
+  steps: AgentStep[];
+  finalMessage: string;
+  stoppedReason: StopReason;
+  /** Presente sólo cuando stoppedReason='needs_confirmation'. */
+  pending?: PendingAction;
+}
+
+/**
+ * Corre el loop agéntico: Mr Go encadena tools hasta resolver el pedido. Sin
+ * `execute` va en dry_run (externas simuladas, vista previa); con execute=true va
+ * en vivo y las acciones externas pausan esperando confirmación (ver confirmMrGo).
+ */
+export function runMrGo(text: string, channel?: string, execute = false, maxSteps?: number) {
+  return httpClient.post<AgentLoopResult>('/mrgo/run', { text, channel, execute, maxSteps });
+}
+
+/**
+ * Confirma y EJECUTA EN VIVO una acción sensible que el loop dejó pendiente
+ * (link de pago, WhatsApp, etc.). Devuelve el resultado de la ejecución.
+ */
+export function confirmMrGo(tool: string, params?: Record<string, unknown>) {
+  return httpClient.post<ActionResult>('/mrgo/confirm', { tool, params });
+}
+
 /**
  * Memoria por negocio de Mr Go: `profile` (texto libre: qué es el negocio, tono,
  * reglas) + `facts` (hechos/notas recientes). Límites del backend: profile máx
