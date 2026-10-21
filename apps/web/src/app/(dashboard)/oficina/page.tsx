@@ -14,10 +14,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save, Check } from 'lucide-react';
+import { Send, Loader2, Building2, Radio, Wrench, Info, AlertTriangle, Brain, Plus, Trash2, Save, Check, Users } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
 import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
+import { AgentCard } from '@/components/mrgo/AgentCard';
+import { useAgentActivity } from '@/components/mrgo/useAgentActivity';
 import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
   getMrGoAgents,
@@ -135,6 +137,10 @@ export default function OficinaPage() {
   const [confirmando, setConfirmando] = useState<string | null>(null);
   const ordenRef = useRef<HTMLTextAreaElement>(null);
 
+  // Actividad en vivo de cada Mr Go: la máquina de estados que reproduce la
+  // traza real de la corrida (pensando → trabajando → listo) sobre cada tarjeta.
+  const { activity, play } = useAgentActivity();
+
   // Memoria de Mr Go (profile + facts). Se carga aparte de los agentes.
   const [memProfile, setMemProfile] = useState('');
   const [memFacts, setMemFacts] = useState<string[]>([]);
@@ -223,6 +229,14 @@ export default function OficinaPage() {
     for (const t of tools) m.set(t.key, t);
     return m;
   }, [tools]);
+
+  // Motor + modelo de IA por agente (para la tarjeta rica). Opcionales: si el
+  // agente no los define, la tarjeta muestra "Motor del negocio".
+  const engineByKey = useMemo(() => {
+    const m = new Map<string, { engine?: string; model?: string }>();
+    for (const a of agents) m.set(a.key, { engine: a.llmProvider, model: a.llmModel });
+    return m;
+  }, [agents]);
 
   // Agentes activos listos para pintar, con CEO siempre primero.
   const { ceo, equipo } = useMemo(() => {
@@ -343,6 +357,11 @@ export default function OficinaPage() {
       // Ilumina el escritorio del agente que corrió y actualiza su emoción.
       setResaltado(res.agent);
       setEmociones((prev) => ({ ...prev, [res.agent]: emotion }));
+
+      // Reproduce la traza real sobre la tarjeta del agente (pensando →
+      // trabajando por cada tool → listo / espera-tu-OK / error). Si no hubo
+      // motor de IA no reproducimos nada: la tarjeta queda "Disponible".
+      if (!esFallback) play(res.agent, res.steps, { stoppedReason: res.stoppedReason });
 
       const evento: FeedEvent = {
         id: crypto.randomUUID(),
@@ -729,6 +748,56 @@ export default function OficinaPage() {
                 {guardandoMem ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 {guardandoMem ? 'Guardando…' : 'Guardar memoria'}
               </button>
+            </div>
+          </section>
+
+          {/* Tira de equipo — una tarjeta por Mr Go: estado · motor · acción
+              actual · progreso de la corrida · tira de crash. (Etapa 1) */}
+          <section className="lg:col-span-10">
+            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
+                  <Users className="h-4 w-4 text-brand-400" />
+                  Tu equipo Mr Go
+                </h2>
+                <span className="text-xs text-slate-500">
+                  {(ceo ? 1 : 0) + equipo.length} agentes
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {ceo && (
+                  <AgentCard
+                    nombre={ceo.nombre}
+                    rol="Director"
+                    color={colorKeyForAgent(ceo.key)}
+                    engine={engineByKey.get(ceo.key)?.engine}
+                    model={engineByKey.get(ceo.key)?.model}
+                    activity={activity[ceo.key]}
+                    director
+                    paused={pausados.has(ceo.key)}
+                    selected={seleccionado === ceo.key}
+                    toolLabel={toolNombre}
+                    onSelect={() => setSeleccionado((p) => (p === ceo.key ? null : ceo.key))}
+                    onOrder={() => ordenarAAgente(ceo.key)}
+                  />
+                )}
+                {equipo.map((a) => (
+                  <AgentCard
+                    key={a.key}
+                    nombre={a.nombre}
+                    rol={a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente'}
+                    color={colorKeyForAgent(a.key)}
+                    engine={engineByKey.get(a.key)?.engine}
+                    model={engineByKey.get(a.key)?.model}
+                    activity={activity[a.key]}
+                    paused={pausados.has(a.key)}
+                    selected={seleccionado === a.key}
+                    toolLabel={toolNombre}
+                    onSelect={() => setSeleccionado((p) => (p === a.key ? null : a.key))}
+                    onOrder={() => ordenarAAgente(a.key)}
+                  />
+                ))}
+              </div>
             </div>
           </section>
         </div>
