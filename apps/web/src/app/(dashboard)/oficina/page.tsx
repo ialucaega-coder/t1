@@ -113,6 +113,9 @@ export default function OficinaPage() {
   const [resaltado, setResaltado] = useState<string | null>(null);
   // Escritorio seleccionado por click (abre el panel del agente).
   const [seleccionado, setSeleccionado] = useState<string | null>(null);
+  // Señal de delegación para el piso: al cambiar el nonce, vuela un sobre
+  // del CEO al agente que atendió la orden.
+  const [delivery, setDelivery] = useState<{ to: string; nonce: number } | null>(null);
   // Agentes pausados (solo foco visual de la oficina; no cambia el backend).
   const [pausados, setPausados] = useState<Set<string>>(new Set());
   const [feed, setFeed] = useState<FeedEvent[]>([]);
@@ -122,7 +125,7 @@ export default function OficinaPage() {
 
   // Actividad en vivo de cada Mr Go: la máquina de estados que reproduce la
   // traza real de la corrida (pensando → trabajando → listo) sobre cada tarjeta.
-  const { activity, play } = useAgentActivity();
+  const { activity, play, reset: resetActivity } = useAgentActivity();
 
   // Memoria de Mr Go (profile + facts). Se carga aparte de los agentes.
   const [memProfile, setMemProfile] = useState('');
@@ -374,7 +377,11 @@ export default function OficinaPage() {
       // Reproduce la traza real sobre la tarjeta del agente (pensando →
       // trabajando por cada tool → listo / espera-tu-OK / error). Si no hubo
       // motor de IA no reproducimos nada: la tarjeta queda "Disponible".
-      if (!esFallback) play(res.agent, res.steps, { stoppedReason: res.stoppedReason });
+      if (!esFallback) {
+        play(res.agent, res.steps, { stoppedReason: res.stoppedReason });
+        // Dispara el sobre CEO → agente en el piso (delegación).
+        setDelivery({ to: res.agent, nonce: Date.now() });
+      }
 
       const evento: FeedEvent = {
         id: crypto.randomUUID(),
@@ -417,6 +424,8 @@ export default function OficinaPage() {
       setFeed((prev) =>
         prev.map((e) => (e.id === ev.id ? { ...e, pending: undefined, pendingResult: result } : e)),
       );
+      // El agente terminó: deja de esperar en su estación y vuelve al escritorio.
+      resetActivity(ev.agentKey);
       toast({
         type: result.ok ? 'success' : 'error',
         message: result.ok ? 'Acción confirmada y ejecutada.' : `No se pudo ejecutar: ${result.detail}`,
@@ -431,6 +440,8 @@ export default function OficinaPage() {
   /** Descarta la acción pendiente sin ejecutarla. */
   function cancelarPendiente(ev: FeedEvent) {
     setFeed((prev) => prev.map((e) => (e.id === ev.id ? { ...e, pending: undefined } : e)));
+    // El agente deja de esperar en su estación y vuelve al escritorio.
+    resetActivity(ev.agentKey);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -494,6 +505,8 @@ export default function OficinaPage() {
                 onOrderAgent={ordenarAAgente}
                 onTogglePause={togglePausa}
                 showDetailPanel={false}
+                activity={activity}
+                delivery={delivery}
               />
             </div>
           </section>

@@ -85,9 +85,9 @@ function prefersReducedMotion(): boolean {
 
 // Tiempos de la coreografía (ms). Cortos: es un resumen vivo, no una espera.
 const ENTER = 350; // de alert a arrancar el primer paso
-const THINK = 650; // "pensando" antes de ejecutar un tool
-const WORK = 950; // "trabajando" en el tool
-const HOLD_SUCCESS = 1500; // cuánto se queda en "listo" antes de volver a idle
+const THINK = 700; // "pensando" antes de ejecutar un tool
+const WORK = 1500; // "trabajando" en el tool (da tiempo a caminar a la estación)
+const HOLD_SUCCESS = 1600; // cuánto se queda en "listo" antes de volver a idle
 
 /**
  * Hook que mantiene la actividad de todos los agentes y expone `play` para
@@ -128,6 +128,11 @@ export function useAgentActivity() {
       const finalState: AgentRunState =
         opts.stoppedReason === 'needs_confirmation' ? 'blocked' : firstError ? 'error' : 'success';
       const finalError = firstError?.result.detail;
+      // Si quedó esperando confirmación, mantenemos el tool del último paso para
+      // que en el piso el agente se quede PARADO en su estación (p. ej. la Caja)
+      // mientras el dueño decide. En success/error vuelve al escritorio.
+      const lastTool = steps.length > 0 ? steps[steps.length - 1].tool : undefined;
+      const finalTool = finalState === 'blocked' ? lastTool : undefined;
 
       const push = (fn: () => void, delay: number) => {
         const t = setTimeout(fn, delay);
@@ -140,7 +145,7 @@ export function useAgentActivity() {
           state: finalState,
           stepIndex: total,
           totalSteps: total,
-          currentTool: undefined,
+          currentTool: finalTool,
           currentStatus: undefined,
           lastError: finalError,
         });
@@ -193,7 +198,7 @@ export function useAgentActivity() {
             state: finalState,
             stepIndex: total,
             totalSteps: total,
-            currentTool: undefined,
+            currentTool: finalTool,
             currentStatus: undefined,
             lastError: finalError,
           }),
@@ -204,5 +209,15 @@ export function useAgentActivity() {
     [clearAgent, set],
   );
 
-  return { activity, play };
+  // Vuelve un agente a 'idle' (p. ej. tras confirmar/descartar una acción
+  // pendiente: deja de esperar en la estación y regresa a su escritorio).
+  const reset = useCallback(
+    (key: string) => {
+      clearAgent(key);
+      set(key, { ...IDLE });
+    },
+    [clearAgent, set],
+  );
+
+  return { activity, play, reset };
 }

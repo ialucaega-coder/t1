@@ -30,10 +30,16 @@ import {
   Crown,
   Activity,
   Cpu,
+  Wallet,
+  MessageSquare,
+  Calendar,
+  Megaphone,
+  Mail,
 } from 'lucide-react';
 import { MrGoAvatar } from './MrGoAvatar';
 import { MR_GO_PETS, type MrGoColorKey, type MrGoEmotion, type MrGoPetKey } from './types';
 import type { AgentLife, LifeState, Spot } from './useOfficeLife';
+import type { AgentActivity } from './useAgentActivity';
 
 export interface RoomAgent {
   key: string;
@@ -58,6 +64,12 @@ export interface OfficeFloorProps {
   /** Muestra el panel de detalle inline bajo el piso. Default true. Se apaga
    *  cuando el detalle se delega a un CommandPanel externo (evita duplicarlo). */
   showDetailPanel?: boolean;
+  /** Actividad en vivo por agente: hace que cada Mr Go CAMINE a la estación de
+   *  la acción que está ejecutando (Caja/Buzón/Agenda/Megáfono). */
+  activity?: Record<string, AgentActivity>;
+  /** Señal de delegación: cuando cambia `nonce`, vuela un sobre del CEO al
+   *  agente `to`. */
+  delivery?: { to: string; nonce: number } | null;
   className?: string;
 }
 
@@ -116,6 +128,48 @@ const ROLE_TO_DEPTO: Record<string, string> = {
   campanas: 'marketing',
   contenido: 'marketing',
 };
+
+// ---------------------------------------------------------------------------
+// Estaciones de acción: adónde camina un Mr Go cuando ejecuta cierta tool.
+// Viven en la banda superior (en los huecos entre Café/Dirección/Reunión).
+// ---------------------------------------------------------------------------
+
+const ACTION_STATIONS = {
+  caja: { spot: { x: 24, y: 15 }, label: 'Caja', accent: '#f5b740', icon: Wallet },
+  buzon: { spot: { x: 30.5, y: 15 }, label: 'Buzón', accent: '#34d399', icon: MessageSquare },
+  agenda: { spot: { x: 69, y: 15 }, label: 'Agenda', accent: '#7dd3fc', icon: Calendar },
+  megafono: { spot: { x: 75.5, y: 15 }, label: 'Megáfono', accent: '#f472b6', icon: Megaphone },
+} as const;
+type StationId = keyof typeof ACTION_STATIONS;
+
+// Qué tool manda a qué estación. Las acciones internas (mover etapa, crear
+// cliente, notificar) NO tienen estación: el agente trabaja en su puesto.
+const TOOL_STATION: Record<string, StationId> = {
+  generar_link_pago: 'caja',
+  enviar_whatsapp: 'buzon',
+  crear_reserva: 'agenda',
+  lanzar_campana: 'megafono',
+};
+
+/** Estación a la que debe ir un agente según su actividad en vivo (o null). */
+function stationForActivity(act: AgentActivity | undefined): StationId | null {
+  if (!act) return null;
+  // 'blocked' incluido a propósito: el agente se queda PARADO en su estación
+  // mientras espera el OK del dueño (p. ej. en la Caja con el link de pago).
+  if (act.state !== 'working' && act.state !== 'thinking' && act.state !== 'blocked') return null;
+  if (!act.currentTool) return null;
+  return TOOL_STATION[act.currentTool] ?? null;
+}
+
+/** true si el usuario pidió menos movimiento (para no animar el sobre). */
+function reducedMotion(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
 
 const MAIN_DEPTO_ORDER = ['ventas', 'atencion', 'marketing', 'equipo'];
 
@@ -324,6 +378,8 @@ export function OfficeFloor({
   onOrderAgent,
   onTogglePause,
   showDetailPanel = true,
+  activity,
+  delivery,
   className,
 }: OfficeFloorProps) {
   const layout = computeFloor(agents);
@@ -342,6 +398,15 @@ export function OfficeFloor({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // ── Sobre que vuela CEO → agente al delegar una orden ──────────────────────
+  // Coordenadas origen (CEO) / destino (agente) del sobre. El efecto de vuelo lo
+  // maneja <EnvelopeFx/> montado con key=nonce (robusto a React Strict Mode).
+  const ceoKey = agents.find((a) => a.director)?.key;
+  const envFrom = ceoKey ? layout.desks[ceoKey] : undefined;
+  const envTo = delivery ? layout.desks[delivery.to] : undefined;
+  const showEnvelope =
+    !!delivery && !!envFrom && !!envTo && ceoKey !== delivery.to && !reducedMotion();
 
   // Contadores para el encabezado (vibe "command center").
   const estados = agents.map((a) => estadoDePuesto(a, life?.[a.key]?.state ?? (a.paused ? 'idle' : 'working')));
@@ -411,11 +476,23 @@ export function OfficeFloor({
         <StationNode spot={layout.coffeeSpot} floorW={floorW} accent="#f5b740" label="Café" icon={Coffee} />
         <MeetingStation spots={layout.meetingSpots} floorW={floorW} accent="#7dd3fc" />
 
+        {/* Estaciones de acción: adónde camina cada Mr Go a ejecutar su tool */}
+        {floorW > 0 &&
+          (Object.keys(ACTION_STATIONS) as StationId[]).map((id) => {
+            const s = ACTION_STATIONS[id];
+            return (
+              <StationNode key={id} spot={s.spot} floorW={floorW} accent={s.accent} label={s.label} icon={s.icon} />
+            );
+          })}
+
         {/* Puestos (muebles) */}
         {floorW > 0 &&
           agents.map((a) => {
             const home = layout.desks[a.key];
             if (!home) return null;
+            // Si el agente está en una estación de acción, su puesto queda vacío
+            // (pantalla apagada).
+            const away = !a.paused && stationForActivity(activity?.[a.key]) !== null;
             const st = estadoDePuesto(a, life?.[a.key]?.state ?? (a.paused ? 'idle' : 'working'));
             return (
               <DeskFurniture
@@ -424,7 +501,7 @@ export function OfficeFloor({
                 y={home.y}
                 floorW={floorW}
                 accent={MR_GO_ACCENT[a.color] ?? SCENE.brand}
-                on={st.screenOn}
+                on={st.screenOn && !away}
                 big={Boolean(a.director)}
               />
             );
@@ -435,11 +512,23 @@ export function OfficeFloor({
           agents.map((a) => {
             const home = layout.desks[a.key] ?? { x: 50, y: 70 };
             const l = life?.[a.key];
-            const x = l?.x ?? home.x;
-            const y = l?.y ?? home.y;
-            const state = l?.state ?? (a.paused ? 'idle' : 'working');
-            const facing = l?.facing ?? 'right';
-            const st = estadoDePuesto(a, state);
+            const baseX = l?.x ?? home.x;
+            const baseY = l?.y ?? home.y;
+            // Override por actividad: si está ejecutando una tool con estación,
+            // camina hasta ella (la transición CSS de left/top anima el viaje).
+            const stId = a.paused ? null : stationForActivity(activity?.[a.key]);
+            const station = stId ? ACTION_STATIONS[stId] : null;
+            const x = station ? station.spot.x : baseX;
+            const y = station ? station.spot.y : baseY;
+            const lifeState = l?.state ?? (a.paused ? 'idle' : 'working');
+            const state: LifeState = station ? 'walking' : lifeState;
+            const facing = station
+              ? station.spot.x < baseX
+                ? 'left'
+                : 'right'
+              : l?.facing ?? 'right';
+            const base = estadoDePuesto(a, state);
+            const st = station ? { ...base, label: `En ${station.label}`, away: true } : base;
             return (
               <AgentView
                 key={a.key}
@@ -448,6 +537,7 @@ export function OfficeFloor({
                 y={y}
                 estado={st}
                 walking={state === 'walking'}
+                fastMove={Boolean(station)}
                 facing={facing}
                 floorW={floorW}
                 selected={selectedKey === a.key}
@@ -455,6 +545,11 @@ export function OfficeFloor({
               />
             );
           })}
+
+        {/* Sobre volando CEO → agente al delegar una orden */}
+        {floorW > 0 && showEnvelope && delivery && envFrom && envTo && (
+          <EnvelopeFx key={delivery.nonce} from={envFrom} to={envTo} floorW={floorW} />
+        )}
       </div>
 
       {showDetailPanel && selected && (
@@ -720,12 +815,73 @@ function DeskFurniture({
 }
 
 /** Un agente ubicado en el mapa: etiqueta + avatar (camina) + sombra + estado. */
+/** Sobre que vuela de un punto a otro (CEO → agente). Se monta con key=nonce,
+ *  anima una vez (from → to) y se retira. Robusto a React Strict Mode. */
+function EnvelopeFx({ from, to, floorW }: { from: Spot; to: Spot; floorW: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [gone, setGone] = useState(false);
+  // El vuelo se dispara con la Web Animations API, NO con una transición CSS: una
+  // transición no arranca al montar (el nodo recién insertado no tiene valor previo
+  // desde el cual interpolar, así que "salta" al destino). `el.animate` interpola
+  // desde el primer keyframe sin depender del primer pintado — robusto en el montaje
+  // y ante el doble-invoke de React Strict Mode.
+  useEffect(() => {
+    const el = ref.current;
+    const anim = el?.animate?.(
+      [
+        { left: `${from.x}%`, top: `${from.y}%` },
+        { left: `${to.x}%`, top: `${to.y}%` },
+      ],
+      { duration: 1000, easing: 'ease-in-out', fill: 'forwards' },
+    );
+    const t = setTimeout(() => setGone(true), 1150);
+    return () => {
+      anim?.cancel();
+      clearTimeout(t);
+    };
+  }, [from.x, from.y, to.x, to.y]);
+  if (gone) return null;
+  const sz = Math.max(22, floorW * 0.03);
+  return (
+    <div
+      ref={ref}
+      aria-hidden
+      style={{
+        position: 'absolute',
+        left: `${from.x}%`,
+        top: `${from.y}%`,
+        transform: 'translate(-50%, -50%)',
+        zIndex: 9999,
+        pointerEvents: 'none',
+      }}
+    >
+      <div
+        style={{
+          width: sz,
+          height: sz,
+          borderRadius: 8,
+          background: SCENE.brand,
+          border: '1px solid #c79bff',
+          boxShadow: `0 6px 16px ${SCENE.glow}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#fff',
+        }}
+      >
+        <Mail style={{ width: sz * 0.56, height: sz * 0.56 }} strokeWidth={2} />
+      </div>
+    </div>
+  );
+}
+
 function AgentView({
   agent,
   x,
   y,
   estado,
   walking,
+  fastMove,
   facing,
   floorW,
   selected,
@@ -736,6 +892,8 @@ function AgentView({
   y: number;
   estado: EstadoPuesto;
   walking: boolean;
+  /** Viaje rápido (ir a una estación de acción), transición más corta. */
+  fastMove?: boolean;
   facing: 'left' | 'right';
   floorW: number;
   selected: boolean;
@@ -769,7 +927,9 @@ function AgentView({
         left: `${x}%`,
         top: `${y}%`,
         transform: 'translate(-50%, -86%)',
-        transition: 'left 2.6s ease-in-out, top 2.6s ease-in-out',
+        transition: fastMove
+          ? 'left 1.15s ease-in-out, top 1.15s ease-in-out'
+          : 'left 2.6s ease-in-out, top 2.6s ease-in-out',
         zIndex: Math.round(y * 10),
         width: avatarPx,
         display: 'flex',
