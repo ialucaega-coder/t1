@@ -25,7 +25,7 @@ import type { MrGoEmotion } from '@/components/mrgo/types';
 import {
   getMrGoAgents,
   runMrGo,
-  confirmMrGo,
+  resumeMrGo,
   getMrGoMemory,
   saveMrGoMemory,
   colorKeyForAgent,
@@ -57,6 +57,10 @@ interface FeedEvent {
   id: string;
   agentKey: string;
   agentNombre: string;
+  /** La orden original (para reanudar la cadena tras confirmar). */
+  text: string;
+  /** Canal de origen de la orden, si lo hubo. */
+  channel?: string;
   emotion: MrGoEmotion;
   /** Respuesta final de Mr Go (vacía si pausó por confirmación). */
   finalMessage: string;
@@ -387,6 +391,7 @@ export default function OficinaPage() {
         id: crypto.randomUUID(),
         agentKey: res.agent,
         agentNombre: role?.nombre ?? res.agent,
+        text,
         emotion,
         finalMessage: res.finalMessage,
         steps: res.steps,
@@ -397,6 +402,12 @@ export default function OficinaPage() {
       };
       setFeed((prev) => [evento, ...prev].slice(0, 30));
       setOrden('');
+
+      // Si el CEO delegó en un especialista, avisamos en quién (además del sobre
+      // que vuela CEO→agente en la oficina).
+      if (res.delegation) {
+        toast({ type: 'info', message: `Mr Go delegó en ${role?.nombre ?? res.agent}.` });
+      }
 
       if (esFallback) {
         toast({ type: 'info', message: 'Sin motor de IA configurado: Mr Go no pudo ejecutar la orden.' });
@@ -415,21 +426,47 @@ export default function OficinaPage() {
     }
   }
 
-  /** Confirma la acción pendiente de un evento: la ejecuta EN VIVO y guarda el resultado. */
+  /**
+   * Confirma la acción pendiente y REANUDA la cadena: ejecuta la acción aprobada
+   * en vivo y deja que Mr Go siga el loop hasta cerrar o volver a pausar en otra
+   * acción externa. Reproduce la continuación sobre el mismo agente.
+   */
   async function confirmarPendiente(ev: FeedEvent) {
     if (!ev.pending || confirmando) return;
     setConfirmando(ev.id);
     try {
-      const result = await confirmMrGo(ev.pending.tool, ev.pending.params);
-      setFeed((prev) =>
-        prev.map((e) => (e.id === ev.id ? { ...e, pending: undefined, pendingResult: result } : e)),
+      const res = await resumeMrGo(
+        { tool: ev.pending.tool, params: ev.pending.params, thought: ev.pending.thought },
+        { text: ev.text, channel: ev.channel, agentKey: ev.agentKey, steps: ev.steps, maxSteps: 10 },
       );
-      // El agente terminó: deja de esperar en su estación y vuelve al escritorio.
-      resetActivity(ev.agentKey);
-      toast({
-        type: result.ok ? 'success' : 'error',
-        message: result.ok ? 'Acción confirmada y ejecutada.' : `No se pudo ejecutar: ${result.detail}`,
-      });
+      // Actualiza el evento con la cadena continuada (nueva traza + estado final o
+      // una nueva acción pendiente si volvió a pausar).
+      setFeed((prev) =>
+        prev.map((e) =>
+          e.id === ev.id
+            ? {
+                ...e,
+                steps: res.steps,
+                finalMessage: res.finalMessage,
+                stoppedReason: res.stoppedReason,
+                pending: res.pending,
+                pendingResult: undefined,
+              }
+            : e,
+        ),
+      );
+      // Reproduce la continuación en la oficina (mismo agente sigue trabajando).
+      play(res.agent, res.steps, { stoppedReason: res.stoppedReason });
+      if (res.stoppedReason === 'needs_confirmation') {
+        toast({ type: 'info', message: 'Mr Go dejó otra acción esperando tu confirmación.' });
+      } else {
+        // Terminó la cadena: el agente vuelve a su escritorio.
+        resetActivity(ev.agentKey);
+        toast({
+          type: 'success',
+          message: res.finalMessage ? `Listo: ${res.finalMessage}` : 'Acción confirmada y ejecutada.',
+        });
+      }
     } catch (err) {
       toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo confirmar la acción.' });
     } finally {

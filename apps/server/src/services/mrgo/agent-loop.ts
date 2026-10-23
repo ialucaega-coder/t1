@@ -82,7 +82,12 @@ export interface AgentLoopResult {
   stoppedReason: StopReason;
   /** Presente sólo cuando `stoppedReason='needs_confirmation'`. */
   pending?: PendingAction;
+  /** Si el CEO delegó en un especialista: en quién y por qué (lo setea la ruta). */
+  delegation?: { agent: string; reasoning: string };
 }
+
+/** Proveedor de IA resuelto para el negocio (contrato texto→texto). */
+type AIProvider = Awaited<ReturnType<typeof getAIProviderForBusiness>>;
 
 export interface RunAgentLoopInput {
   businessId: string;
@@ -174,45 +179,30 @@ function formatObservation(result: ActionResult): string {
   ].join(' ');
 }
 
+/** Contexto compartido del bucle (lo usan `runAgentLoop` y `resumeAgentLoop`). */
+interface LoopContext {
+  businessId: string;
+  agent: string;
+  emotion: string;
+  mode: ExecMode;
+  systemPrompt: string;
+  provider: AIProvider;
+  /** Historial ReAct acumulado (user/assistant) que ve el modelo. */
+  turns: ConversationTurn[];
+  /** Pasos ya ejecutados (se sigue empujando acá). */
+  steps: AgentStep[];
+}
+
 /**
- * Corre el loop agéntico de Mr Go. Nunca lanza: ante un motor caído devuelve
- * `stoppedReason:'no_engine'` con los pasos hechos hasta ahí.
+ * Núcleo del bucle: desde `firstPrompt`, pide al modelo el próximo paso, ejecuta
+ * el tool (o pausa/termina) y realimenta, hasta `remaining` iteraciones. Lo
+ * comparten la corrida nueva y la reanudación tras confirmar. Nunca lanza.
  */
-export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopResult> {
-  const { businessId } = input;
-  const text = (input.text ?? '').trim().slice(0, MAX_INPUT_LEN);
-  const mode: ExecMode = input.mode ?? 'dry_run';
-  const maxSteps = clamp(input.maxSteps ?? DEFAULT_MAX_STEPS, 1, HARD_MAX_STEPS);
+async function continueLoop(ctx: LoopContext, firstPrompt: string, remaining: number): Promise<AgentLoopResult> {
+  const { businessId, agent, emotion, mode, systemPrompt, provider, turns, steps } = ctx;
+  let currentPrompt = firstPrompt;
 
-  const agents = await loadAgents(businessId);
-  const agent = pickAgent(agents, input.agentKey);
-  const emotion = 'neutral';
-
-  if (!text) {
-    return { agent, emotion, steps: [], finalMessage: 'No recibí ninguna instrucción.', stoppedReason: 'empty' };
-  }
-
-  const memoria = buildMemoryPrompt(await loadMemory(businessId));
-  const systemPrompt = buildLoopSystemPrompt(agent, mode, memoria);
-
-  let provider: Awaited<ReturnType<typeof getAIProviderForBusiness>>;
-  try {
-    provider = await getAIProviderForBusiness(businessId);
-  } catch {
-    return {
-      agent,
-      emotion,
-      steps: [],
-      finalMessage: 'El motor de IA no está disponible en este momento.',
-      stoppedReason: 'no_engine',
-    };
-  }
-
-  const turns: ConversationTurn[] = [];
-  let currentPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
-  const steps: AgentStep[] = [];
-
-  for (let i = 0; i < maxSteps; i++) {
+  for (let i = 0; i < remaining; i++) {
     let raw: string;
     try {
       raw = await provider.generateResponse(currentPrompt, { businessId, history: turns, systemPrompt });
@@ -277,4 +267,147 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     finalMessage: 'Alcancé el máximo de pasos sin cerrar la tarea. Revisá los pasos y, si hace falta, dame más datos.',
     stoppedReason: 'max_steps',
   };
+}
+
+/** Reconstruye el turno del asistente (el JSON ReAct) de un paso ya dado, para
+ *  rearmar el historial al reanudar. No tiene que ser idéntico al original: le da
+ *  al modelo el contexto de qué tool llamó y con qué params. */
+function reconstructToolTurn(tool: string, params: Record<string, unknown>, thought?: string): string {
+  return JSON.stringify({ action: 'tool', tool, toolParams: params, ...(thought ? { thought } : {}) });
+}
+
+/**
+ * Corre el loop agéntico de Mr Go. Nunca lanza: ante un motor caído devuelve
+ * `stoppedReason:'no_engine'` con los pasos hechos hasta ahí.
+ */
+export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopResult> {
+  const { businessId } = input;
+  const text = (input.text ?? '').trim().slice(0, MAX_INPUT_LEN);
+  const mode: ExecMode = input.mode ?? 'dry_run';
+  const maxSteps = clamp(input.maxSteps ?? DEFAULT_MAX_STEPS, 1, HARD_MAX_STEPS);
+
+  const agents = await loadAgents(businessId);
+  const agent = pickAgent(agents, input.agentKey);
+  const emotion = 'neutral';
+
+  if (!text) {
+    return { agent, emotion, steps: [], finalMessage: 'No recibí ninguna instrucción.', stoppedReason: 'empty' };
+  }
+
+  const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const systemPrompt = buildLoopSystemPrompt(agent, mode, memoria);
+
+  let provider: AIProvider;
+  try {
+    provider = await getAIProviderForBusiness(businessId);
+  } catch {
+    return {
+      agent,
+      emotion,
+      steps: [],
+      finalMessage: 'El motor de IA no está disponible en este momento.',
+      stoppedReason: 'no_engine',
+    };
+  }
+
+  const turns: ConversationTurn[] = [];
+  const firstPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
+  const steps: AgentStep[] = [];
+
+  return continueLoop({ businessId, agent, emotion, mode, systemPrompt, provider, turns, steps }, firstPrompt, maxSteps);
+}
+
+/** Entrada para reanudar el loop tras confirmar una acción externa pendiente. */
+export interface ResumeAgentLoopInput {
+  businessId: string;
+  /** La instrucción original del dueño (para reconstruir el contexto). */
+  text: string;
+  channel?: string;
+  /** Agente-rol que venía corriendo el loop. */
+  agentKey: string;
+  /** Modo de ejecución; al reanudar siempre es 'live' (el dueño aprobó). */
+  mode?: ExecMode;
+  maxSteps?: number;
+  /** Pasos ya ejecutados ANTES de la pausa (para rearmar el historial ReAct). */
+  priorSteps?: AgentStep[];
+  /** La acción pendiente que el dueño aprobó: se ejecuta en vivo y se continúa. */
+  confirmed: { tool: string; params: Record<string, unknown>; thought?: string };
+}
+
+/**
+ * Reanuda el loop DESPUÉS de que el dueño confirma una acción externa que había
+ * quedado pendiente. Ejecuta esa acción EN VIVO (ya fue aprobada), reconstruye
+ * el historial de la conversación a partir de los pasos previos y SIGUE la cadena
+ * hasta cerrar, agotar pasos o volver a pausar en otra acción externa. Nunca
+ * lanza. La reconstrucción del historial es stateless (schema congelado): el
+ * cliente manda los pasos previos; sólo la acción confirmada se ejecuta de nuevo.
+ */
+export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<AgentLoopResult> {
+  const { businessId } = input;
+  const text = (input.text ?? '').trim().slice(0, MAX_INPUT_LEN);
+  const mode: ExecMode = input.mode ?? 'live';
+  const maxSteps = clamp(input.maxSteps ?? DEFAULT_MAX_STEPS, 1, HARD_MAX_STEPS);
+
+  const agents = await loadAgents(businessId);
+  const agent = pickAgent(agents, input.agentKey);
+  const emotion = 'neutral';
+
+  const confirmedTool = input.confirmed?.tool ?? '';
+  // La acción a confirmar tiene que ser válida y permitida para el agente.
+  if (!isValidToolKey(confirmedTool) || !toolAllowedForAgent(agent, confirmedTool)) {
+    return { agent, emotion, steps: [], finalMessage: 'La acción a confirmar no es válida para este agente.', stoppedReason: 'final' };
+  }
+  const confirmedParams =
+    input.confirmed.params && typeof input.confirmed.params === 'object' && !Array.isArray(input.confirmed.params)
+      ? input.confirmed.params
+      : {};
+  const confirmedThought = input.confirmed.thought;
+
+  // Ejecutar la acción confirmada EN VIVO (el dueño ya la aprobó explícitamente).
+  const confirmedResult = await executeAction({ businessId, action: confirmedTool, params: confirmedParams, mode: 'live' });
+  const prior = Array.isArray(input.priorSteps) ? input.priorSteps : [];
+  const steps: AgentStep[] = [
+    ...prior,
+    { tool: confirmedTool, params: confirmedParams, ...(confirmedThought ? { thought: confirmedThought } : {}), result: confirmedResult },
+  ];
+
+  // Reconstruir el historial ReAct: pedido original → (tool → observación)× pasos
+  // previos → la acción confirmada → su observación (= próximo prompt).
+  const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const systemPrompt = buildLoopSystemPrompt(agent, mode, memoria);
+  const initialUserPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
+  const turns: ConversationTurn[] = [{ role: 'user', content: initialUserPrompt }];
+  for (const s of prior) {
+    turns.push({ role: 'assistant', content: reconstructToolTurn(s.tool, s.params, s.thought) });
+    turns.push({ role: 'user', content: formatObservation(s.result) });
+  }
+  turns.push({ role: 'assistant', content: reconstructToolTurn(confirmedTool, confirmedParams, confirmedThought) });
+  const firstPrompt = formatObservation(confirmedResult);
+
+  let provider: AIProvider;
+  try {
+    provider = await getAIProviderForBusiness(businessId);
+  } catch {
+    // Sin motor no podemos continuar la cadena, pero la acción confirmada YA se
+    // ejecutó: devolvemos ese resultado para que el dueño lo vea.
+    return {
+      agent,
+      emotion,
+      steps,
+      finalMessage: confirmedResult.ok
+        ? 'Ejecuté la acción confirmada. No pude continuar la cadena: el motor de IA no está disponible.'
+        : `No se pudo ejecutar la acción: ${confirmedResult.detail}`,
+      stoppedReason: 'no_engine',
+    };
+  }
+
+  // Presupuesto restante: al menos 1 turno para que cierre, con techo duro.
+  let remaining = maxSteps - steps.length;
+  if (remaining < 1 && steps.length < HARD_MAX_STEPS) remaining = 1;
+  remaining = clamp(remaining, 0, HARD_MAX_STEPS - steps.length);
+  if (remaining === 0) {
+    return { agent, emotion, steps, finalMessage: 'Ejecuté la acción confirmada. Alcancé el máximo de pasos.', stoppedReason: 'max_steps' };
+  }
+
+  return continueLoop({ businessId, agent, emotion, mode, systemPrompt, provider, turns, steps }, firstPrompt, remaining);
 }

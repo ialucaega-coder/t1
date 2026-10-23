@@ -178,6 +178,8 @@ export interface AgentLoopResult {
   stoppedReason: StopReason;
   /** Presente sólo cuando stoppedReason='needs_confirmation'. */
   pending?: PendingAction;
+  /** Si el CEO delegó en un especialista: en quién y por qué. */
+  delegation?: { agent: string; reasoning: string };
 }
 
 /**
@@ -191,10 +193,46 @@ export function runMrGo(text: string, channel?: string, execute = false, maxStep
 
 /**
  * Confirma y EJECUTA EN VIVO una acción sensible que el loop dejó pendiente
- * (link de pago, WhatsApp, etc.). Devuelve el resultado de la ejecución.
+ * (link de pago, WhatsApp, etc.). Devuelve el resultado de la ejecución suelta.
+ * Para que Mr Go SIGA la cadena después de confirmar, usá `resumeMrGo`.
  */
 export function confirmMrGo(tool: string, params?: Record<string, unknown>) {
   return httpClient.post<ActionResult>('/mrgo/confirm', { tool, params });
+}
+
+/** Contexto para reanudar el loop tras confirmar (reconstruye el hilo ReAct). */
+export interface ResumeContext {
+  /** La orden original del dueño. */
+  text: string;
+  channel?: string;
+  /** El agente que venía corriendo el loop. */
+  agentKey: string;
+  /** Los pasos ya ejecutados antes de la pausa. */
+  steps: AgentStep[];
+  maxSteps?: number;
+}
+
+/**
+ * Confirma la acción pendiente y REANUDA la cadena: ejecuta la acción aprobada
+ * EN VIVO y sigue el loop hasta cerrar o volver a pausar en otra acción externa.
+ * Devuelve la traza completa actualizada (puede traer un nuevo `pending`).
+ */
+export function resumeMrGo(
+  pending: { tool: string; params?: Record<string, unknown>; thought?: string },
+  ctx: ResumeContext,
+) {
+  return httpClient.post<AgentLoopResult>('/mrgo/confirm', {
+    tool: pending.tool,
+    params: pending.params,
+    thought: pending.thought,
+    resume: {
+      text: ctx.text,
+      channel: ctx.channel,
+      agentKey: ctx.agentKey,
+      steps: ctx.steps,
+      maxSteps: ctx.maxSteps,
+    },
+  });
 }
 
 /**

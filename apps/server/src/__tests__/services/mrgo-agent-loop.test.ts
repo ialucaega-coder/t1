@@ -27,7 +27,7 @@ vi.mock('../../services/actions/executor', () => ({
 
 import { getAIProviderForBusiness } from '../../services/ai/engine';
 import { executeAction, actionKind } from '../../services/actions/executor';
-import { runAgentLoop } from '../../services/mrgo/agent-loop';
+import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -188,6 +188,108 @@ describe('services/mrgo/agent-loop', () => {
     const res = await runAgentLoop({ businessId: 'biz_1', text: '   ' });
 
     expect(res.stoppedReason).toBe('empty');
+    expect(generateResponse).not.toHaveBeenCalled();
+  });
+});
+
+describe('services/mrgo/agent-loop — resumeAgentLoop', () => {
+  it('ejecuta la acción confirmada EN VIVO y CONTINÚA la cadena hasta cerrar', async () => {
+    // Tras confirmar el link de pago, el modelo cierra con un final.
+    const { provider, generateResponse } = providerWith([
+      '{"action":"final","message":"Listo, generé el link.","emotion":"entusiasmo"}',
+    ]);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+
+    const res = await resumeAgentLoop({
+      businessId: 'biz_1',
+      text: 'cobrale la seña',
+      agentKey: 'ventas',
+      confirmed: { tool: 'generar_link_pago', params: { amount: 5000, title: 'Seña' } },
+    });
+
+    expect(res.stoppedReason).toBe('final');
+    expect(res.steps.map((s) => s.tool)).toEqual(['generar_link_pago']);
+    // La acción confirmada se ejecutó en vivo (no simulada).
+    expect(res.steps[0]?.result.status).toBe('ejecutado');
+    expect(executeAction).toHaveBeenCalledTimes(1);
+    expect(executeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'generar_link_pago', mode: 'live' }),
+    );
+    // El modelo recibió como primer prompt la observación de la acción confirmada.
+    const firstPrompt = (generateResponse.mock.calls as unknown as unknown[][])[0][0] as string;
+    expect(firstPrompt).toContain('RESULTADO de generar_link_pago');
+  });
+
+  it('reconstruye los pasos previos y los incluye en la traza final', async () => {
+    const { provider } = providerWith(['{"action":"final","message":"Cobré y avisé.","emotion":"neutral"}']);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+
+    const res = await resumeAgentLoop({
+      businessId: 'biz_1',
+      text: 'cobrá y avisá',
+      agentKey: 'ventas',
+      priorSteps: [
+        { tool: 'crear_cliente', params: { name: 'Ana' }, result: okResult('crear_cliente') },
+      ],
+      confirmed: { tool: 'generar_link_pago', params: { amount: 5000 } },
+    });
+
+    expect(res.stoppedReason).toBe('final');
+    expect(res.steps.map((s) => s.tool)).toEqual(['crear_cliente', 'generar_link_pago']);
+    // Sólo se EJECUTA la acción confirmada; el paso previo es contexto (no re-ejecuta).
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('si la continuación propone OTRA acción externa en live, vuelve a PAUSAR', async () => {
+    const { provider } = providerWith([
+      '{"action":"tool","tool":"enviar_whatsapp","toolParams":{"body":"ya te paso el link"}}',
+    ]);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+
+    const res = await resumeAgentLoop({
+      businessId: 'biz_1',
+      text: 'cobrá y avisá',
+      agentKey: 'ventas',
+      confirmed: { tool: 'generar_link_pago', params: { amount: 5000 } },
+    });
+
+    expect(res.stoppedReason).toBe('needs_confirmation');
+    expect(res.pending?.tool).toBe('enviar_whatsapp');
+    // La confirmada se ejecutó; la nueva externa quedó pendiente (no se ejecutó).
+    expect(res.steps.map((s) => s.tool)).toEqual(['generar_link_pago']);
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin motor de IA: ejecuta la confirmada igual pero no continúa (no_engine)', async () => {
+    mock(getAIProviderForBusiness).mockRejectedValue(new Error('sin key'));
+
+    const res = await resumeAgentLoop({
+      businessId: 'biz_1',
+      text: 'cobrale',
+      agentKey: 'ventas',
+      confirmed: { tool: 'generar_link_pago', params: { amount: 5000 } },
+    });
+
+    expect(res.stoppedReason).toBe('no_engine');
+    expect(res.steps.map((s) => s.tool)).toEqual(['generar_link_pago']);
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechaza una acción confirmada fuera de la caja del agente (no ejecuta)', async () => {
+    const { provider, generateResponse } = providerWith(['{"action":"final","message":"x"}']);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+
+    // soporte no puede generar_link_pago.
+    const res = await resumeAgentLoop({
+      businessId: 'biz_1',
+      text: 'cobrale',
+      agentKey: 'soporte',
+      confirmed: { tool: 'generar_link_pago', params: { amount: 5000 } },
+    });
+
+    expect(res.stoppedReason).toBe('final');
+    expect(res.steps).toHaveLength(0);
+    expect(executeAction).not.toHaveBeenCalled();
     expect(generateResponse).not.toHaveBeenCalled();
   });
 });

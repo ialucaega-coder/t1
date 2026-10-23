@@ -26,7 +26,14 @@ vi.mock('../../middleware/auth', () => ({
 
 vi.mock('../../services/mrgo/agent-loop', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/mrgo/agent-loop')>();
-  return { ...actual, runAgentLoop: vi.fn() };
+  return { ...actual, runAgentLoop: vi.fn(), resumeAgentLoop: vi.fn() };
+});
+
+// El orquestador se mockea para que la delegación de /run sea determinística
+// (sin llamar al LLM ni a prisma): devuelve el agente que elige el CEO.
+vi.mock('../../services/mrgo/orchestrator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/orchestrator')>();
+  return { ...actual, orchestrate: vi.fn() };
 });
 
 vi.mock('../../services/actions/executor', async (importOriginal) => {
@@ -34,7 +41,8 @@ vi.mock('../../services/actions/executor', async (importOriginal) => {
   return { ...actual, executeAction: vi.fn() };
 });
 
-import { runAgentLoop } from '../../services/mrgo/agent-loop';
+import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
+import { orchestrate } from '../../services/mrgo/orchestrator';
 import { executeAction } from '../../services/actions/executor';
 import { mrgoRouter } from '../../routes/mrgo';
 import { errorHandler } from '../../middleware/errorHandler';
@@ -55,6 +63,8 @@ describe('routes/mrgo — loop agéntico', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Por defecto el CEO se queda con la orden (sin delegar en un especialista).
+    mock(orchestrate).mockResolvedValue({ nextAgent: 'ceo', emotion: 'neutral', reasoning: '' });
   });
 
   describe('POST /api/mrgo/run', () => {
@@ -75,13 +85,63 @@ describe('routes/mrgo — loop agéntico', () => {
       expect(res.status).toBe(200);
       expect(res.body.stoppedReason).toBe('final');
       expect(res.body.steps).toHaveLength(1);
+      // El CEO se quedó con la orden → corre el loop como 'ceo' (sin delegar).
       expect(runAgentLoop).toHaveBeenCalledWith({
         businessId: 'biz_1',
         text: 'Registrá a Ana',
         channel: 'WHATSAPP',
+        agentKey: 'ceo',
         mode: 'dry_run',
         maxSteps: undefined,
       });
+      expect(res.body.delegation).toBeUndefined();
+    });
+
+    it('delega en el especialista que elige el CEO (agentKey + delegation en la respuesta)', async () => {
+      mock(orchestrate).mockResolvedValue({
+        nextAgent: 'ventas',
+        emotion: 'neutral',
+        reasoning: 'Es una venta.',
+      });
+      mock(runAgentLoop).mockResolvedValue({
+        agent: 'ventas',
+        emotion: 'entusiasmo',
+        steps: [],
+        finalMessage: 'Cotizado.',
+        stoppedReason: 'final',
+      });
+
+      const res = await request(app)
+        .post('/api/mrgo/run')
+        .set(...AUTH)
+        .send({ text: 'cotizale al cliente' });
+
+      expect(res.status).toBe(200);
+      expect(runAgentLoop).toHaveBeenCalledWith(expect.objectContaining({ agentKey: 'ventas' }));
+      expect(res.body.delegation).toEqual({ agent: 'ventas', reasoning: 'Es una venta.' });
+      // Con delegación explícita, NO se vuelve a rutear.
+      expect(orchestrate).toHaveBeenCalledTimes(1);
+    });
+
+    it('respeta el agentKey forzado por el dueño (delegación manual, sin rutear)', async () => {
+      mock(runAgentLoop).mockResolvedValue({
+        agent: 'cobros',
+        emotion: 'neutral',
+        steps: [],
+        finalMessage: 'Listo.',
+        stoppedReason: 'final',
+      });
+
+      const res = await request(app)
+        .post('/api/mrgo/run')
+        .set(...AUTH)
+        .send({ text: 'cobrá la deuda', agentKey: 'cobros' });
+
+      expect(res.status).toBe(200);
+      expect(runAgentLoop).toHaveBeenCalledWith(expect.objectContaining({ agentKey: 'cobros' }));
+      // agentKey explícito → no se llama al orquestador.
+      expect(orchestrate).not.toHaveBeenCalled();
+      expect(res.body.delegation).toBeUndefined();
     });
 
     it('con execute:true corre el loop EN VIVO (mode live)', async () => {
@@ -144,6 +204,53 @@ describe('routes/mrgo — loop agéntico', () => {
         params: { amount: 5000, title: 'Seña' },
         mode: 'live',
       });
+    });
+
+    it('con resume: REANUDA la cadena (resumeAgentLoop) y devuelve la traza', async () => {
+      mock(resumeAgentLoop).mockResolvedValue({
+        agent: 'ventas',
+        emotion: 'entusiasmo',
+        steps: [
+          { tool: 'generar_link_pago', params: { amount: 5000 }, result: { action: 'generar_link_pago', kind: 'externo', ok: true, status: 'ejecutado', detail: 'link' } },
+          { tool: 'enviar_whatsapp', params: { body: 'listo' }, result: { action: 'enviar_whatsapp', kind: 'externo', ok: true, status: 'ejecutado', detail: 'enviado' } },
+        ],
+        finalMessage: 'Cobré y avisé.',
+        stoppedReason: 'final',
+      });
+
+      const res = await request(app)
+        .post('/api/mrgo/confirm')
+        .set(...AUTH)
+        .send({
+          tool: 'generar_link_pago',
+          params: { amount: 5000, title: 'Seña' },
+          resume: { text: 'cobrá y avisá', agentKey: 'ventas', steps: [] },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.stoppedReason).toBe('final');
+      expect(res.body.steps).toHaveLength(2);
+      expect(resumeAgentLoop).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: 'biz_1',
+          text: 'cobrá y avisá',
+          agentKey: 'ventas',
+          mode: 'live',
+          confirmed: expect.objectContaining({ tool: 'generar_link_pago' }),
+        }),
+      );
+      // En modo resume NO se usa el executeAction suelto (lo hace el loop adentro).
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('con resume y tool desconocido: 400 (no reanuda)', async () => {
+      const res = await request(app)
+        .post('/api/mrgo/confirm')
+        .set(...AUTH)
+        .send({ tool: 'tool_inventado', resume: { text: 'x', agentKey: 'ventas' } });
+
+      expect(res.status).toBe(400);
+      expect(resumeAgentLoop).not.toHaveBeenCalled();
     });
 
     it('400 si el tool no está en el catálogo (no ejecuta)', async () => {
