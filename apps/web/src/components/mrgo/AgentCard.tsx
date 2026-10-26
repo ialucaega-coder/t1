@@ -42,19 +42,19 @@ export interface AgentCardProps {
 
 // ─── Paleta del command-center (tokens del contrato) ─────────────────────────
 const C = {
-  card: '#0f1322',
-  card2: '#141a2b',
-  hair: 'rgba(150,165,215,.12)',
-  hairStrong: 'rgba(150,165,215,.22)',
-  ink: '#eaeefb',
-  ink2: '#a9b2cc',
-  muted: '#6c7694',
-  brand: '#a855f7',
-  green: '#34d399',
-  amber: '#f5b740',
-  sky: '#7dd3fc',
-  red: '#f87171',
-  slate: '#6c7694',
+  card: '#ffffff',
+  card2: '#faf7f0',
+  hair: 'rgba(124,92,58,.16)',
+  hairStrong: 'rgba(124,92,58,.28)',
+  ink: '#3a322a',
+  ink2: '#6a5f4e',
+  muted: '#a99d87',
+  brand: '#7c3aed',
+  green: '#1f9d6b',
+  amber: '#d98a1f',
+  sky: '#2a86c4',
+  red: '#d4493b',
+  slate: '#a99d87',
 } as const;
 
 /** Etiqueta + color + pulso según el estado de actividad. */

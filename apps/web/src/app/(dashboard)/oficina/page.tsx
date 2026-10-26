@@ -14,7 +14,10 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users } from 'lucide-react';
+import {
+  Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
+  Terminal, Gauge, CheckSquare, Bell, Zap, Share2, Activity as ActivityIcon, Sparkles, Thermometer,
+} from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
 import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
@@ -95,6 +98,24 @@ const MEMORY_PROFILE_MAX = 2000;
 const MEMORY_FACT_MAX = 300;
 const MEMORY_FACTS_MAX = 50;
 
+/** Pestañas del COMMAND CENTER (réplica del panel de Munder Difflin). */
+type CmdTab =
+  | 'terminal' | 'monitor' | 'tasks' | 'askme' | 'triggers'
+  | 'memory' | 'graph' | 'activity' | 'skills' | 'temps';
+
+const CMD_TABS: { key: CmdTab; label: string; icon: typeof Terminal }[] = [
+  { key: 'terminal', label: 'terminal', icon: Terminal },
+  { key: 'monitor', label: 'monitor', icon: Gauge },
+  { key: 'tasks', label: 'tasks', icon: CheckSquare },
+  { key: 'askme', label: 'ask me', icon: Bell },
+  { key: 'triggers', label: 'triggers', icon: Zap },
+  { key: 'memory', label: 'memory', icon: Brain },
+  { key: 'graph', label: 'graph', icon: Share2 },
+  { key: 'activity', label: 'activity', icon: ActivityIcon },
+  { key: 'skills', label: 'skills', icon: Sparkles },
+  { key: 'temps', label: 'temps', icon: Thermometer },
+];
+
 export default function OficinaPage() {
   const { toast } = useToast();
 
@@ -125,6 +146,8 @@ export default function OficinaPage() {
   const [feed, setFeed] = useState<FeedEvent[]>([]);
   // Id del evento cuya acción pendiente se está confirmando (para el spinner).
   const [confirmando, setConfirmando] = useState<string | null>(null);
+  // Pestaña activa del COMMAND CENTER (réplica del panel de Munder Difflin).
+  const [cmdTab, setCmdTab] = useState<CmdTab>('monitor');
   const ordenRef = useRef<HTMLTextAreaElement>(null);
 
   // Actividad en vivo de cada Mr Go: la máquina de estados que reproduce la
@@ -496,16 +519,24 @@ export default function OficinaPage() {
   const sinActivos = !ceo && equipo.length === 0;
 
   return (
-    <div className="space-y-6">
-      {/* Encabezado */}
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
-          <Building2 className="h-6 w-6 text-brand-400" />
-          Mr Go — Centro de operaciones
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Tu equipo de agentes trabaja acá. Dale una orden y Mr Go la reparte al agente indicado.
-        </p>
+    <div className="space-y-6 rounded-2xl bg-[#f4efe6] p-4 sm:p-6">
+      {/* Barra superior estilo Munder Difflin: logo + estado + "auto" */}
+      <div className="flex items-center justify-between rounded-xl border border-[#e7e0d2] bg-white px-4 py-2.5 shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#7c3aed]/10">
+            <Building2 className="h-5 w-5 text-[#7c3aed]" />
+          </span>
+          <div className="leading-tight">
+            <span className="text-sm font-bold text-[#3a322a]">Mr Go</span>
+            <span className="ml-1.5 text-xs font-medium text-[#a99d87]">· Centro de operaciones</span>
+          </div>
+          <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+            <Radio className="h-3 w-3" /> auto
+          </span>
+        </div>
+        <span className="hidden text-xs text-[#a99d87] sm:block">
+          {(ceo ? 1 : 0) + equipo.length} agentes · Mr Go dirige la oficina
+        </span>
       </div>
 
       {error && <ErrorAlert message={error} onRetry={cargar} />}
@@ -520,16 +551,16 @@ export default function OficinaPage() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-10">
           {/* Izquierda — La oficina (~70%) */}
           <section className="lg:col-span-7">
-            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
+            <div className="rounded-xl border border-[#e7e0d2] bg-white p-5">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
+                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[#4a4034]">
                   La oficina
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
                     <Radio className="h-3 w-3" />
                     En vivo
                   </span>
                 </h2>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-[#a99d87]">
                   {(ceo ? 1 : 0) + equipo.length} en funciones
                 </span>
               </div>
@@ -548,223 +579,439 @@ export default function OficinaPage() {
             </div>
           </section>
 
-          {/* Derecha — Centro de comandos (~30%) */}
-          <section className="space-y-4 lg:col-span-3">
-            {/* Input de orden */}
-            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-300">
-                Centro de comandos
-              </h2>
-              <textarea
-                ref={ordenRef}
-                value={orden}
-                onChange={(e) => setOrden(e.target.value)}
-                onKeyDown={onKeyDown}
-                rows={3}
-                placeholder="Dale una orden al equipo…  (ej: cobrale la seña al cliente nuevo)"
-                className="w-full resize-none rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-400 focus:outline-none"
-              />
-              <button
-                onClick={enviarOrden}
-                disabled={enviando || !orden.trim()}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-400 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-500 disabled:opacity-50"
-              >
-                {enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {enviando ? 'Mr Go está pensando…' : 'Enviar orden'}
-              </button>
-
-              <label className="mt-3 flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={ejecutarEnVivo}
-                  onChange={(e) => setEjecutarEnVivo(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-700 text-red-500 focus:ring-red-500"
-                />
-                <span className="text-xs text-slate-400">
-                  <span className="inline-flex items-center gap-1 font-medium text-amber-400">
-                    <AlertTriangle className="h-3 w-3" />
-                    Ejecutar la acción en vivo
-                  </span>{' '}
-                  — efectúa de verdad (p. ej. envía WhatsApp). Si está apagado, solo se simula.
-                </span>
-              </label>
-            </div>
-
-            {/* CommandPanel — detalle del agente seleccionado + log + confirmación */}
-            <CommandPanel
-              agent={selAgent}
-              activity={seleccionado ? activity[seleccionado] : undefined}
-              steps={selEvent?.steps}
-              pending={selEvent?.pending ?? null}
-              confirming={selEvent ? confirmando === selEvent.id : false}
-              toolLabel={toolNombre}
-              onConfirm={selEvent ? () => confirmarPendiente(selEvent) : undefined}
-              onDiscard={selEvent ? () => cancelarPendiente(selEvent) : undefined}
-            />
-
-            {/* Actividad reciente — historial compacto. El detalle vivo (log +
-                confirmación) de cada corrida vive en el CommandPanel de arriba;
-                acá sólo el registro clickeable para volver a abrir un agente. */}
-            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
-              <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
-                <Radio className="h-4 w-4 text-brand-400" />
-                Actividad reciente
-              </h2>
-
-              {feed.length === 0 ? (
-                <p className="py-4 text-center text-xs text-slate-500">
-                  Todavía no diste ninguna orden. Escribí arriba y Mr Go repartirá el trabajo.
-                </p>
-              ) : (
-                <ul className="space-y-2">
-                  {feed.slice(0, 8).map((ev) => (
-                    <li key={ev.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSeleccionado(ev.agentKey)}
-                        className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
-                          seleccionado === ev.agentKey
-                            ? 'border-brand-400/60 bg-slate-900/60'
-                            : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'
-                        }`}
-                      >
-                        <div className="shrink-0">
-                          <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={28} alive={false} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-xs font-medium text-white">{ev.agentNombre}</span>
-                            <span className="shrink-0 text-[10px] text-slate-500">{ev.hora}</span>
-                          </div>
-                          <p className="truncate text-[11px] text-slate-400">
-                            {ev.esFallback
-                              ? 'Sin motor de IA'
-                              : ev.pending
-                                ? 'Dejó una acción esperando tu OK'
-                                : ev.finalMessage || `${ev.steps.length} paso(s)`}
-                          </p>
-                        </div>
-                        {ev.pending && !ev.pendingResult && (
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {/* Memoria de Mr Go */}
-            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
-              <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
-                <Brain className="h-4 w-4 text-brand-400" />
-                Memoria de Mr Go
-              </h2>
-              <p className="mb-3 text-xs text-slate-500">
-                Lo que Mr Go sabe de tu negocio. Lo usa para decidir y responder mejor.
-              </p>
-
-              {/* Perfil del negocio */}
-              <label className="mb-1 block text-xs font-medium text-slate-400">Perfil del negocio</label>
-              <textarea
-                value={memProfile}
-                onChange={(e) => setMemProfile(e.target.value.slice(0, MEMORY_PROFILE_MAX))}
-                rows={5}
-                maxLength={MEMORY_PROFILE_MAX}
-                placeholder="Contá qué es tu negocio, el tono, reglas…"
-                className="w-full resize-none rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-400 focus:outline-none"
-              />
-              <div className="mt-1 text-right text-[10px] text-slate-500">
-                {memProfile.length}/{MEMORY_PROFILE_MAX}
-              </div>
-
-              {/* Hechos / notas */}
-              <div className="mt-3 flex items-center justify-between">
-                <label className="text-xs font-medium text-slate-400">Hechos y notas</label>
-                <span className="text-[10px] text-slate-500">
-                  {memFacts.length}/{MEMORY_FACTS_MAX}
+          {/* Derecha — COMMAND CENTER con pestañas (réplica de Munder Difflin) */}
+          <section className="lg:col-span-3">
+            <div className="sticky top-4 overflow-hidden rounded-xl border border-[#e7e0d2] bg-white shadow-sm">
+              {/* Cabecera del panel */}
+              <div className="flex items-center justify-between gap-2 border-b border-[#e7e0d2] bg-[#faf7f0] px-4 py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="shrink-0">
+                    <MrGoAvatar color="LILA" emotion="happy" size={30} alive={false} />
+                  </div>
+                  <div className="min-w-0 leading-tight">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#3a322a]">
+                        Command Center
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-emerald-700">
+                        ● live
+                      </span>
+                    </div>
+                    <p className="truncate text-[11px] text-[#a99d87]">Mr Go dirige la oficina</p>
+                  </div>
+                </div>
+                <span className="shrink-0 rounded-md border border-[#ddd4c4] bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#857a66]">
+                  auto
                 </span>
               </div>
 
-              {memFacts.length === 0 ? (
-                <p className="mt-2 text-xs text-slate-500">Todavía no hay hechos cargados.</p>
-              ) : (
-                <ul className="mt-2 space-y-2">
-                  {memFacts.map((fact, i) => (
-                    <li
-                      key={i}
-                      className="flex items-start gap-2 rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-2"
+              {/* Fila de pestañas (2 filas de 5, estilo MD) */}
+              <div className="grid grid-cols-5 gap-1 border-b border-[#e7e0d2] bg-[#faf7f0] p-1.5">
+                {CMD_TABS.map((t) => {
+                  const active = cmdTab === t.key;
+                  const Icon = t.icon;
+                  const badge = t.key === 'askme' ? feed.filter((e) => e.pending && !e.pendingResult).length : 0;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setCmdTab(t.key)}
+                      className={`relative flex items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[10px] font-medium transition-colors ${
+                        active ? 'bg-[#e8692a] text-white shadow-sm' : 'text-[#857a66] hover:bg-[#f0e9db]'
+                      }`}
+                      title={t.label}
                     >
-                      <span className="min-w-0 flex-1 break-words text-xs text-slate-300">{fact}</span>
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span className="hidden truncate xl:inline">{t.label}</span>
+                      {badge > 0 && (
+                        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold text-white">
+                          {badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Contenido de la pestaña activa */}
+              <div className="p-4">
+                {/* MONITOR — despachar orden + motor por agente */}
+                {cmdTab === 'monitor' && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-[#857a66]">
+                        Despachar — vía Mr Go
+                      </h3>
+                      <textarea
+                        ref={ordenRef}
+                        value={orden}
+                        onChange={(e) => setOrden(e.target.value)}
+                        onKeyDown={onKeyDown}
+                        rows={3}
+                        placeholder="Describí la tarea… (Mr Go la reparte al agente indicado)"
+                        className="w-full resize-none rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-2 text-sm text-[#3a322a] placeholder:text-[#a99d87] focus:border-[#e8692a] focus:outline-none"
+                      />
+                      <button
+                        onClick={enviarOrden}
+                        disabled={enviando || !orden.trim()}
+                        className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-[#e8692a] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#d25e22] disabled:opacity-50"
+                      >
+                        {enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                        {enviando ? 'Mr Go está pensando…' : 'Despachar orden'}
+                      </button>
+                      <label className="mt-3 flex cursor-pointer items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={ejecutarEnVivo}
+                          onChange={(e) => setEjecutarEnVivo(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-[#ddd4c4] bg-[#f6f2ea] text-red-500 focus:ring-red-500"
+                        />
+                        <span className="text-xs text-[#857a66]">
+                          <span className="inline-flex items-center gap-1 font-medium text-amber-600">
+                            <AlertTriangle className="h-3 w-3" />
+                            Ejecutar en vivo
+                          </span>{' '}
+                          — efectúa de verdad (p. ej. envía WhatsApp). Apagado = solo simula.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div>
+                      <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-[#857a66]">
+                        Agentes
+                      </h3>
+                      <ul className="space-y-1.5">
+                        {[...(ceo ? [ceo] : []), ...equipo].map((a) => {
+                          const act = activity[a.key];
+                          const working = Boolean(act && ['working', 'thinking', 'alert'].includes(act.state));
+                          return (
+                            <li
+                              key={a.key}
+                              className="flex items-center gap-2 rounded-lg border border-[#e7e0d2] bg-[#faf7f0] px-2.5 py-1.5"
+                            >
+                              <MrGoAvatar color={colorKeyForAgent(a.key)} emotion={emocionDe(a.key)} size={22} alive={false} />
+                              <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#3a322a]">{a.nombre}</span>
+                              <span className="shrink-0 font-mono text-[10px] text-[#a99d87]">
+                                {engineByKey.get(a.key)?.model ?? 'motor'}
+                              </span>
+                              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${working ? 'bg-emerald-500' : 'bg-[#cdbfa6]'}`} />
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+
+                {/* TERMINAL — detalle del agente seleccionado + log + confirmación */}
+                {cmdTab === 'terminal' && (
+                  <div className="-m-4">
+                    <CommandPanel
+                      agent={selAgent}
+                      activity={seleccionado ? activity[seleccionado] : undefined}
+                      steps={selEvent?.steps}
+                      pending={selEvent?.pending ?? null}
+                      confirming={selEvent ? confirmando === selEvent.id : false}
+                      toolLabel={toolNombre}
+                      onConfirm={selEvent ? () => confirmarPendiente(selEvent) : undefined}
+                      onDiscard={selEvent ? () => cancelarPendiente(selEvent) : undefined}
+                    />
+                  </div>
+                )}
+
+                {/* TASKS — tablero kanban TODO / DOING / BLOCKED */}
+                {cmdTab === 'tasks' && (
+                  <div className="grid grid-cols-3 gap-2">
+                    {(() => {
+                      const doing = [...(ceo ? [ceo] : []), ...equipo].filter((a) => {
+                        const s = activity[a.key]?.state;
+                        return s === 'working' || s === 'thinking' || s === 'alert';
+                      });
+                      const blocked = feed.filter((e) => e.pending && !e.pendingResult);
+                      const cols = [
+                        {
+                          label: 'TODO',
+                          head: 'bg-sky-500/15 text-sky-700',
+                          items: (
+                            <p className="px-1 py-6 text-center text-[10px] text-[#a99d87]">
+                              Despachá trabajo desde Monitor.
+                            </p>
+                          ),
+                        },
+                        {
+                          label: 'DOING',
+                          head: 'bg-amber-500/15 text-amber-700',
+                          items:
+                            doing.length === 0 ? (
+                              <p className="px-1 py-6 text-center text-[10px] text-[#a99d87]">—</p>
+                            ) : (
+                              doing.map((a) => (
+                                <div key={a.key} className="rounded-md border border-[#e7e0d2] bg-white p-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <MrGoAvatar color={colorKeyForAgent(a.key)} emotion="working" size={18} alive={false} />
+                                    <span className="truncate text-[11px] font-medium text-[#3a322a]">{a.nombre}</span>
+                                  </div>
+                                  <p className="mt-1 truncate text-[10px] text-[#857a66]">
+                                    {activity[a.key]?.currentTool ? toolNombre(activity[a.key]!.currentTool!) : 'Trabajando…'}
+                                  </p>
+                                </div>
+                              ))
+                            ),
+                        },
+                        {
+                          label: 'BLOCKED',
+                          head: 'bg-red-500/15 text-red-700',
+                          items:
+                            blocked.length === 0 ? (
+                              <p className="px-1 py-6 text-center text-[10px] text-[#a99d87]">—</p>
+                            ) : (
+                              blocked.map((ev) => (
+                                <button
+                                  key={ev.id}
+                                  type="button"
+                                  onClick={() => setCmdTab('askme')}
+                                  className="w-full rounded-md border border-red-200 bg-red-50 p-2 text-left"
+                                >
+                                  <div className="flex items-center gap-1.5">
+                                    <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={18} alive={false} />
+                                    <span className="truncate text-[11px] font-medium text-[#3a322a]">{ev.agentNombre}</span>
+                                  </div>
+                                  <p className="mt-1 truncate text-[10px] text-[#857a66]">
+                                    {ev.pending ? toolNombre(ev.pending.tool) : ''} · espera tu OK
+                                  </p>
+                                </button>
+                              ))
+                            ),
+                        },
+                      ];
+                      return cols.map((c) => (
+                        <div key={c.label} className="flex flex-col gap-1.5">
+                          <div className={`rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wide ${c.head}`}>
+                            {c.label}
+                          </div>
+                          <div className="flex flex-col gap-1.5">{c.items}</div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
+
+                {/* ASK ME — cola de acciones que esperan tu confirmación */}
+                {cmdTab === 'askme' && (
+                  <div className="space-y-2">
+                    {feed.filter((e) => e.pending && !e.pendingResult).length === 0 ? (
+                      <p className="py-6 text-center text-xs text-[#a99d87]">
+                        Nada espera tu confirmación. Cuando Mr Go quiera hacer algo sensible (cobro, WhatsApp),
+                        te lo pregunta acá.
+                      </p>
+                    ) : (
+                      feed
+                        .filter((e) => e.pending && !e.pendingResult)
+                        .map((ev) => (
+                          <div key={ev.id} className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+                            <div className="flex items-center gap-2">
+                              <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={24} alive={false} />
+                              <span className="min-w-0 flex-1 truncate text-xs font-semibold text-[#3a322a]">{ev.agentNombre}</span>
+                              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-[#857a66]">
+                                {ev.pending ? toolNombre(ev.pending.tool) : ''}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-[11px] text-[#6a5f4e]">Esta acción se ejecuta de verdad. ¿La confirmás?</p>
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => confirmarPendiente(ev)}
+                                disabled={confirmando === ev.id}
+                                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#e8692a] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#d25e22] disabled:opacity-50"
+                              >
+                                {confirmando === ev.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckSquare className="h-3.5 w-3.5" />}
+                                Confirmar y ejecutar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => cancelarPendiente(ev)}
+                                className="rounded-lg border border-[#ddd4c4] bg-white px-3 py-1.5 text-xs font-medium text-[#857a66] transition-colors hover:bg-[#f0e9db]"
+                              >
+                                Descartar
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                )}
+
+                {/* TRIGGERS — enlace a Automatizaciones */}
+                {cmdTab === 'triggers' && (
+                  <div className="py-4 text-center">
+                    <Zap className="mx-auto h-6 w-6 text-[#7c3aed]" />
+                    <p className="mt-2 text-xs text-[#857a66]">
+                      Reglas que disparan acciones solas (mensaje entrante, nueva reserva, pago…).
+                    </p>
+                    <a
+                      href="/workflows"
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-1.5 text-xs font-medium text-[#4a4034] transition-colors hover:bg-[#ece5d8]"
+                    >
+                      Abrir Automatizaciones
+                    </a>
+                  </div>
+                )}
+
+                {/* ACTIVITY — registro de lo que está pasando */}
+                {cmdTab === 'activity' && (
+                  <div>
+                    {feed.length === 0 ? (
+                      <p className="py-6 text-center text-xs text-[#a99d87]">
+                        Todavía no diste ninguna orden. Despachá desde Monitor y Mr Go reparte el trabajo.
+                      </p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {feed.slice(0, 12).map((ev) => (
+                          <li key={ev.id}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSeleccionado(ev.agentKey);
+                                setCmdTab('terminal');
+                              }}
+                              className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                                seleccionado === ev.agentKey
+                                  ? 'border-[#e8692a]/60 bg-[#f0e9db]'
+                                  : 'border-[#e7e0d2] bg-[#faf7f0] hover:border-[#ddd4c4]'
+                              }`}
+                            >
+                              <div className="shrink-0">
+                                <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={28} alive={false} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate text-xs font-medium text-[#3a322a]">{ev.agentNombre}</span>
+                                  <span className="shrink-0 text-[10px] text-[#a99d87]">{ev.hora}</span>
+                                </div>
+                                <p className="truncate text-[11px] text-[#857a66]">
+                                  {ev.esFallback
+                                    ? 'Sin motor de IA'
+                                    : ev.pending
+                                      ? 'Dejó una acción esperando tu OK'
+                                      : ev.finalMessage || `${ev.steps.length} paso(s)`}
+                                </p>
+                              </div>
+                              {ev.pending && !ev.pendingResult && (
+                                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* MEMORY — perfil del negocio + hechos */}
+                {cmdTab === 'memory' && (
+                  <div>
+                    <p className="mb-3 text-xs text-[#a99d87]">
+                      Lo que Mr Go sabe de tu negocio. Lo usa para decidir y responder mejor.
+                    </p>
+                    <label className="mb-1 block text-xs font-medium text-[#857a66]">Perfil del negocio</label>
+                    <textarea
+                      value={memProfile}
+                      onChange={(e) => setMemProfile(e.target.value.slice(0, MEMORY_PROFILE_MAX))}
+                      rows={5}
+                      maxLength={MEMORY_PROFILE_MAX}
+                      placeholder="Contá qué es tu negocio, el tono, reglas…"
+                      className="w-full resize-none rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-2 text-sm text-[#3a322a] placeholder:text-[#a99d87] focus:border-[#e8692a] focus:outline-none"
+                    />
+                    <div className="mt-1 text-right text-[10px] text-[#a99d87]">
+                      {memProfile.length}/{MEMORY_PROFILE_MAX}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <label className="text-xs font-medium text-[#857a66]">Hechos y notas</label>
+                      <span className="text-[10px] text-[#a99d87]">
+                        {memFacts.length}/{MEMORY_FACTS_MAX}
+                      </span>
+                    </div>
+                    {memFacts.length === 0 ? (
+                      <p className="mt-2 text-xs text-[#a99d87]">Todavía no hay hechos cargados.</p>
+                    ) : (
+                      <ul className="mt-2 space-y-2">
+                        {memFacts.map((fact, i) => (
+                          <li
+                            key={i}
+                            className="flex items-start gap-2 rounded-lg border border-[#e7e0d2] bg-[#faf7f0] px-2.5 py-2"
+                          >
+                            <span className="min-w-0 flex-1 break-words text-xs text-[#4a4034]">{fact}</span>
+                            <button
+                              type="button"
+                              onClick={() => borrarHecho(i)}
+                              aria-label="Borrar hecho"
+                              className="shrink-0 rounded p-1 text-[#a99d87] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="mt-3 flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={nuevoHecho}
+                        onChange={(e) => setNuevoHecho(e.target.value.slice(0, MEMORY_FACT_MAX))}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            agregarHecho();
+                          }
+                        }}
+                        maxLength={MEMORY_FACT_MAX}
+                        placeholder="Agregá un hecho (ej: atendemos de 9 a 18)"
+                        disabled={memFacts.length >= MEMORY_FACTS_MAX}
+                        className="min-w-0 flex-1 rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-2 text-sm text-[#3a322a] placeholder:text-[#a99d87] focus:border-[#e8692a] focus:outline-none disabled:opacity-50"
+                      />
                       <button
                         type="button"
-                        onClick={() => borrarHecho(i)}
-                        aria-label="Borrar hecho"
-                        className="shrink-0 rounded p-1 text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                        onClick={agregarHecho}
+                        disabled={!nuevoHecho.trim() || memFacts.length >= MEMORY_FACTS_MAX}
+                        className="flex shrink-0 items-center gap-1 rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-2 text-xs font-medium text-[#4a4034] transition-colors hover:bg-[#ece5d8] disabled:opacity-50"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <Plus className="h-3.5 w-3.5" />
+                        Agregar
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={guardarMemoria}
+                      disabled={guardandoMem}
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#e8692a] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#d25e22] disabled:opacity-50"
+                    >
+                      {guardandoMem ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      {guardandoMem ? 'Guardando…' : 'Guardar memoria'}
+                    </button>
+                  </div>
+                )}
 
-              {/* Agregar un hecho nuevo */}
-              <div className="mt-3 flex items-center gap-2">
-                <input
-                  type="text"
-                  value={nuevoHecho}
-                  onChange={(e) => setNuevoHecho(e.target.value.slice(0, MEMORY_FACT_MAX))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      agregarHecho();
-                    }
-                  }}
-                  maxLength={MEMORY_FACT_MAX}
-                  placeholder="Agregá un hecho (ej: atendemos de 9 a 18)"
-                  disabled={memFacts.length >= MEMORY_FACTS_MAX}
-                  className="min-w-0 flex-1 rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-brand-400 focus:outline-none disabled:opacity-50"
-                />
-                <button
-                  type="button"
-                  onClick={agregarHecho}
-                  disabled={!nuevoHecho.trim() || memFacts.length >= MEMORY_FACTS_MAX}
-                  className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Agregar hecho
-                </button>
+                {/* Pestañas secundarias (aún no cableadas) */}
+                {(cmdTab === 'graph' || cmdTab === 'skills' || cmdTab === 'temps') && (
+                  <div className="py-10 text-center">
+                    <Sparkles className="mx-auto h-6 w-6 text-[#cdbfa6]" />
+                    <p className="mt-2 text-xs text-[#a99d87]">Próximamente.</p>
+                  </div>
+                )}
               </div>
-              {memFacts.length >= MEMORY_FACTS_MAX && (
-                <p className="mt-1 text-[10px] text-amber-400">
-                  Llegaste al máximo de {MEMORY_FACTS_MAX} hechos.
-                </p>
-              )}
-
-              {/* Guardar */}
-              <button
-                type="button"
-                onClick={guardarMemoria}
-                disabled={guardandoMem}
-                className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-400 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-500 disabled:opacity-50"
-              >
-                {guardandoMem ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                {guardandoMem ? 'Guardando…' : 'Guardar memoria'}
-              </button>
             </div>
           </section>
 
           {/* Tira de equipo — una tarjeta por Mr Go: estado · motor · acción
               actual · progreso de la corrida · tira de crash. (Etapa 1) */}
           <section className="lg:col-span-10">
-            <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-5">
+            <div className="rounded-xl border border-[#e7e0d2] bg-white p-5">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-300">
-                  <Users className="h-4 w-4 text-brand-400" />
+                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[#4a4034]">
+                  <Users className="h-4 w-4 text-[#7c3aed]" />
                   Tu equipo Mr Go
                 </h2>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-[#a99d87]">
                   {(ceo ? 1 : 0) + equipo.length} agentes
                 </span>
               </div>

@@ -83,17 +83,17 @@ const FLOOR_H = 900;
 // ---------------------------------------------------------------------------
 
 const SCENE = {
-  floor: '#0a0d18',
-  surface: '#0f1322',
-  node: '#141a2b',
-  hairline: 'rgba(150,165,215,0.12)',
-  hairlineStrong: 'rgba(150,165,215,0.22)',
-  grid: 'rgba(150,165,215,0.05)',
-  ink: '#eaeefb',
-  inkMuted: '#a9b2cc',
-  inkDim: '#6c7694',
-  brand: '#a855f7',
-  glow: 'rgba(168,85,247,0.45)',
+  floor: '#efe7d7', // piso de oficina cálido (crema)
+  surface: '#f6f1e7', // superficie de sala
+  node: '#ffffff', // escritorios / tarjetas
+  hairline: 'rgba(124,92,58,0.16)',
+  hairlineStrong: 'rgba(124,92,58,0.28)',
+  grid: 'rgba(124,92,58,0.06)',
+  ink: '#3a322a', // texto marrón oscuro cálido
+  inkMuted: '#8a7c68',
+  inkDim: '#b4a690',
+  brand: '#7c3aed', // lila de marca (CEO / acentos)
+  glow: 'rgba(124,58,237,0.28)',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -418,15 +418,15 @@ export function OfficeFloor({
     <div className={className}>
       {/* Mini-dashboard del piso */}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 font-medium text-emerald-300">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-medium text-emerald-700">
           <Activity className="h-3 w-3" />
           <span className="font-mono tabular-nums">{trabajando}</span> trabajando
         </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 font-medium text-amber-300">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 font-medium text-amber-700">
           <Coffee className="h-3 w-3" />
           <span className="font-mono tabular-nums">{fuera}</span> fuera del puesto
         </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-600/70 bg-slate-700/40 px-2.5 py-1 font-medium text-slate-300">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-[#ddd4c4] bg-[#f0e9db] px-2.5 py-1 font-medium text-[#8a7c68]">
           <Pause className="h-3 w-3" />
           <span className="font-mono tabular-nums">{enPausa}</span> en pausa
         </span>
@@ -444,8 +444,8 @@ export function OfficeFloor({
           backgroundColor: SCENE.floor,
           backgroundImage: `linear-gradient(${SCENE.grid} 1px, transparent 1px), linear-gradient(90deg, ${SCENE.grid} 1px, transparent 1px)`,
           backgroundSize: '4% 5.5%',
-          boxShadow: 'inset 0 0 160px rgba(0,0,0,0.55)',
-          border: `1px solid ${SCENE.hairline}`,
+          boxShadow: 'inset 0 0 120px rgba(124,92,58,0.08)',
+          border: `1px solid ${SCENE.hairlineStrong}`,
         }}
       >
         {/* Glow lila difuso detrás de Dirección */}
@@ -582,11 +582,11 @@ function ZoneView({ zone }: { zone: ZoneRect }) {
         borderBottom: `1px solid ${SCENE.hairline}`,
         borderLeft: `1px solid ${SCENE.hairline}`,
         background: zone.enclosed
-          ? `linear-gradient(180deg, ${zone.accent}1f 0%, rgba(15,19,34,0.55) 55%)`
-          : `linear-gradient(180deg, ${zone.accent}12 0%, rgba(15,19,34,0.35) 60%)`,
+          ? `linear-gradient(180deg, ${zone.accent}22 0%, rgba(255,252,246,0.82) 55%)`
+          : `linear-gradient(180deg, ${zone.accent}14 0%, rgba(255,252,246,0.6) 60%)`,
         boxShadow: zone.enclosed
-          ? `inset 0 0 40px ${zone.accent}1a, 0 10px 30px rgba(0,0,0,0.35)`
-          : 'inset 0 0 24px rgba(0,0,0,0.25)',
+          ? `inset 0 0 40px ${zone.accent}18, 0 10px 26px rgba(124,92,58,0.14)`
+          : 'inset 0 0 24px rgba(124,92,58,0.08)',
         zIndex: 1,
       }}
     >
@@ -602,8 +602,8 @@ function ZoneView({ zone }: { zone: ZoneRect }) {
           gap: 5,
           padding: '2px 8px',
           borderRadius: 8,
-          background: 'rgba(8,10,20,0.72)',
-          border: `1px solid ${zone.accent}55`,
+          background: 'rgba(255,255,255,0.85)',
+          border: `1px solid ${zone.accent}66`,
           color: zone.accent,
           fontSize: 'clamp(8px, 0.82vw, 11px)',
           fontWeight: 600,
@@ -657,7 +657,7 @@ function StationNode({
           borderRadius: 12,
           background: SCENE.node,
           border: `1px solid ${SCENE.hairline}`,
-          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 14px rgba(0,0,0,0.4)`,
+          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 14px rgba(124,92,58,0.16)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -710,7 +710,7 @@ function MeetingStation({ spots, floorW, accent }: { spots: Spot[]; floorW: numb
           borderRadius: 14,
           background: SCENE.node,
           border: `1px solid ${SCENE.hairline}`,
-          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 14px rgba(0,0,0,0.4)`,
+          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 14px rgba(124,92,58,0.16)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -776,8 +776,8 @@ function DeskFurniture({
           background: `linear-gradient(180deg, ${SCENE.node} 0%, ${SCENE.surface} 100%)`,
           border: `1px solid ${SCENE.hairline}`,
           boxShadow: on
-            ? `inset 0 1px 0 rgba(255,255,255,0.04), 0 6px 16px rgba(0,0,0,0.45), 0 0 18px ${accent}33`
-            : 'inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 16px rgba(0,0,0,0.45)',
+            ? `inset 0 1px 0 rgba(255,255,255,0.8), 0 6px 16px rgba(124,92,58,0.18), 0 0 18px ${accent}33`
+            : 'inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 16px rgba(124,92,58,0.14)',
         }}
       />
       {/* Pantalla contra el borde del fondo */}
@@ -790,7 +790,7 @@ function DeskFurniture({
           width: w * 0.42,
           height: h * 0.4,
           borderRadius: 4,
-          background: '#070912',
+          background: '#9a8a6e',
           border: `1px solid ${SCENE.hairlineStrong}`,
           boxShadow: on ? `0 0 12px ${accent}aa` : 'none',
           display: 'flex',
@@ -805,7 +805,7 @@ function DeskFurniture({
             borderRadius: 2,
             background: on
               ? `linear-gradient(135deg, ${accent} 0%, ${accent}55 100%)`
-              : 'linear-gradient(135deg,#12172a,#0a0d18)',
+              : 'linear-gradient(135deg,#efe7d7,#d8cfbe)',
             opacity: on ? 1 : 0.5,
           }}
         />
@@ -946,14 +946,14 @@ function AgentView({
           gap: 4,
           padding: '2px 8px',
           borderRadius: 999,
-          background: active ? 'rgba(168,85,247,0.95)' : 'rgba(10,13,24,0.85)',
-          border: `1px solid ${active ? 'rgba(199,155,255,0.7)' : SCENE.hairline}`,
+          background: active ? 'rgba(124,58,237,0.96)' : 'rgba(255,255,255,0.94)',
+          border: `1px solid ${active ? 'rgba(167,139,250,0.7)' : SCENE.hairlineStrong}`,
           fontSize: labelFs,
           fontWeight: 600,
           color: active ? '#fff' : SCENE.ink,
           whiteSpace: 'nowrap',
           marginBottom: 3,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
+          boxShadow: '0 2px 8px rgba(124,92,58,0.22)',
           pointerEvents: 'none',
         }}
       >
@@ -988,7 +988,7 @@ function AgentView({
           height: Math.max(5, Math.round(avatarPx * 0.1)),
           marginTop: -Math.round(avatarPx * 0.03),
           borderRadius: '50%',
-          background: 'radial-gradient(ellipse, rgba(0,0,0,0.55) 0%, transparent 72%)',
+          background: 'radial-gradient(ellipse, rgba(124,92,58,0.3) 0%, transparent 72%)',
           filter: 'blur(1.5px)',
           animation: walking ? 'mrgo-step 0.6s ease-in-out infinite' : undefined,
         }}
@@ -997,7 +997,7 @@ function AgentView({
       {/* Chip de estado chico (punto + texto) */}
       <span
         className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-medium ${estado.textCls}`}
-        style={{ background: 'rgba(8,10,20,0.78)', border: `1px solid ${SCENE.hairline}`, whiteSpace: 'nowrap', pointerEvents: 'none' }}
+        style={{ background: 'rgba(58,50,42,0.82)', border: `1px solid ${SCENE.hairline}`, whiteSpace: 'nowrap', pointerEvents: 'none' }}
       >
         <span className={`h-1.5 w-1.5 rounded-full ${estado.dotCls}`} />
         {estado.label}
