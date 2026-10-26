@@ -248,16 +248,17 @@ export function CommandPanel({
       {hasSteps && (
         <section className="flex flex-col gap-2">
           <h3
-            className="font-mono text-[11px] uppercase tracking-wide"
+            className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wide"
             style={{ color: C.muted }}
           >
-            Log de la corrida
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#34d399' }} />
+            live · corrida
           </h3>
           <ol
             className="flex max-h-56 flex-col gap-1 overflow-y-auto p-2 font-mono text-xs"
             style={{
-              background: C.card2,
-              border: `1px solid ${C.hair}`,
+              background: '#14161f',
+              border: '1px solid rgba(255,255,255,0.08)',
               borderRadius: RADIUS_CTRL,
             }}
           >
@@ -267,12 +268,12 @@ export function CommandPanel({
                 <li
                   key={i}
                   className="flex items-center gap-2 px-1.5 py-1"
-                  style={{ borderBottom: i < steps!.length - 1 ? `1px solid ${C.hair}` : 'none' }}
+                  style={{ borderBottom: i < steps!.length - 1 ? '1px solid rgba(255,255,255,0.07)' : 'none' }}
                 >
-                  <span className="shrink-0 tabular-nums" style={{ color: C.muted }}>
+                  <span className="shrink-0 tabular-nums" style={{ color: '#7e8aa3' }}>
                     {String(i + 1).padStart(2, '0')}
                   </span>
-                  <span className="min-w-0 flex-1 truncate" style={{ color: C.ink }}>
+                  <span className="min-w-0 flex-1 truncate" style={{ color: '#e7ebf7' }}>
                     {toolLabel(step.tool)}
                   </span>
                   <span

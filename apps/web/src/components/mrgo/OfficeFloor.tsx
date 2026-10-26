@@ -76,7 +76,7 @@ export interface OfficeFloorProps {
 // Proporción del mapa (ancho:alto). Un poco más alto que 16:9 para que entren
 // la banda de salas de arriba + las zonas de departamento abajo con AIRE.
 const FLOOR_W = 1280;
-const FLOOR_H = 900;
+const FLOOR_H = 1040;
 
 // ---------------------------------------------------------------------------
 // Paleta de la escena (command-center oscuro). Hex directos (tema oscuro).
@@ -902,7 +902,7 @@ function AgentView({
   const clickable = Boolean(onSelect);
   const active = selected || agent.highlighted;
   // Avatares MÁS GRANDES (~35% respecto al diseño anterior) y bien separados.
-  const avatarPx = Math.max(38, floorW * (agent.director ? 0.125 : 0.097));
+  const avatarPx = Math.max(42, floorW * (agent.director ? 0.14 : 0.112));
   const labelFs = Math.max(10, Math.round(avatarPx * 0.17));
 
   return (

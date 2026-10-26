@@ -1015,39 +1015,54 @@ export default function OficinaPage() {
                   {(ceo ? 1 : 0) + equipo.length} agentes
                 </span>
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {/* Tira horizontal de agentes (scroll-x), estilo roster de MD */}
+              <div className="flex gap-3 overflow-x-auto pb-2">
                 {ceo && (
-                  <AgentCard
-                    nombre={ceo.nombre}
-                    rol="Director"
-                    color={colorKeyForAgent(ceo.key)}
-                    engine={engineByKey.get(ceo.key)?.engine}
-                    model={engineByKey.get(ceo.key)?.model}
-                    activity={activity[ceo.key]}
-                    director
-                    paused={pausados.has(ceo.key)}
-                    selected={seleccionado === ceo.key}
-                    toolLabel={toolNombre}
-                    onSelect={() => setSeleccionado((p) => (p === ceo.key ? null : ceo.key))}
-                    onOrder={() => ordenarAAgente(ceo.key)}
-                  />
+                  <div className="w-64 shrink-0">
+                    <AgentCard
+                      nombre={ceo.nombre}
+                      rol="Director"
+                      color={colorKeyForAgent(ceo.key)}
+                      engine={engineByKey.get(ceo.key)?.engine}
+                      model={engineByKey.get(ceo.key)?.model}
+                      activity={activity[ceo.key]}
+                      director
+                      paused={pausados.has(ceo.key)}
+                      selected={seleccionado === ceo.key}
+                      toolLabel={toolNombre}
+                      onSelect={() => setSeleccionado((p) => (p === ceo.key ? null : ceo.key))}
+                      onOrder={() => ordenarAAgente(ceo.key)}
+                    />
+                  </div>
                 )}
                 {equipo.map((a) => (
-                  <AgentCard
-                    key={a.key}
-                    nombre={a.nombre}
-                    rol={a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente'}
-                    color={colorKeyForAgent(a.key)}
-                    engine={engineByKey.get(a.key)?.engine}
-                    model={engineByKey.get(a.key)?.model}
-                    activity={activity[a.key]}
-                    paused={pausados.has(a.key)}
-                    selected={seleccionado === a.key}
-                    toolLabel={toolNombre}
-                    onSelect={() => setSeleccionado((p) => (p === a.key ? null : a.key))}
-                    onOrder={() => ordenarAAgente(a.key)}
-                  />
+                  <div key={a.key} className="w-64 shrink-0">
+                    <AgentCard
+                      nombre={a.nombre}
+                      rol={a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente'}
+                      color={colorKeyForAgent(a.key)}
+                      engine={engineByKey.get(a.key)?.engine}
+                      model={engineByKey.get(a.key)?.model}
+                      activity={activity[a.key]}
+                      paused={pausados.has(a.key)}
+                      selected={seleccionado === a.key}
+                      toolLabel={toolNombre}
+                      onSelect={() => setSeleccionado((p) => (p === a.key ? null : a.key))}
+                      onOrder={() => ordenarAAgente(a.key)}
+                    />
+                  </div>
                 ))}
+                {/* Agregar agente (los 14 roles se activan desde la config del equipo) */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    toast({ type: 'info', message: 'Activá o pausá agentes desde la configuración del equipo.' })
+                  }
+                  className="flex w-40 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#ddd4c4] bg-[#faf7f0] p-5 text-[#857a66] transition-colors hover:border-[#e8692a] hover:text-[#e8692a]"
+                >
+                  <Plus className="h-6 w-6" />
+                  <span className="text-xs font-medium">Agregar agente</span>
+                </button>
               </div>
             </div>
           </section>
