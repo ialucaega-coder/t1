@@ -933,45 +933,63 @@ function AgentView({
         cursor: clickable ? 'pointer' : 'default',
       }}
     >
-      {/* UNA etiqueta limpia con el nombre (Crown lucide si es director) */}
+      {/* UNA etiqueta limpia con el nombre (Crown lucide si es director).
+          Se trunca al ancho del puesto para no pisar a los vecinos del centro. */}
       <div
         style={{
           display: 'inline-flex',
           alignItems: 'center',
           gap: 4,
-          padding: '2px 8px',
+          maxWidth: Math.round(avatarPx * 1.7),
+          padding: '2px 7px',
           borderRadius: 999,
           background: active ? 'rgba(124,58,237,0.96)' : 'rgba(255,255,255,0.94)',
           border: `1px solid ${active ? 'rgba(167,139,250,0.7)' : SCENE.hairlineStrong}`,
           fontSize: labelFs,
           fontWeight: 600,
           color: active ? '#fff' : SCENE.ink,
-          whiteSpace: 'nowrap',
           marginBottom: 3,
           boxShadow: '0 2px 8px rgba(124,92,58,0.22)',
           pointerEvents: 'none',
         }}
       >
-        {agent.director && <Crown style={{ width: labelFs, height: labelFs }} strokeWidth={2} />}
-        {agent.nombre}
+        {agent.director && <Crown style={{ width: labelFs, height: labelFs, flexShrink: 0 }} strokeWidth={2} />}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.nombre}</span>
       </div>
 
-      {/* Avatar (respira/flota; se espeja al caminar a la izquierda) */}
-      <div
-        style={{
-          transform: facing === 'left' ? 'scaleX(-1)' : undefined,
-          filter: active ? 'drop-shadow(0 0 12px rgba(168,85,247,0.9))' : undefined,
-          opacity: agent.paused ? 0.55 : 1,
-          lineHeight: 0,
-        }}
-      >
-        <MrGoAvatar
-          color={agent.color}
-          emotion={estado.emotion}
-          pet={Boolean(agent.pet)}
-          petKey={agent.pet}
-          alive={!agent.paused}
-          size={avatarPx}
+      {/* Avatar (respira/flota; se espeja al caminar a la izquierda) + punto de
+          estado en la esquina (reemplaza el chip de texto para descongestionar). */}
+      <div style={{ position: 'relative', lineHeight: 0 }}>
+        <div
+          style={{
+            transform: facing === 'left' ? 'scaleX(-1)' : undefined,
+            filter: active ? 'drop-shadow(0 0 12px rgba(168,85,247,0.9))' : undefined,
+            opacity: agent.paused ? 0.55 : 1,
+            lineHeight: 0,
+          }}
+        >
+          <MrGoAvatar
+            color={agent.color}
+            emotion={estado.emotion}
+            pet={Boolean(agent.pet)}
+            petKey={agent.pet}
+            alive={!agent.paused}
+            size={avatarPx}
+          />
+        </div>
+        <span
+          aria-hidden
+          className={estado.dotCls}
+          style={{
+            position: 'absolute',
+            top: '8%',
+            right: '12%',
+            width: Math.max(8, Math.round(avatarPx * 0.16)),
+            height: Math.max(8, Math.round(avatarPx * 0.16)),
+            borderRadius: '50%',
+            border: '2px solid #fff',
+            boxShadow: '0 1px 3px rgba(124,92,58,0.35)',
+          }}
         />
       </div>
 
@@ -989,14 +1007,18 @@ function AgentView({
         }}
       />
 
-      {/* Chip de estado chico (punto + texto) */}
-      <span
-        className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-medium ${estado.textCls}`}
-        style={{ background: 'rgba(58,50,42,0.82)', border: `1px solid ${SCENE.hairline}`, whiteSpace: 'nowrap', pointerEvents: 'none' }}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full ${estado.dotCls}`} />
-        {estado.label}
-      </span>
+      {/* Chip de estado con texto: SOLO para el agente activo/seleccionado (el
+          resto muestra el punto de estado en la esquina del avatar). Así el
+          centro del piso no se amontona de pills. */}
+      {active && (
+        <span
+          className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[10px] font-medium ${estado.textCls}`}
+          style={{ background: 'rgba(58,50,42,0.82)', border: `1px solid ${SCENE.hairline}`, whiteSpace: 'nowrap', pointerEvents: 'none' }}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${estado.dotCls}`} />
+          {estado.label}
+        </span>
+      )}
 
       <style>{`
         @keyframes mrgo-step{0%,100%{transform:scaleX(1);opacity:.55}50%{transform:scaleX(.8);opacity:.34}}
