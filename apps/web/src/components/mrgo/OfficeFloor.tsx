@@ -444,7 +444,8 @@ export function OfficeFloor({
           backgroundColor: SCENE.floor,
           backgroundImage: `linear-gradient(${SCENE.grid} 1px, transparent 1px), linear-gradient(90deg, ${SCENE.grid} 1px, transparent 1px)`,
           backgroundSize: '4% 5.5%',
-          boxShadow: 'inset 0 0 120px rgba(124,92,58,0.08)',
+          // Zócalo/pared de la sala (anillo interior cálido) + viñeta suave.
+          boxShadow: 'inset 0 0 0 4px rgba(176,152,116,0.30), inset 0 0 120px rgba(124,92,58,0.08)',
           border: `1px solid ${SCENE.hairlineStrong}`,
         }}
       >
@@ -576,46 +577,40 @@ function ZoneView({ zone }: { zone: ZoneRect }) {
         top: `${zone.y}%`,
         width: `${zone.w}%`,
         height: `${zone.h}%`,
-        borderRadius: 12,
-        borderTop: `2px solid ${zone.accent}`,
-        borderRight: `1px solid ${SCENE.hairline}`,
-        borderBottom: `1px solid ${SCENE.hairline}`,
-        borderLeft: `1px solid ${SCENE.hairline}`,
-        background: zone.enclosed
-          ? `linear-gradient(180deg, ${zone.accent}22 0%, rgba(255,252,246,0.82) 55%)`
-          : `linear-gradient(180deg, ${zone.accent}14 0%, rgba(255,252,246,0.6) 60%)`,
-        boxShadow: zone.enclosed
-          ? `inset 0 0 40px ${zone.accent}18, 0 10px 26px rgba(124,92,58,0.14)`
-          : 'inset 0 0 24px rgba(124,92,58,0.08)',
+        borderRadius: 10,
+        // Secciones del piso: contorno sutil (sala abierta), no tarjeta elevada.
+        border: zone.enclosed ? `1px solid ${zone.accent}55` : `1px dashed ${zone.accent}3a`,
+        background: zone.enclosed ? `${zone.accent}12` : `${zone.accent}08`,
+        boxShadow: zone.enclosed ? `inset 0 0 30px ${zone.accent}12` : 'none',
         zIndex: 1,
       }}
     >
-      {/* Rótulo tipo chip mono (en la esquina superior izquierda) */}
-      <span
-        className="font-mono"
-        style={{
-          position: 'absolute',
-          top: 8,
-          left: 8,
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 5,
-          padding: '2px 8px',
-          borderRadius: 8,
-          background: 'rgba(255,255,255,0.85)',
-          border: `1px solid ${zone.accent}66`,
-          color: zone.accent,
-          fontSize: 'clamp(8px, 0.82vw, 11px)',
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          whiteSpace: 'nowrap',
-          backdropFilter: 'blur(2px)',
-        }}
-      >
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: zone.accent, display: 'inline-block' }} />
-        {zone.label}
-      </span>
+      {/* Rótulo discreto de la sección (solo salas cerradas: Dirección/Café/
+          Reunión). Los departamentos quedan sin rótulo para que el piso lea como
+          una sala abierta (como la oficina de Munder Difflin). */}
+      {zone.enclosed && (
+        <span
+          className="font-mono"
+          style={{
+            position: 'absolute',
+            top: 6,
+            left: 8,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            color: zone.accent,
+            fontSize: 'clamp(7px, 0.72vw, 10px)',
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+            opacity: 0.8,
+          }}
+        >
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: zone.accent, display: 'inline-block' }} />
+          {zone.label}
+        </span>
+      )}
     </div>
   );
 }
