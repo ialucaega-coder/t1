@@ -991,11 +991,111 @@ export default function OficinaPage() {
                   </div>
                 )}
 
-                {/* Pestañas secundarias (aún no cableadas) */}
-                {(cmdTab === 'graph' || cmdTab === 'skills' || cmdTab === 'temps') && (
-                  <div className="py-10 text-center">
-                    <Sparkles className="mx-auto h-6 w-6 text-[#cdbfa6]" />
-                    <p className="mt-2 text-xs text-[#a99d87]">Próximamente.</p>
+                {/* GRAPH — grafo de delegación: Mr Go (CEO) → especialistas */}
+                {cmdTab === 'graph' && (
+                  <div>
+                    <p className="mb-2 text-xs text-[#a99d87]">
+                      Mr Go (CEO) coordina y delega en el equipo.
+                    </p>
+                    {(() => {
+                      const ring = equipo;
+                      const cx = 160;
+                      const cy = 120;
+                      const r = 92;
+                      const pts = ring.map((a, i) => {
+                        const ang = (i / Math.max(1, ring.length)) * Math.PI * 2 - Math.PI / 2;
+                        return { a, x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) };
+                      });
+                      return (
+                        <svg viewBox="0 0 320 240" className="w-full" style={{ maxHeight: 250 }}>
+                          {pts.map((p) => (
+                            <line key={`l-${p.a.key}`} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke="#ddd4c4" strokeWidth={1.5} />
+                          ))}
+                          {pts.map((p) => (
+                            <circle
+                              key={`c-${p.a.key}`}
+                              cx={p.x}
+                              cy={p.y}
+                              r={9}
+                              fill={roleByKey.get(p.a.key)?.color ?? '#7c3aed'}
+                              stroke="#fff"
+                              strokeWidth={2}
+                            />
+                          ))}
+                          <circle cx={cx} cy={cy} r={16} fill="#7c3aed" stroke="#fff" strokeWidth={3} />
+                          <text x={cx} y={cy + 4} textAnchor="middle" fontSize="9" fontWeight="700" fill="#fff">
+                            CEO
+                          </text>
+                        </svg>
+                      );
+                    })()}
+                    <p className="mt-2 text-center text-[10px] text-[#a99d87]">
+                      {equipo.length} especialistas conectados al CEO
+                    </p>
+                  </div>
+                )}
+
+                {/* SKILLS — herramientas (gating por rol) que puede ejecutar cada agente */}
+                {cmdTab === 'skills' && (
+                  <div className="space-y-2">
+                    <p className="mb-1 text-xs text-[#a99d87]">
+                      Herramientas que puede ejecutar cada agente (caja por rol).
+                    </p>
+                    {[...(ceo ? [ceo] : []), ...equipo].map((a) => {
+                      const tls = toolsForRole(a.key);
+                      return (
+                        <div key={a.key} className="rounded-lg border border-[#e7e0d2] bg-[#faf7f0] p-2">
+                          <div className="flex items-center gap-2">
+                            <MrGoAvatar color={colorKeyForAgent(a.key)} emotion="working" size={20} alive={false} />
+                            <span className="text-xs font-medium text-[#3a322a]">{a.nombre}</span>
+                          </div>
+                          {tls.length === 0 ? (
+                            <p className="mt-1 pl-7 text-[10px] text-[#a99d87]">Solo coordina / responde.</p>
+                          ) : (
+                            <div className="mt-1 flex flex-wrap gap-1 pl-7">
+                              {tls.map((t) => (
+                                <span
+                                  key={t}
+                                  className="rounded border border-[#ddd4c4] bg-white px-1.5 py-0.5 font-mono text-[10px] text-[#857a66]"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* TEMPS — "temperatura" del equipo: actividad/estado por agente */}
+                {cmdTab === 'temps' && (
+                  <div className="space-y-1.5">
+                    <p className="mb-1 text-xs text-[#a99d87]">Actividad del equipo ahora mismo.</p>
+                    {[...(ceo ? [ceo] : []), ...equipo].map((a) => {
+                      const st = activity[a.key]?.state;
+                      const heat =
+                        st === 'working' || st === 'alert'
+                          ? { lbl: 'Activo', cls: 'bg-amber-500', w: '90%' }
+                          : st === 'thinking'
+                            ? { lbl: 'Pensando', cls: 'bg-sky-500', w: '60%' }
+                            : st === 'blocked'
+                              ? { lbl: 'Bloqueado', cls: 'bg-red-500', w: '100%' }
+                              : st === 'success'
+                                ? { lbl: 'Listo', cls: 'bg-emerald-500', w: '40%' }
+                                : { lbl: pausados.has(a.key) ? 'En pausa' : 'En reposo', cls: 'bg-[#cdbfa6]', w: '15%' };
+                      return (
+                        <div key={a.key} className="flex items-center gap-2">
+                          <MrGoAvatar color={colorKeyForAgent(a.key)} emotion="working" size={18} alive={false} />
+                          <span className="w-16 shrink-0 truncate text-[11px] text-[#3a322a]">{a.nombre}</span>
+                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#ece5d8]">
+                            <div className={`h-full rounded-full ${heat.cls}`} style={{ width: heat.w }} />
+                          </div>
+                          <span className="w-14 shrink-0 text-right text-[10px] text-[#857a66]">{heat.lbl}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
