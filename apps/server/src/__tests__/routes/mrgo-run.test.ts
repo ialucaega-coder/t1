@@ -41,7 +41,13 @@ vi.mock('../../services/actions/executor', async (importOriginal) => {
   return { ...actual, executeAction: vi.fn() };
 });
 
+vi.mock('../../services/mrgo/office', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/office')>();
+  return { ...actual, loadOffice: vi.fn(), saveOffice: vi.fn() };
+});
+
 import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
+import { loadOffice, saveOffice } from '../../services/mrgo/office';
 import { orchestrate } from '../../services/mrgo/orchestrator';
 import { executeAction } from '../../services/actions/executor';
 import { mrgoRouter } from '../../routes/mrgo';
@@ -267,6 +273,42 @@ describe('routes/mrgo — loop agéntico', () => {
       const res = await request(app).post('/api/mrgo/confirm').send({ tool: 'enviar_whatsapp' });
       expect(res.status).toBe(401);
       expect(executeAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('/office (estado persistente de la oficina)', () => {
+    it('GET devuelve las pausas del negocio', async () => {
+      mock(loadOffice).mockResolvedValue({ paused: ['ventas', 'cobros'] });
+      const res = await request(app).get('/api/mrgo/office').set(...AUTH);
+      expect(res.status).toBe(200);
+      expect(res.body.paused).toEqual(['ventas', 'cobros']);
+      expect(loadOffice).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('PUT guarda las pausas (scope por businessId)', async () => {
+      mock(saveOffice).mockResolvedValue({ paused: ['ventas'] });
+      const res = await request(app)
+        .put('/api/mrgo/office')
+        .set(...AUTH)
+        .send({ paused: ['ventas'] });
+      expect(res.status).toBe(200);
+      expect(res.body.paused).toEqual(['ventas']);
+      expect(saveOffice).toHaveBeenCalledWith('biz_1', { paused: ['ventas'] });
+    });
+
+    it('PUT 400 con una clave de agente inválida (validación Zod)', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/office')
+        .set(...AUTH)
+        .send({ paused: ['no_existe'] });
+      expect(res.status).toBe(400);
+      expect(saveOffice).not.toHaveBeenCalled();
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app).get('/api/mrgo/office');
+      expect(res.status).toBe(401);
+      expect(loadOffice).not.toHaveBeenCalled();
     });
   });
 });

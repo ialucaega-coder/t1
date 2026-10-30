@@ -26,7 +26,7 @@ vi.mock('../../services/actions/executor', () => ({
 }));
 
 import { getAIProviderForBusiness } from '../../services/ai/engine';
-import { executeAction, actionKind } from '../../services/actions/executor';
+import { executeAction, actionKind, type ActionResult } from '../../services/actions/executor';
 import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -48,7 +48,7 @@ const KIND: Record<string, 'interno' | 'externo'> = {
   lanzar_campana: 'externo',
 };
 
-function okResult(action: string, status = 'ejecutado') {
+function okResult(action: string, status: ActionResult['status'] = 'ejecutado'): ActionResult {
   return { action, kind: KIND[action] ?? 'externo', ok: status !== 'error', status, detail: `${action}: ${status}` };
 }
 

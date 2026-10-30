@@ -254,3 +254,22 @@ export function getMrGoMemory() {
 export function saveMrGoMemory(memory: { profile?: string; facts?: string[] }) {
   return httpClient.put<MrGoMemory>('/mrgo/memory', memory);
 }
+
+/**
+ * Estado persistente de la oficina (el piso). Por ahora: qué agentes están EN
+ * PAUSA (foco visual). El arreglo del piso es determinístico según los agentes
+ * activos, así que no hace falta guardarlo aparte.
+ */
+export interface MrGoOffice {
+  paused: string[];
+}
+
+/** Lee el estado de la oficina (pausas) del negocio. */
+export function getMrGoOffice() {
+  return httpClient.get<MrGoOffice>('/mrgo/office');
+}
+
+/** Persiste el estado de la oficina (pausas). Devuelve el estado guardado. */
+export function saveMrGoOffice(office: MrGoOffice) {
+  return httpClient.put<MrGoOffice>('/mrgo/office', office);
+}

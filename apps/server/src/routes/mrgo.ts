@@ -33,6 +33,7 @@ import { orchestrate } from '../services/mrgo/orchestrator';
 import { runAgentLoop, resumeAgentLoop, type AgentStep } from '../services/mrgo/agent-loop';
 import { executeAction } from '../services/actions/executor';
 import { loadMemory, saveMemory, MAX_PROFILE_LEN, MAX_FACT_LEN, MAX_FACTS } from '../services/mrgo/memory';
+import { loadOffice, saveOffice } from '../services/mrgo/office';
 
 // Zod exige una tupla no vacía para z.enum; el catálogo nunca está vacío.
 const agentKeyEnum = z.enum(AGENT_KEYS as [string, ...string[]]);
@@ -106,6 +107,11 @@ const confirmSchema = z.object({
 const memorySchema = z.object({
   profile: z.string().trim().max(MAX_PROFILE_LEN).optional(),
   facts: z.array(z.string().trim().max(MAX_FACT_LEN)).max(MAX_FACTS).optional(),
+});
+
+// Estado persistente de la oficina (qué agentes están en pausa).
+const officeSchema = z.object({
+  paused: z.array(agentKeyEnum).max(AGENT_KEYS.length),
 });
 
 const router = Router();
@@ -265,6 +271,26 @@ router.put(
   asyncHandler(async (req, res) => {
     const memory = await saveMemory(req.auth!.businessId, req.body);
     res.json(memory);
+  })
+);
+
+// Estado persistente de la oficina (pausas). Se carga al abrir la Oficina y se
+// guarda cuando el dueño pausa/reactiva un agente. Cualquier miembro del negocio
+// puede cambiarlo (es foco visual del piso, no config sensible).
+router.get(
+  '/office',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await loadOffice(req.auth!.businessId));
+  })
+);
+
+router.put(
+  '/office',
+  requireAuth,
+  validate(officeSchema),
+  asyncHandler(async (req, res) => {
+    res.json(await saveOffice(req.auth!.businessId, req.body));
   })
 );
 

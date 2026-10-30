@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
   Terminal, Gauge, CheckSquare, Bell, Zap, Share2, Activity as ActivityIcon, Sparkles, Thermometer,
+  Pause, Play,
 } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
@@ -31,6 +32,8 @@ import {
   resumeMrGo,
   getMrGoMemory,
   saveMrGoMemory,
+  getMrGoOffice,
+  saveMrGoOffice,
   colorKeyForAgent,
   mapEmotion,
   CEO_AGENT_KEY,
@@ -197,6 +200,22 @@ export default function OficinaPage() {
     };
   }, []);
 
+  // Carga el estado persistente de la oficina (qué agentes están en pausa) al
+  // montar, para que las pausas vuelvan igual tras recargar. Silencioso.
+  useEffect(() => {
+    let activo = true;
+    getMrGoOffice()
+      .then((office) => {
+        if (activo && Array.isArray(office.paused)) setPausados(new Set(office.paused));
+      })
+      .catch(() => {
+        /* estado de oficina opcional: si falla, arranca sin pausas */
+      });
+    return () => {
+      activo = false;
+    };
+  }, []);
+
   /** Suma un hecho nuevo a la lista (respetando los límites del backend). */
   function agregarHecho() {
     const h = nuevoHecho.trim();
@@ -354,13 +373,15 @@ export default function OficinaPage() {
     enabled: true,
   });
 
-  /** Pausar / reactivar un agente (foco visual de la oficina). */
+  /** Pausar / reactivar un agente (foco visual de la oficina). Persiste el nuevo
+   *  estado para que las pausas vuelvan igual tras recargar. */
   function togglePausa(key: string) {
-    setPausados((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
+    const next = new Set(pausados);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setPausados(next);
+    saveMrGoOffice({ paused: [...next] }).catch(() => {
+      toast({ type: 'error', message: 'No se pudo guardar el estado de la oficina.' });
     });
   }
 
@@ -684,17 +705,29 @@ export default function OficinaPage() {
                         {[...(ceo ? [ceo] : []), ...equipo].map((a) => {
                           const act = activity[a.key];
                           const working = Boolean(act && ['working', 'thinking', 'alert'].includes(act.state));
+                          const paused = pausados.has(a.key);
                           return (
                             <li
                               key={a.key}
-                              className="flex items-center gap-2 rounded-lg border border-[#e7e0d2] bg-[#faf7f0] px-2.5 py-1.5"
+                              className={`flex items-center gap-2 rounded-lg border border-[#e7e0d2] bg-[#faf7f0] px-2.5 py-1.5 ${paused ? 'opacity-60' : ''}`}
                             >
-                              <MrGoAvatar color={colorKeyForAgent(a.key)} emotion={emocionDe(a.key)} size={22} alive={false} />
+                              <MrGoAvatar color={colorKeyForAgent(a.key)} emotion={emocionDe(a.key)} size={22} alive={!paused} />
                               <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#3a322a]">{a.nombre}</span>
                               <span className="shrink-0 font-mono text-[10px] text-[#a99d87]">
                                 {engineByKey.get(a.key)?.model ?? 'motor'}
                               </span>
-                              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${working ? 'bg-emerald-500' : 'bg-[#cdbfa6]'}`} />
+                              <span
+                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${paused ? 'bg-[#cdbfa6]' : working ? 'bg-emerald-500' : 'bg-[#cdbfa6]'}`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => togglePausa(a.key)}
+                                aria-label={paused ? `Reactivar ${a.nombre}` : `Pausar ${a.nombre}`}
+                                title={paused ? 'Reactivar' : 'Pausar'}
+                                className="shrink-0 rounded p-1 text-[#a99d87] transition-colors hover:bg-[#ece5d8] hover:text-[#857a66]"
+                              >
+                                {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+                              </button>
                             </li>
                           );
                         })}
