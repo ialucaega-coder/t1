@@ -224,6 +224,14 @@ const TOP = { y: 4, h: 26 };
 // Área principal (zonas de departamento con puestos). Respira hasta el 96%.
 const MAIN = { x0: 4, y0: 37, x1: 96, y1: 96 };
 
+// Plantas de decoración (esquinas/bordes del piso), estilo oficina de MD.
+const FLOOR_PLANTS: { x: number; y: number; size: number }[] = [
+  { x: 2.3, y: 34, size: 1 },
+  { x: 97.7, y: 34, size: 1 },
+  { x: 2.3, y: 94.5, size: 1.15 },
+  { x: 97.7, y: 94.5, size: 1.15 },
+];
+
 /** Calcula todo el plano a partir de los agentes presentes. */
 export function computeFloor(agents: RoomAgent[]): FloorLayout {
   const zones: ZoneRect[] = [];
@@ -449,6 +457,9 @@ export function OfficeFloor({
           border: `1px solid ${SCENE.hairlineStrong}`,
         }}
       >
+        {/* Ventanal de la pared del fondo (arriba de todo, detrás de las salas) */}
+        <BackWindow />
+
         {/* Glow lila difuso detrás de Dirección */}
         {direccion && (
           <div
@@ -472,6 +483,10 @@ export function OfficeFloor({
         {layout.zones.map((z) => (
           <ZoneView key={z.id} zone={z} />
         ))}
+
+        {/* Plantas de decoración (esquinas y bordes), no interactivas */}
+        {floorW > 0 &&
+          FLOOR_PLANTS.map((p, i) => <Plant key={`plant-${i}`} x={p.x} y={p.y} floorW={floorW} size={p.size} />)}
 
         {/* Estaciones de café y reunión (nodos limpios) */}
         <CafeArea spot={layout.coffeeSpot} floorW={floorW} />
@@ -823,6 +838,82 @@ function CafeArea({ spot, floorW }: { spot: Spot; floorW: number }) {
       >
         Café
       </span>
+    </div>
+  );
+}
+
+/** Ventanal de la pared del fondo: marco cálido con paños de vidrio celeste. */
+function BackWindow() {
+  const panes = 7;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        left: '8%',
+        top: '1.2%',
+        width: '84%',
+        height: '6.5%',
+        borderRadius: 6,
+        background: '#c9b48f',
+        padding: 2,
+        display: 'flex',
+        gap: 2,
+        zIndex: 0,
+        boxShadow: '0 2px 6px rgba(124,92,58,0.15)',
+      }}
+    >
+      {Array.from({ length: panes }).map((_, i) => (
+        <div
+          key={i}
+          style={{
+            flex: 1,
+            borderRadius: 2,
+            background: 'linear-gradient(160deg,#cfe8f6 0%,#eef7fc 55%,#dcefff 100%)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.7)',
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Planta de decoración (follaje + maceta de terracota). No interactiva. */
+function Plant({ x, y, floorW, size = 1 }: { x: number; y: number; floorW: number; size?: number }) {
+  const s = Math.max(14, floorW * 0.032 * size);
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        left: `${x}%`,
+        top: `${y}%`,
+        transform: 'translate(-50%, -78%)',
+        width: s,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        zIndex: 1,
+        pointerEvents: 'none',
+      }}
+    >
+      {/* Follaje */}
+      <div style={{ position: 'relative', width: s, height: s * 0.95 }}>
+        <div style={{ position: 'absolute', left: '22%', top: '4%', width: '56%', height: '58%', borderRadius: '50%', background: '#5aa05f' }} />
+        <div style={{ position: 'absolute', left: '2%', top: '26%', width: '52%', height: '56%', borderRadius: '50%', background: '#6cb270' }} />
+        <div style={{ position: 'absolute', right: '2%', top: '28%', width: '52%', height: '54%', borderRadius: '50%', background: '#4f9657' }} />
+      </div>
+      {/* Maceta */}
+      <div
+        style={{
+          width: s * 0.5,
+          height: s * 0.42,
+          marginTop: -s * 0.12,
+          borderRadius: '3px 3px 6px 6px',
+          background: 'linear-gradient(180deg,#c87c4c 0%,#a9623a 100%)',
+          boxShadow: '0 2px 4px rgba(124,92,58,0.25)',
+        }}
+      />
     </div>
   );
 }
