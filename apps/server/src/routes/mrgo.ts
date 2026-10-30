@@ -25,6 +25,7 @@ import {
   DEFAULT_AGENT_KEY,
   MAX_PROVIDER_LEN,
   MAX_MODEL_LEN,
+  MAX_NAME_LEN,
   loadAgents,
   saveAgents,
   isValidToolKey,
@@ -43,6 +44,12 @@ const agentConfigSchema = z.object({
   activo: z.boolean().optional(),
   llmProvider: z.string().trim().max(MAX_PROVIDER_LEN).optional(),
   llmModel: z.string().trim().max(MAX_MODEL_LEN).optional(),
+  // Personalización del avatar (Studio). Se dejan pasar como texto y el
+  // servicio (`sanitizeAgents`) valida contra los catálogos de color/emoción/mascota.
+  nombre: z.string().trim().max(MAX_NAME_LEN).optional(),
+  colorKey: z.string().trim().max(20).optional(),
+  emotion: z.string().trim().max(20).optional(),
+  pet: z.string().trim().max(20).optional(),
 });
 
 const putAgentsSchema = z.object({

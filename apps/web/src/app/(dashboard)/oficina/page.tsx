@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
   Terminal, Gauge, CheckSquare, Bell, Zap, Share2, Activity as ActivityIcon, Sparkles, Thermometer,
-  Pause, Play,
+  Pause, Play, Palette, Smile, Heart, Glasses, Shirt, Check, Pencil, Wand2,
 } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
@@ -25,7 +25,14 @@ import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
 import { AgentCard } from '@/components/mrgo/AgentCard';
 import { CommandPanel, type CommandPanelAgent } from '@/components/mrgo/CommandPanel';
 import { useAgentActivity } from '@/components/mrgo/useAgentActivity';
-import type { MrGoEmotion } from '@/components/mrgo/types';
+import {
+  MR_GO_COLORS,
+  MR_GO_COLOR_ORDER,
+  MR_GO_PETS,
+  type MrGoEmotion,
+  type MrGoColorKey,
+  type MrGoPetKey,
+} from '@/components/mrgo/types';
 import {
   getMrGoAgents,
   runMrGo,
@@ -34,9 +41,11 @@ import {
   saveMrGoMemory,
   getMrGoOffice,
   saveMrGoOffice,
+  saveMrGoAgents,
   colorKeyForAgent,
   mapEmotion,
   CEO_AGENT_KEY,
+  PET_NONE,
   type MrGoAgentConfig,
   type MrGoRole,
   type MrGoTool,
@@ -101,6 +110,22 @@ const MEMORY_PROFILE_MAX = 2000;
 const MEMORY_FACT_MAX = 300;
 const MEMORY_FACTS_MAX = 50;
 
+// ─── Studio "Tu Mr Go": catálogos de personalización para el panel ──────────
+/** Etiqueta en español de cada expresión (para chips/labels del Studio). */
+const EMOTION_LABELS: Record<MrGoEmotion, string> = {
+  happy: 'Feliz',
+  working: 'Trabajando',
+  thinking: 'Pensando',
+  nerd: 'Concentrado',
+  angry: 'Enojado',
+  sleepy: 'Durmiendo',
+  love: 'Encantado',
+};
+/** Expresiones ofrecidas en el Studio (espejan el mockup "modelo 1"). */
+const STUDIO_EMOTIONS: MrGoEmotion[] = ['happy', 'thinking', 'nerd', 'angry', 'sleepy', 'love'];
+/** Mascotas elegibles (el "ninguna" se agrega aparte en el panel). */
+const STUDIO_PETS: MrGoPetKey[] = ['jinx', 'rayito', 'relojito', 'billetin', 'cerebrito', 'megafonito'];
+
 /** Pestañas del COMMAND CENTER (réplica del panel de Munder Difflin). */
 type CmdTab =
   | 'terminal' | 'monitor' | 'tasks' | 'askme' | 'triggers'
@@ -162,6 +187,16 @@ export default function OficinaPage() {
   const [memFacts, setMemFacts] = useState<string[]>([]);
   const [nuevoHecho, setNuevoHecho] = useState('');
   const [guardandoMem, setGuardandoMem] = useState(false);
+
+  // ─── Studio "Tu Mr Go" ──────────────────────────────────────────────────
+  // Qué agente se está personalizando (default: el CEO/principal) + el borrador
+  // de los campos (se sincroniza con la config guardada al cambiar de agente).
+  const [studioKey, setStudioKey] = useState<string>(CEO_AGENT_KEY);
+  const [studioNombre, setStudioNombre] = useState('');
+  const [studioColor, setStudioColor] = useState<MrGoColorKey>('LILA');
+  const [studioEmotion, setStudioEmotion] = useState<MrGoEmotion>('happy');
+  const [studioPet, setStudioPet] = useState<MrGoPetKey | 'none'>('none');
+  const [guardandoStudio, setGuardandoStudio] = useState(false);
 
   async function cargar() {
     setIsLoading(true);
@@ -249,6 +284,51 @@ export default function OficinaPage() {
     }
   }
 
+  // Sincroniza el borrador del Studio con la config guardada del agente elegido
+  // (al cambiar de agente o tras guardar/recargar). El nombre vacío = usar el
+  // del catálogo (el input muestra ese nombre como placeholder).
+  useEffect(() => {
+    const cfg = agents.find((a) => a.key === studioKey);
+    setStudioNombre(cfg?.nombre ?? '');
+    setStudioColor((cfg?.colorKey as MrGoColorKey) ?? colorKeyForAgent(studioKey));
+    setStudioEmotion((cfg?.emotion as MrGoEmotion) ?? 'happy');
+    const defPet: MrGoPetKey | undefined =
+      studioKey === CEO_AGENT_KEY ? 'jinx' : petForRole(studioKey);
+    setStudioPet((cfg?.pet as MrGoPetKey | 'none') ?? defPet ?? PET_NONE);
+  }, [studioKey, agents]);
+
+  /** Guarda la personalización del agente del Studio (merge sobre la config). */
+  async function guardarStudio() {
+    if (guardandoStudio) return;
+    setGuardandoStudio(true);
+    try {
+      const next: MrGoAgentConfig[] = agents.map((a) =>
+        a.key === studioKey
+          ? {
+              ...a,
+              nombre: studioNombre.trim() || undefined,
+              colorKey: studioColor,
+              emotion: studioEmotion,
+              pet: studioPet,
+            }
+          : a,
+      );
+      const res = await saveMrGoAgents(next);
+      setAgents(res.agents);
+      const label = studioNombre.trim() || roleByKey.get(studioKey)?.nombre || 'agente';
+      toast({ type: 'success', message: `Tu Mr Go guardado: ${label} actualizado.` });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('403') || /forbidden/i.test(msg)) {
+        toast({ type: 'error', message: 'Solo un admin puede personalizar los agentes.' });
+      } else {
+        toast({ type: 'error', message: msg || 'No se pudo guardar la personalización.' });
+      }
+    } finally {
+      setGuardandoStudio(false);
+    }
+  }
+
   // Índices por clave para unir config (activo) con presentación (nombre/desc).
   const roleByKey = useMemo(() => {
     const m = new Map<string, MrGoRole>();
@@ -270,6 +350,34 @@ export default function OficinaPage() {
     return m;
   }, [agents]);
 
+  // Config cruda por agente (incluye la personalización del Studio).
+  const configByKey = useMemo(() => {
+    const m = new Map<string, MrGoAgentConfig>();
+    for (const a of agents) m.set(a.key, a);
+    return m;
+  }, [agents]);
+
+  // ─── Resolución del "sobre visual" por agente ──────────────────────────────
+  // La personalización guardada (Studio) gana; si falta, se cae al default del
+  // rol (color por AGENT_COLOR_KEYS, mascota por petForRole, nombre del catálogo).
+
+  /** Color del cuerpo del agente (personalizado o el del rol). */
+  function colorOf(key: string): MrGoColorKey {
+    return (configByKey.get(key)?.colorKey as MrGoColorKey | undefined) ?? colorKeyForAgent(key);
+  }
+  /** Mascota del agente: personalizada, 'none' = sin mascota, o la del rol. */
+  function petOf(key: string): MrGoPetKey | undefined {
+    const p = configByKey.get(key)?.pet;
+    if (p === PET_NONE) return undefined;
+    if (p) return p as MrGoPetKey;
+    return key === CEO_AGENT_KEY ? 'jinx' : petForRole(key);
+  }
+  /** Nombre a mostrar del agente (personalizado o el del catálogo de roles). */
+  function nombreOf(key: string): string {
+    const n = configByKey.get(key)?.nombre?.trim();
+    return n || roleByKey.get(key)?.nombre || key;
+  }
+
   // Evento más reciente del agente seleccionado: alimenta el CommandPanel
   // (log de pasos + acción pendiente de ese agente).
   const selEvent = useMemo(
@@ -290,13 +398,14 @@ export default function OficinaPage() {
           : 'Agente';
     return {
       key: seleccionado,
-      nombre: role?.nombre ?? seleccionado,
+      nombre: nombreOf(seleccionado),
       rol,
-      color: colorKeyForAgent(seleccionado),
+      color: colorOf(seleccionado),
       engine: eng?.engine,
       model: eng?.model,
     };
-  }, [seleccionado, roleByKey, engineByKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seleccionado, roleByKey, engineByKey, configByKey]);
 
   // Agentes activos listos para pintar, con CEO siempre primero.
   const { ceo, equipo } = useMemo(() => {
@@ -306,7 +415,7 @@ export default function OficinaPage() {
         const role = roleByKey.get(a.key);
         return {
           key: a.key,
-          nombre: role?.nombre ?? a.key,
+          nombre: nombreOf(a.key),
           descripcion: role?.descripcion ?? '',
           activo: a.activo,
         };
@@ -315,11 +424,13 @@ export default function OficinaPage() {
       ceo: activos.find((a) => a.key === CEO_AGENT_KEY) ?? null,
       equipo: activos.filter((a) => a.key !== CEO_AGENT_KEY),
     };
-  }, [agents, roleByKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, roleByKey, configByKey]);
 
-  /** Emoción a mostrar para un agente (override de la última orden o 'working'). */
+  /** Emoción a mostrar: override de la última orden, o la expresión en reposo
+   *  elegida en el Studio, o 'working' por defecto. */
   function emocionDe(key: string): MrGoEmotion {
-    return emociones[key] ?? 'working';
+    return emociones[key] ?? configByKey.get(key)?.emotion ?? 'working';
   }
 
   /** Nombres de los tools que un rol puede ejecutar (CEO = todos). */
@@ -336,9 +447,9 @@ export default function OficinaPage() {
         key: ceo.key,
         nombre: ceo.nombre,
         rol: 'Director',
-        color: colorKeyForAgent(ceo.key),
+        color: colorOf(ceo.key),
         emotion: emocionDe(ceo.key),
-        pet: 'jinx',
+        pet: petOf(ceo.key),
         highlighted: resaltado === ceo.key,
         director: true,
         paused: pausados.has(ceo.key),
@@ -350,9 +461,9 @@ export default function OficinaPage() {
         key: a.key,
         nombre: a.nombre,
         rol: a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente',
-        color: colorKeyForAgent(a.key),
+        color: colorOf(a.key),
         emotion: emocionDe(a.key),
-        pet: petForRole(a.key),
+        pet: petOf(a.key),
         highlighted: resaltado === a.key,
         paused: pausados.has(a.key),
         tools: toolsForRole(a.key),
@@ -360,7 +471,7 @@ export default function OficinaPage() {
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ceo, equipo, emociones, resaltado, pausados, tools, toolByKey]);
+  }, [ceo, equipo, emociones, resaltado, pausados, tools, toolByKey, configByKey]);
 
   // Layout del piso + "vida" (los agentes caminan al café / reunión y vuelven).
   const layout = useMemo(() => buildOfficeLayout(roomAgents), [roomAgents]);
@@ -711,7 +822,7 @@ export default function OficinaPage() {
                               key={a.key}
                               className={`flex items-center gap-2 rounded-lg border border-[#e7e0d2] bg-[#faf7f0] px-2.5 py-1.5 ${paused ? 'opacity-60' : ''}`}
                             >
-                              <MrGoAvatar color={colorKeyForAgent(a.key)} emotion={emocionDe(a.key)} size={22} alive={!paused} />
+                              <MrGoAvatar color={colorOf(a.key)} emotion={emocionDe(a.key)} size={22} alive={!paused} />
                               <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#3a322a]">{a.nombre}</span>
                               <span className="shrink-0 font-mono text-[10px] text-[#a99d87]">
                                 {engineByKey.get(a.key)?.model ?? 'motor'}
@@ -781,7 +892,7 @@ export default function OficinaPage() {
                               doing.map((a) => (
                                 <div key={a.key} className="rounded-md border border-[#e7e0d2] bg-white p-2">
                                   <div className="flex items-center gap-1.5">
-                                    <MrGoAvatar color={colorKeyForAgent(a.key)} emotion="working" size={18} alive={false} />
+                                    <MrGoAvatar color={colorOf(a.key)} emotion="working" size={18} alive={false} />
                                     <span className="truncate text-[11px] font-medium text-[#3a322a]">{a.nombre}</span>
                                   </div>
                                   <p className="mt-1 truncate text-[10px] text-[#857a66]">
@@ -806,7 +917,7 @@ export default function OficinaPage() {
                                   className="w-full rounded-md border border-red-200 bg-red-50 p-2 text-left"
                                 >
                                   <div className="flex items-center gap-1.5">
-                                    <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={18} alive={false} />
+                                    <MrGoAvatar color={colorOf(ev.agentKey)} emotion={ev.emotion} size={18} alive={false} />
                                     <span className="truncate text-[11px] font-medium text-[#3a322a]">{ev.agentNombre}</span>
                                   </div>
                                   <p className="mt-1 truncate text-[10px] text-[#857a66]">
@@ -843,7 +954,7 @@ export default function OficinaPage() {
                         .map((ev) => (
                           <div key={ev.id} className="rounded-lg border border-amber-300 bg-amber-50 p-3">
                             <div className="flex items-center gap-2">
-                              <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={24} alive={false} />
+                              <MrGoAvatar color={colorOf(ev.agentKey)} emotion={ev.emotion} size={24} alive={false} />
                               <span className="min-w-0 flex-1 truncate text-xs font-semibold text-[#3a322a]">{ev.agentNombre}</span>
                               <span className="shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-[#857a66]">
                                 {ev.pending ? toolNombre(ev.pending.tool) : ''}
@@ -914,7 +1025,7 @@ export default function OficinaPage() {
                               }`}
                             >
                               <div className="shrink-0">
-                                <MrGoAvatar color={colorKeyForAgent(ev.agentKey)} emotion={ev.emotion} size={28} alive={false} />
+                                <MrGoAvatar color={colorOf(ev.agentKey)} emotion={ev.emotion} size={28} alive={false} />
                               </div>
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center justify-between gap-2">
@@ -1079,7 +1190,7 @@ export default function OficinaPage() {
                       return (
                         <div key={a.key} className="rounded-lg border border-[#e7e0d2] bg-[#faf7f0] p-2">
                           <div className="flex items-center gap-2">
-                            <MrGoAvatar color={colorKeyForAgent(a.key)} emotion="working" size={20} alive={false} />
+                            <MrGoAvatar color={colorOf(a.key)} emotion="working" size={20} alive={false} />
                             <span className="text-xs font-medium text-[#3a322a]">{a.nombre}</span>
                           </div>
                           {tls.length === 0 ? (
@@ -1120,7 +1231,7 @@ export default function OficinaPage() {
                                 : { lbl: pausados.has(a.key) ? 'En pausa' : 'En reposo', cls: 'bg-[#cdbfa6]', w: '15%' };
                       return (
                         <div key={a.key} className="flex items-center gap-2">
-                          <MrGoAvatar color={colorKeyForAgent(a.key)} emotion="working" size={18} alive={false} />
+                          <MrGoAvatar color={colorOf(a.key)} emotion="working" size={18} alive={false} />
                           <span className="w-16 shrink-0 truncate text-[11px] text-[#3a322a]">{a.nombre}</span>
                           <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#ece5d8]">
                             <div className={`h-full rounded-full ${heat.cls}`} style={{ width: heat.w }} />
@@ -1155,7 +1266,7 @@ export default function OficinaPage() {
                     <AgentCard
                       nombre={ceo.nombre}
                       rol="Director"
-                      color={colorKeyForAgent(ceo.key)}
+                      color={colorOf(ceo.key)}
                       engine={engineByKey.get(ceo.key)?.engine}
                       model={engineByKey.get(ceo.key)?.model}
                       activity={activity[ceo.key]}
@@ -1173,7 +1284,7 @@ export default function OficinaPage() {
                     <AgentCard
                       nombre={a.nombre}
                       rol={a.descripcion ? a.descripcion.split(/[,.]/)[0] : 'Agente'}
-                      color={colorKeyForAgent(a.key)}
+                      color={colorOf(a.key)}
                       engine={engineByKey.get(a.key)?.engine}
                       model={engineByKey.get(a.key)?.model}
                       activity={activity[a.key]}
@@ -1196,6 +1307,269 @@ export default function OficinaPage() {
                   <Plus className="h-6 w-6" />
                   <span className="text-xs font-medium">Agregar agente</span>
                 </button>
+              </div>
+            </div>
+          </section>
+
+          {/* ─── Studio "Tu Mr Go" ─────────────────────────────────────────── */}
+          <section className="lg:col-span-10">
+            <div className="rounded-xl border border-[#e7e0d2] bg-white p-5">
+              {/* Cabecera */}
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#7c3aed]/10">
+                    <Wand2 className="h-4 w-4 text-[#7c3aed]" />
+                  </span>
+                  <div className="leading-tight">
+                    <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[#4a4034]">
+                      Tu Mr Go
+                      <span className="rounded-full bg-[#e8692a]/12 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#e8692a]">
+                        Nuevo
+                      </span>
+                    </h2>
+                    <p className="text-xs text-[#a99d87]">Personalizá el avatar de cada agente</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={guardarStudio}
+                  disabled={guardandoStudio}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#e8692a] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#d25e22] disabled:opacity-60"
+                >
+                  {guardandoStudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Guardar cambios
+                </button>
+              </div>
+
+              {/* Selector de agente a personalizar */}
+              <div className="mb-5 flex gap-2 overflow-x-auto pb-1">
+                {[...(ceo ? [ceo] : []), ...equipo].map((a) => {
+                  const active = studioKey === a.key;
+                  return (
+                    <button
+                      key={a.key}
+                      type="button"
+                      onClick={() => setStudioKey(a.key)}
+                      className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        active
+                          ? 'border-[#e8692a] bg-[#e8692a]/8 text-[#3a322a]'
+                          : 'border-[#e7e0d2] bg-white text-[#857a66] hover:border-[#ddd4c4]'
+                      }`}
+                    >
+                      <MrGoAvatar color={colorOf(a.key)} emotion="happy" size={20} alive={false} />
+                      {a.nombre}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+                {/* Columna izquierda — preview + nombre + rol */}
+                <div className="lg:col-span-4">
+                  <div className="relative flex items-end justify-center rounded-2xl border border-[#e7e0d2] bg-[#faf7f0] p-5" style={{ minHeight: 220 }}>
+                    <span className="absolute left-3 top-3 rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#857a66]">
+                      {EMOTION_LABELS[studioEmotion]}
+                    </span>
+                    <MrGoAvatar
+                      color={studioColor}
+                      emotion={studioEmotion}
+                      size={180}
+                      pet={studioPet !== PET_NONE}
+                      petKey={studioPet !== PET_NONE ? (studioPet as MrGoPetKey) : undefined}
+                    />
+                  </div>
+
+                  <label className="mt-4 block text-[10px] font-semibold uppercase tracking-wide text-[#857a66]">
+                    Nombre del agente
+                  </label>
+                  <div className="mt-1 flex items-center gap-2 rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-2">
+                    <input
+                      type="text"
+                      value={studioNombre}
+                      onChange={(e) => setStudioNombre(e.target.value.slice(0, 40))}
+                      placeholder={roleByKey.get(studioKey)?.nombre ?? studioKey}
+                      className="min-w-0 flex-1 bg-transparent text-sm text-[#3a322a] placeholder:text-[#a99d87] focus:outline-none"
+                    />
+                    <Pencil className="h-3.5 w-3.5 shrink-0 text-[#a99d87]" />
+                  </div>
+
+                  <label className="mt-3 block text-[10px] font-semibold uppercase tracking-wide text-[#857a66]">
+                    Rol
+                  </label>
+                  <div className="mt-1 rounded-lg border border-[#e7e0d2] bg-white px-3 py-2 text-sm text-[#3a322a]">
+                    {studioKey === CEO_AGENT_KEY ? 'Director' : roleByKey.get(studioKey)?.nombre ?? studioKey}
+                  </div>
+                </div>
+
+                {/* Columna central — color + expresión + mascota */}
+                <div className="lg:col-span-5 space-y-5">
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#4a4034]">
+                      <Palette className="h-3.5 w-3.5 text-[#e8692a]" /> Color del cuerpo
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {MR_GO_COLOR_ORDER.map((k) => {
+                        const sel = studioColor === k;
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            title={MR_GO_COLORS[k].label}
+                            onClick={() => setStudioColor(k)}
+                            className={`flex h-9 w-9 items-center justify-center rounded-lg border-2 transition-transform hover:scale-105 ${
+                              sel ? 'border-[#e8692a]' : 'border-transparent'
+                            }`}
+                            style={{ background: MR_GO_COLORS[k].hex }}
+                          >
+                            {sel && <Check className="h-4 w-4 text-white drop-shadow" strokeWidth={3} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#4a4034]">
+                      <Smile className="h-3.5 w-3.5 text-[#e8692a]" /> Expresión
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {STUDIO_EMOTIONS.map((e) => {
+                        const sel = studioEmotion === e;
+                        return (
+                          <button
+                            key={e}
+                            type="button"
+                            onClick={() => setStudioEmotion(e)}
+                            className={`flex w-[72px] flex-col items-center gap-1 rounded-xl border p-2 transition-colors ${
+                              sel ? 'border-[#e8692a] bg-[#e8692a]/6' : 'border-[#e7e0d2] bg-white hover:border-[#ddd4c4]'
+                            }`}
+                          >
+                            <MrGoAvatar color={studioColor} emotion={e} size={44} alive={false} />
+                            <span className="text-[10px] text-[#857a66]">{EMOTION_LABELS[e]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {studioColor !== 'LILA' && (
+                      <p className="mt-1.5 text-[10px] text-[#a99d87]">
+                        Las 6 expresiones se ven completas en el color insignia (Lila); en los demás se guarda la preferencia.
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#4a4034]">
+                      <Heart className="h-3.5 w-3.5 text-[#e8692a]" /> Mascota
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {STUDIO_PETS.map((p) => {
+                        const sel = studioPet === p;
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setStudioPet(p)}
+                            className={`flex w-[72px] flex-col items-center gap-1 rounded-xl border p-2 transition-colors ${
+                              sel ? 'border-[#e8692a] bg-[#e8692a]/6' : 'border-[#e7e0d2] bg-white hover:border-[#ddd4c4]'
+                            }`}
+                          >
+                            <span className="flex h-11 items-center justify-center">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={`/mrgo/pet/${p}.png`} alt="" draggable={false} style={{ height: 40, width: 'auto' }} />
+                            </span>
+                            <span className="text-[10px] text-[#857a66]">{MR_GO_PETS[p].nombre}</span>
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => setStudioPet(PET_NONE)}
+                        className={`flex w-[72px] flex-col items-center gap-1 rounded-xl border p-2 transition-colors ${
+                          studioPet === PET_NONE ? 'border-[#e8692a] bg-[#e8692a]/6' : 'border-[#e7e0d2] bg-white hover:border-[#ddd4c4]'
+                        }`}
+                      >
+                        <span className="flex h-11 items-center justify-center text-[#c9bda6]">
+                          <Trash2 className="h-6 w-6" />
+                        </span>
+                        <span className="text-[10px] text-[#857a66]">Ninguna</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Columna derecha — accesorios + familia + ficha técnica */}
+                <div className="lg:col-span-3 space-y-5">
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#4a4034]">
+                      <Shirt className="h-3.5 w-3.5 text-[#e8692a]" /> Accesorios
+                      <span className="rounded bg-[#f0ead3] px-1.5 py-0.5 text-[9px] font-medium uppercase text-[#a99d87]">
+                        Próximamente
+                      </span>
+                    </p>
+                    <div className="flex items-center gap-2 opacity-60">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-[#ddd4c4] bg-[#faf7f0] text-[#c9bda6]">
+                        <Shirt className="h-4 w-4" />
+                      </span>
+                      <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-[#ddd4c4] bg-[#faf7f0] text-[#c9bda6]">
+                        <Glasses className="h-4 w-4" />
+                      </span>
+                      <span className="text-[10px] text-[#a99d87]">0 disponibles</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#4a4034]">
+                      <Users className="h-3.5 w-3.5 text-[#e8692a]" /> La familia Mr Go
+                    </p>
+                    <div className="grid grid-cols-7 gap-1">
+                      {MR_GO_COLOR_ORDER.map((k) => (
+                        <button
+                          key={k}
+                          type="button"
+                          title={MR_GO_COLORS[k].label}
+                          onClick={() => setStudioColor(k)}
+                          className={`flex items-center justify-center rounded-md p-0.5 ${
+                            studioColor === k ? 'ring-2 ring-[#e8692a]' : ''
+                          }`}
+                        >
+                          <MrGoAvatar color={k} emotion="happy" size={26} alive={false} />
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-[10px] text-[#a99d87]">14 variantes de color · un Go base por agente</p>
+                  </div>
+
+                  <div className="rounded-lg border border-[#e7e0d2] bg-[#faf7f0] p-3">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#857a66]">Ficha técnica</p>
+                    <dl className="space-y-1 text-[11px]">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-[#a99d87]">Modelo</dt>
+                        <dd className="font-medium text-[#3a322a]">Mr Go 3D</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-[#a99d87]">Color actual</dt>
+                        <dd className="flex items-center gap-1 font-medium text-[#3a322a]">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ background: MR_GO_COLORS[studioColor].hex }} />
+                          {MR_GO_COLORS[studioColor].label}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-[#a99d87]">Mascota</dt>
+                        <dd className="font-medium text-[#3a322a]">
+                          {studioPet === PET_NONE ? 'Ninguna' : MR_GO_PETS[studioPet as MrGoPetKey].nombre}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-[#a99d87]">Expresiones</dt>
+                        <dd className="font-medium text-[#3a322a]">6 disponibles</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-[#a99d87]">Superaccesorios</dt>
+                        <dd className="font-medium text-[#3a322a]">0 disponibles</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
               </div>
             </div>
           </section>

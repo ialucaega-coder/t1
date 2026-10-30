@@ -26,6 +26,25 @@ const MRGO_CONNECTION_NAME = 'Agentes de Mr Go';
 /** Topes de longitud para los campos de texto libre de la config del motor. */
 export const MAX_PROVIDER_LEN = 60;
 export const MAX_MODEL_LEN = 120;
+/** Tope del nombre personalizado del agente (lo que el dueño escribe en el Studio). */
+export const MAX_NAME_LEN = 40;
+
+// Catálogos de personalización del avatar (Studio "Tu Mr Go"). Son la MISMA
+// verdad que el front (`components/mrgo/types.ts`); el server no puede importar
+// del web, así que se declaran acá como sets de validación defensiva. El sobre
+// visual (color/emoción/mascota) se guarda por agente y lo pinta la Oficina.
+const MRGO_COLOR_KEYS: ReadonlySet<string> = new Set([
+  'LILA', 'RED', 'PINK', 'LIGHT_BLUE', 'WHITE', 'ORANGE', 'BROWN',
+  'BEIGE', 'TURQUOISE', 'GREEN', 'LIME', 'BLACK', 'BLUE', 'YELLOW',
+]);
+const MRGO_EMOTIONS: ReadonlySet<string> = new Set([
+  'happy', 'working', 'thinking', 'nerd', 'angry', 'sleepy', 'love',
+]);
+const MRGO_PETS: ReadonlySet<string> = new Set([
+  'jinx', 'rayito', 'relojito', 'billetin', 'cerebrito', 'megafonito',
+]);
+/** Valor de `pet` que representa "sin mascota" (se guarda explícito). */
+export const PET_NONE = 'none';
 
 /** Un rol de agente del catálogo (lo que Mr Go puede "activar" y delegar). */
 export interface AgentRole {
@@ -140,6 +159,15 @@ export interface AgentConfig {
   llmProvider?: string;
   /** Modelo de IA opcional para este agente (ej: 'claude-3-5-sonnet'). */
   llmModel?: string;
+  // ─── Personalización del avatar (Studio "Tu Mr Go") ───────────────────────
+  /** Nombre personalizado del agente (máx 40). Si falta, la UI usa el del catálogo. */
+  nombre?: string;
+  /** Color del cuerpo elegido (familia Mr Go). Si falta, la UI usa el del rol. */
+  colorKey?: string;
+  /** Expresión/emoción por defecto en reposo. Si falta, la UI decide. */
+  emotion?: string;
+  /** Mascota elegida: una del catálogo o 'none' (sin mascota). Si falta, la del rol. */
+  pet?: string;
 }
 
 function clampText(value: unknown, max: number): string {
@@ -162,11 +190,21 @@ export function sanitizeAgents(raw: unknown): AgentConfig[] {
     if (!isValidAgentKey(e.key)) continue; // rol fuera del catálogo → se descarta
     const llmProvider = clampText(e.llmProvider, MAX_PROVIDER_LEN);
     const llmModel = clampText(e.llmModel, MAX_MODEL_LEN);
+    // Personalización del avatar: solo valores del catálogo (defensivo).
+    const nombre = clampText(e.nombre, MAX_NAME_LEN);
+    const colorKey = typeof e.colorKey === 'string' && MRGO_COLOR_KEYS.has(e.colorKey) ? e.colorKey : '';
+    const emotion = typeof e.emotion === 'string' && MRGO_EMOTIONS.has(e.emotion) ? e.emotion : '';
+    const pet =
+      e.pet === PET_NONE ? PET_NONE : typeof e.pet === 'string' && MRGO_PETS.has(e.pet) ? e.pet : '';
     byKey.set(e.key, {
       key: e.key,
       activo: e.activo !== false, // por defecto activo
       ...(llmProvider ? { llmProvider } : {}),
       ...(llmModel ? { llmModel } : {}),
+      ...(nombre ? { nombre } : {}),
+      ...(colorKey ? { colorKey } : {}),
+      ...(emotion ? { emotion } : {}),
+      ...(pet ? { pet } : {}),
     });
   }
   // Orden canónico del catálogo (estable para la UI).
@@ -196,6 +234,10 @@ export function resolveAgents(saved: AgentConfig[]): AgentConfig[] {
       activo: cfg ? cfg.activo : true,
       ...(cfg?.llmProvider ? { llmProvider: cfg.llmProvider } : {}),
       ...(cfg?.llmModel ? { llmModel: cfg.llmModel } : {}),
+      ...(cfg?.nombre ? { nombre: cfg.nombre } : {}),
+      ...(cfg?.colorKey ? { colorKey: cfg.colorKey } : {}),
+      ...(cfg?.emotion ? { emotion: cfg.emotion } : {}),
+      ...(cfg?.pet ? { pet: cfg.pet } : {}),
     };
   });
 }

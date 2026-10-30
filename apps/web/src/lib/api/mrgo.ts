@@ -1,5 +1,5 @@
 import { httpClient } from './http-client';
-import type { MrGoColorKey, MrGoEmotion } from '@/components/mrgo/types';
+import type { MrGoColorKey, MrGoEmotion, MrGoPetKey } from '@/components/mrgo/types';
 
 /**
  * Cliente API de Mr Go — el avatar/orquestador "CEO" que delega en agentes-rol.
@@ -21,7 +21,19 @@ export interface MrGoAgentConfig {
   llmProvider?: string;
   /** Modelo de IA opcional para este agente (ej: 'claude-3-5-sonnet'). */
   llmModel?: string;
+  // ─── Personalización del avatar (Studio "Tu Mr Go") ───────────────────────
+  /** Nombre personalizado; si falta, se usa el del catálogo de roles. */
+  nombre?: string;
+  /** Color del cuerpo elegido; si falta, el del rol (AGENT_COLOR_KEYS). */
+  colorKey?: MrGoColorKey;
+  /** Expresión en reposo elegida; si falta, la decide la UI. */
+  emotion?: MrGoEmotion;
+  /** Mascota elegida: una del catálogo o 'none' (sin mascota); si falta, la del rol. */
+  pet?: MrGoPetKey | 'none';
 }
+
+/** Valor de `pet` que representa "sin mascota" (espeja PET_NONE del backend). */
+export const PET_NONE = 'none' as const;
 
 /**
  * Un rol del catálogo (datos de presentación para pintar la tarjeta). El `color`

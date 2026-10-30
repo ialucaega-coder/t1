@@ -139,6 +139,39 @@ describe('routes/mrgo', () => {
       expect(res.status).toBe(401);
       expect(saveAgents).not.toHaveBeenCalled();
     });
+
+    it('conserva la personalización válida del avatar (Studio "Tu Mr Go")', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .set(...AUTH)
+        .send({
+          agents: [
+            { key: 'ceo', activo: true, nombre: 'Go', colorKey: 'LILA', emotion: 'happy', pet: 'jinx' },
+            { key: 'ventas', activo: true, colorKey: 'ORANGE', pet: 'none' },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      const ceo = res.body.agents.find((a: { key: string }) => a.key === 'ceo');
+      expect(ceo).toMatchObject({ nombre: 'Go', colorKey: 'LILA', emotion: 'happy', pet: 'jinx' });
+      const ventas = res.body.agents.find((a: { key: string }) => a.key === 'ventas');
+      expect(ventas).toMatchObject({ colorKey: 'ORANGE', pet: 'none' });
+    });
+
+    it('descarta valores de personalización fuera del catálogo', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .set(...AUTH)
+        .send({
+          agents: [{ key: 'ceo', activo: true, colorKey: 'FUCSIA', emotion: 'eufórico', pet: 'dragon' }],
+        });
+
+      expect(res.status).toBe(200);
+      const ceo = res.body.agents.find((a: { key: string }) => a.key === 'ceo');
+      expect(ceo.colorKey).toBeUndefined();
+      expect(ceo.emotion).toBeUndefined();
+      expect(ceo.pet).toBeUndefined();
+    });
   });
 
   describe('POST /api/mrgo/orchestrate', () => {
