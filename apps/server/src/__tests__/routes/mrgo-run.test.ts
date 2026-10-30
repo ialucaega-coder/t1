@@ -46,8 +46,14 @@ vi.mock('../../services/mrgo/office', async (importOriginal) => {
   return { ...actual, loadOffice: vi.fn(), saveOffice: vi.fn() };
 });
 
+vi.mock('../../services/mrgo/industry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/industry')>();
+  return { ...actual, loadIndustry: vi.fn(), saveIndustry: vi.fn() };
+});
+
 import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
 import { loadOffice, saveOffice } from '../../services/mrgo/office';
+import { loadIndustry, saveIndustry } from '../../services/mrgo/industry';
 import { orchestrate } from '../../services/mrgo/orchestrator';
 import { executeAction } from '../../services/actions/executor';
 import { mrgoRouter } from '../../routes/mrgo';
@@ -309,6 +315,43 @@ describe('routes/mrgo — loop agéntico', () => {
       const res = await request(app).get('/api/mrgo/office');
       expect(res.status).toBe(401);
       expect(loadOffice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('/industry (giro del negocio — "bots por giro")', () => {
+    it('GET devuelve el giro elegido del negocio', async () => {
+      mock(loadIndustry).mockResolvedValue({ giroId: 'veterinaria' });
+      const res = await request(app).get('/api/mrgo/industry').set(...AUTH);
+      expect(res.status).toBe(200);
+      expect(res.body.giroId).toBe('veterinaria');
+      expect(loadIndustry).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('PUT guarda el giro (scope por businessId)', async () => {
+      mock(saveIndustry).mockResolvedValue({ giroId: 'cafeteria' });
+      const res = await request(app)
+        .put('/api/mrgo/industry')
+        .set(...AUTH)
+        .send({ giroId: 'cafeteria' });
+      expect(res.status).toBe(200);
+      expect(res.body.giroId).toBe('cafeteria');
+      expect(saveIndustry).toHaveBeenCalledWith('biz_1', { giroId: 'cafeteria' });
+    });
+
+    it('PUT acepta giroId vacío (limpia el giro)', async () => {
+      mock(saveIndustry).mockResolvedValue({ giroId: '' });
+      const res = await request(app)
+        .put('/api/mrgo/industry')
+        .set(...AUTH)
+        .send({ giroId: '' });
+      expect(res.status).toBe(200);
+      expect(res.body.giroId).toBe('');
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app).get('/api/mrgo/industry');
+      expect(res.status).toBe(401);
+      expect(loadIndustry).not.toHaveBeenCalled();
     });
   });
 });

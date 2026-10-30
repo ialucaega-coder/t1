@@ -42,6 +42,7 @@ import {
   type AgentConfig,
 } from './agents';
 import { loadMemory, buildMemoryPrompt } from './memory';
+import { loadIndustry, buildIndustryPrompt } from './industry';
 import { extractJson } from './json';
 import { executeAction, actionKind, type ActionResult, type ActionKind, type ExecMode } from '../actions/executor';
 
@@ -294,8 +295,12 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
     return { agent, emotion, steps: [], finalMessage: 'No recibí ninguna instrucción.', stoppedReason: 'empty' };
   }
 
+  // Contexto del negocio: tono del giro ("bots por giro") + memoria. Ambos
+  // opcionales (devuelven '' si no hay nada configurado).
+  const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
   const memoria = buildMemoryPrompt(await loadMemory(businessId));
-  const systemPrompt = buildLoopSystemPrompt(agent, mode, memoria);
+  const contexto = [industria, memoria].filter(Boolean).join('\n\n');
+  const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto);
 
   let provider: AIProvider;
   try {
@@ -373,8 +378,10 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
 
   // Reconstruir el historial ReAct: pedido original → (tool → observación)× pasos
   // previos → la acción confirmada → su observación (= próximo prompt).
+  const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
   const memoria = buildMemoryPrompt(await loadMemory(businessId));
-  const systemPrompt = buildLoopSystemPrompt(agent, mode, memoria);
+  const contexto = [industria, memoria].filter(Boolean).join('\n\n');
+  const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto);
   const initialUserPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
   const turns: ConversationTurn[] = [{ role: 'user', content: initialUserPrompt }];
   for (const s of prior) {

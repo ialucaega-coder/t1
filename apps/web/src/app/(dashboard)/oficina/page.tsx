@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
   Terminal, Gauge, CheckSquare, Bell, Zap, Share2, Activity as ActivityIcon, Sparkles, Thermometer,
-  Pause, Play, Palette, Smile, Heart, Glasses, Shirt, Check, Pencil, Wand2,
+  Pause, Play, Palette, Smile, Heart, Glasses, Shirt, Check, Pencil, Wand2, Store, ExternalLink,
 } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
@@ -41,6 +41,8 @@ import {
   saveMrGoMemory,
   getMrGoOffice,
   saveMrGoOffice,
+  getMrGoIndustry,
+  saveMrGoIndustry,
   saveMrGoAgents,
   colorKeyForAgent,
   mapEmotion,
@@ -54,6 +56,7 @@ import {
   type StopReason,
   type ActionResult,
 } from '@/lib/api/mrgo';
+import { getIndustryTemplates, type IndustryTemplate } from '@/lib/api/industryTemplates';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -198,6 +201,12 @@ export default function OficinaPage() {
   const [studioPet, setStudioPet] = useState<MrGoPetKey | 'none'>('none');
   const [guardandoStudio, setGuardandoStudio] = useState(false);
 
+  // ─── Giro del negocio ("bots por giro") ─────────────────────────────────
+  // Catálogo de los 14 rubros + el giro elegido. Mr Go adopta el tono del rubro.
+  const [giros, setGiros] = useState<IndustryTemplate[]>([]);
+  const [giroId, setGiroId] = useState('');
+  const [guardandoGiro, setGuardandoGiro] = useState(false);
+
   async function cargar() {
     setIsLoading(true);
     setError(null);
@@ -250,6 +259,49 @@ export default function OficinaPage() {
       activo = false;
     };
   }, []);
+
+  // Carga el catálogo de giros + el giro elegido del negocio ("bots por giro").
+  // Silencioso: si falla, la sección de giro queda vacía y no bloquea la Oficina.
+  useEffect(() => {
+    let activo = true;
+    Promise.all([getIndustryTemplates(), getMrGoIndustry()])
+      .then(([catalogo, actual]) => {
+        if (!activo) return;
+        setGiros(Array.isArray(catalogo) ? catalogo : []);
+        setGiroId(actual?.giroId ?? '');
+      })
+      .catch(() => {
+        /* giro opcional */
+      });
+    return () => {
+      activo = false;
+    };
+  }, []);
+
+  /** Elige (o limpia) el giro del negocio y lo persiste. Mr Go adopta el tono. */
+  async function elegirGiro(id: string) {
+    if (guardandoGiro) return;
+    const nuevo = giroId === id ? '' : id; // click en el actual = limpiar
+    setGuardandoGiro(true);
+    try {
+      const saved = await saveMrGoIndustry(nuevo);
+      setGiroId(saved.giroId);
+      const nombre = giros.find((g) => g.id === saved.giroId)?.nombre;
+      toast({
+        type: 'success',
+        message: saved.giroId ? `Giro: ${nombre}. Mr Go hablará en ese tono.` : 'Giro quitado.',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('403') || /forbidden/i.test(msg)) {
+        toast({ type: 'error', message: 'Solo un admin puede cambiar el giro.' });
+      } else {
+        toast({ type: 'error', message: msg || 'No se pudo guardar el giro.' });
+      }
+    } finally {
+      setGuardandoGiro(false);
+    }
+  }
 
   /** Suma un hecho nuevo a la lista (respetando los límites del backend). */
   function agregarHecho() {
@@ -1308,6 +1360,69 @@ export default function OficinaPage() {
                   <span className="text-xs font-medium">Agregar agente</span>
                 </button>
               </div>
+            </div>
+          </section>
+
+          {/* ─── Giro del negocio ("bots por giro") ────────────────────────── */}
+          <section className="lg:col-span-10">
+            <div className="rounded-xl border border-[#e7e0d2] bg-white p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#7c3aed]/10">
+                    <Store className="h-4 w-4 text-[#7c3aed]" />
+                  </span>
+                  <div className="leading-tight">
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-[#4a4034]">
+                      Giro del negocio
+                    </h2>
+                    <p className="text-xs text-[#a99d87]">
+                      Mr Go y sus agentes hablan en el tono de tu rubro
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href="/plantillas-negocio"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#857a66] transition-colors hover:text-[#e8692a]"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Aplicar plantilla completa (servicios + bot)
+                </a>
+              </div>
+
+              {giros.length === 0 ? (
+                <p className="text-xs text-[#a99d87]">Cargando rubros…</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {giros.map((g) => {
+                      const sel = giroId === g.id;
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => elegirGiro(g.id)}
+                          disabled={guardandoGiro}
+                          title={g.descripcion}
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+                            sel
+                              ? 'border-[#e8692a] bg-[#e8692a]/8 text-[#3a322a]'
+                              : 'border-[#e7e0d2] bg-white text-[#857a66] hover:border-[#ddd4c4]'
+                          }`}
+                        >
+                          <span aria-hidden>{g.icono}</span>
+                          {g.nombre}
+                          {sel && <Check className="h-3.5 w-3.5 text-[#e8692a]" strokeWidth={3} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-3 text-[11px] text-[#a99d87]">
+                    {giroId
+                      ? giros.find((g) => g.id === giroId)?.descripcion
+                      : 'Elegí tu rubro para que Mr Go adopte su tono. Tocá el rubro activo de nuevo para quitarlo.'}
+                  </p>
+                </>
+              )}
             </div>
           </section>
 

@@ -21,6 +21,7 @@ import {
   type AgentConfig,
 } from './agents';
 import { loadMemory, buildMemoryPrompt } from './memory';
+import { loadIndustry, buildIndustryPrompt } from './industry';
 import { extractJson } from './json';
 
 /** Entrada del orquestador. */
@@ -155,11 +156,14 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
     return fallbackDecision(activeAgents, 'el mensaje vino vacío');
   }
 
-  // Memoria del negocio (perfil + hechos): le da contexto estable al orquestador.
-  // Si no hay nada configurado, buildMemoryPrompt devuelve '' y no afecta el prompt.
+  // Contexto del negocio: tono del giro elegido ("bots por giro") + memoria
+  // (perfil + hechos). Ambos opcionales: si no hay nada, devuelven '' y no
+  // afectan el prompt.
+  const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
   const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const contexto = [industria, memoria].filter(Boolean).join('\n\n');
   const routingPrompt = buildRoutingSystemPrompt(activeAgents);
-  const systemPrompt = memoria ? `${memoria}\n\n${routingPrompt}` : routingPrompt;
+  const systemPrompt = contexto ? `${contexto}\n\n${routingPrompt}` : routingPrompt;
   const userPrompt = channel ? `[canal: ${channel}]\n${text}` : text;
 
   let rawResponse: string;

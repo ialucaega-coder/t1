@@ -285,3 +285,23 @@ export function getMrGoOffice() {
 export function saveMrGoOffice(office: MrGoOffice) {
   return httpClient.put<MrGoOffice>('/mrgo/office', office);
 }
+
+/**
+ * Giro del negocio ("bots por giro"): el rubro elegido (id de las 14 plantillas
+ * de INDUSTRY_TEMPLATES, o '' = sin giro). Mr Go adopta el TONO de ese rubro al
+ * coordinar. No crea servicios/skills: eso es la plantilla completa (página
+ * "Plantillas de negocio", `applyIndustryTemplate`).
+ */
+export interface MrGoIndustry {
+  giroId: string;
+}
+
+/** Lee el giro elegido del negocio. */
+export function getMrGoIndustry() {
+  return httpClient.get<MrGoIndustry>('/mrgo/industry');
+}
+
+/** Guarda el giro del negocio (solo ADMIN). Devuelve el giro persistido. */
+export function saveMrGoIndustry(giroId: string) {
+  return httpClient.put<MrGoIndustry>('/mrgo/industry', { giroId });
+}

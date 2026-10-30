@@ -35,6 +35,7 @@ import { runAgentLoop, resumeAgentLoop, type AgentStep } from '../services/mrgo/
 import { executeAction } from '../services/actions/executor';
 import { loadMemory, saveMemory, MAX_PROFILE_LEN, MAX_FACT_LEN, MAX_FACTS } from '../services/mrgo/memory';
 import { loadOffice, saveOffice } from '../services/mrgo/office';
+import { loadIndustry, saveIndustry } from '../services/mrgo/industry';
 
 // Zod exige una tupla no vacía para z.enum; el catálogo nunca está vacío.
 const agentKeyEnum = z.enum(AGENT_KEYS as [string, ...string[]]);
@@ -119,6 +120,12 @@ const memorySchema = z.object({
 // Estado persistente de la oficina (qué agentes están en pausa).
 const officeSchema = z.object({
   paused: z.array(agentKeyEnum).max(AGENT_KEYS.length),
+});
+
+// Giro del negocio ("bots por giro"). El id se valida contra el catálogo en el
+// servicio; '' limpia el giro. Acá solo se limita la longitud (defensivo).
+const industrySchema = z.object({
+  giroId: z.string().trim().max(60),
 });
 
 const router = Router();
@@ -298,6 +305,28 @@ router.put(
   validate(officeSchema),
   asyncHandler(async (req, res) => {
     res.json(await saveOffice(req.auth!.businessId, req.body));
+  })
+);
+
+// Giro del negocio ("bots por giro"): Mr Go adopta el tono del rubro elegido al
+// coordinar. Se carga al abrir la Oficina y se guarda al elegir un giro. Solo
+// ADMIN (afecta el tono de TODOS los agentes). No crea servicios ni skills: eso
+// es la plantilla completa (POST /api/plantillas-negocio/:id/aplicar), aparte.
+router.get(
+  '/industry',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await loadIndustry(req.auth!.businessId));
+  })
+);
+
+router.put(
+  '/industry',
+  requireAuth,
+  requireRole('ADMIN'),
+  validate(industrySchema),
+  asyncHandler(async (req, res) => {
+    res.json(await saveIndustry(req.auth!.businessId, req.body));
   })
 );
 
