@@ -831,6 +831,39 @@ function DeskFurniture({
         {/* Base */}
         <div style={{ width: w * 0.16, height: Math.max(2, h * 0.04), borderRadius: 2, background: '#1c1a24' }} />
       </div>
+      {/* Silla de oficina delante del escritorio (respaldo + asiento) */}
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          top: h * 1.02,
+          transform: 'translateX(-50%)',
+          width: w * 0.4,
+          zIndex: 3,
+        }}
+      >
+        {/* Respaldo */}
+        <div
+          style={{
+            width: '100%',
+            height: h * 0.1,
+            borderRadius: '8px 8px 3px 3px',
+            background: 'linear-gradient(180deg, #74707d 0%, #605c69 100%)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18)',
+          }}
+        />
+        {/* Asiento */}
+        <div
+          style={{
+            width: '76%',
+            height: h * 0.16,
+            margin: '1px auto 0',
+            borderRadius: '3px 3px 9px 9px',
+            background: 'linear-gradient(180deg, #65616e 0%, #545161 100%)',
+            boxShadow: '0 3px 6px rgba(124,92,58,0.22)',
+          }}
+        />
+      </div>
     </div>
   );
 }
