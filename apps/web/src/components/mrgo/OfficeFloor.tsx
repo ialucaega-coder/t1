@@ -746,8 +746,8 @@ function DeskFurniture({
   on: boolean;
   big: boolean;
 }) {
-  const w = Math.max(38, floorW * (big ? 0.12 : 0.1));
-  const h = w * 0.5;
+  const w = Math.max(40, floorW * (big ? 0.13 : 0.108));
+  const h = w * 0.58;
   return (
     <div
       aria-hidden
@@ -762,48 +762,74 @@ function DeskFurniture({
         zIndex: Math.round(y * 10) - 1,
       }}
     >
-      {/* Tablero (superficie oscura tipo estación de trabajo) */}
+      {/* Frente del escritorio (da profundidad: borde de madera más oscuro) */}
       <div
         style={{
           position: 'absolute',
-          inset: 0,
-          borderRadius: 12,
-          background: `linear-gradient(180deg, ${SCENE.node} 0%, ${SCENE.surface} 100%)`,
-          border: `1px solid ${SCENE.hairline}`,
-          boxShadow: on
-            ? `inset 0 1px 0 rgba(255,255,255,0.8), 0 6px 16px rgba(124,92,58,0.18), 0 0 18px ${accent}33`
-            : 'inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 16px rgba(124,92,58,0.14)',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: h * 0.3,
+          borderRadius: '0 0 9px 9px',
+          background: 'linear-gradient(180deg, #936c40 0%, #7e5d36 100%)',
+          boxShadow: '0 6px 14px rgba(124,92,58,0.22)',
         }}
       />
-      {/* Pantalla contra el borde del fondo */}
+      {/* Tablero de madera (superficie del escritorio) */}
       <div
         style={{
           position: 'absolute',
-          top: h * 0.16,
+          left: 0,
+          right: 0,
+          top: 0,
+          height: h * 0.76,
+          borderRadius: '9px 9px 4px 4px',
+          background: 'linear-gradient(180deg, #cf9f66 0%, #b9884f 100%)',
+          border: '1px solid rgba(124,92,58,0.3)',
+          boxShadow: on
+            ? `inset 0 1px 0 rgba(255,255,255,0.35), 0 0 16px ${accent}33`
+            : 'inset 0 1px 0 rgba(255,255,255,0.3)',
+        }}
+      />
+      {/* Monitor sobre el tablero: cuerpo oscuro + pantalla (prende al trabajar)
+          + cuello y base. Marcado, estilo Munder Difflin. */}
+      <div
+        style={{
+          position: 'absolute',
           left: '50%',
+          top: h * 0.04,
           transform: 'translateX(-50%)',
-          width: w * 0.42,
-          height: h * 0.4,
-          borderRadius: 4,
-          background: '#9a8a6e',
-          border: `1px solid ${SCENE.hairlineStrong}`,
-          boxShadow: on ? `0 0 12px ${accent}aa` : 'none',
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
         }}
       >
+        {/* Cuerpo del monitor */}
         <div
           style={{
-            width: '80%',
-            height: '64%',
-            borderRadius: 2,
-            background: on
-              ? `linear-gradient(135deg, ${accent} 0%, ${accent}55 100%)`
-              : 'linear-gradient(135deg,#efe7d7,#d8cfbe)',
-            opacity: on ? 1 : 0.5,
+            width: w * 0.42,
+            height: h * 0.42,
+            borderRadius: 3,
+            background: '#2a2832',
+            border: '1px solid #15131b',
+            padding: Math.max(1.5, w * 0.018),
+            boxShadow: on ? `0 0 12px ${accent}bb` : '0 2px 5px rgba(0,0,0,0.3)',
           }}
-        />
+        >
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              borderRadius: 2,
+              background: on ? `linear-gradient(135deg, ${accent} 0%, ${accent}55 100%)` : '#0f1018',
+              opacity: on ? 1 : 0.95,
+            }}
+          />
+        </div>
+        {/* Cuello */}
+        <div style={{ width: Math.max(2, w * 0.05), height: h * 0.07, background: '#1c1a24' }} />
+        {/* Base */}
+        <div style={{ width: w * 0.16, height: Math.max(2, h * 0.04), borderRadius: 2, background: '#1c1a24' }} />
       </div>
     </div>
   );
