@@ -474,8 +474,8 @@ export function OfficeFloor({
         ))}
 
         {/* Estaciones de café y reunión (nodos limpios) */}
-        <StationNode spot={layout.coffeeSpot} floorW={floorW} accent="#f5b740" label="Café" icon={Coffee} />
-        <MeetingStation spots={layout.meetingSpots} floorW={floorW} accent="#7dd3fc" />
+        <CafeArea spot={layout.coffeeSpot} floorW={floorW} />
+        <MeetingStation spots={layout.meetingSpots} floorW={floorW} />
 
         {/* Estaciones de acción: adónde camina cada Mr Go a ejecutar su tool */}
         {floorW > 0 &&
@@ -677,12 +677,30 @@ function StationNode({
   );
 }
 
-/** Estación de reunión (mesa) centrada entre las sillas. */
-function MeetingStation({ spots, floorW, accent }: { spots: Spot[]; floorW: number; accent: string }) {
+/** Sala de reunión: mesa de directorio con sillas mauve alrededor (estilo MD). */
+function MeetingStation({ spots, floorW }: { spots: Spot[]; floorW: number }) {
   if (spots.length === 0) return null;
   const cx = spots.reduce((a, s) => a + s.x, 0) / spots.length;
   const cy = spots.reduce((a, s) => a + s.y, 0) / spots.length;
-  const w = Math.max(40, floorW * 0.09);
+  const tw = Math.max(48, floorW * 0.115); // ancho de la mesa
+  const th = tw * 0.46; // alto de la mesa
+  const ch = Math.max(8, tw * 0.2); // tamaño de silla
+  const seat = 'linear-gradient(180deg,#c498b8 0%,#a9789e 100%)';
+  const slots = [0.2, 0.5, 0.8]; // 3 sillas arriba y 3 abajo
+  const Chair = ({ fx, top }: { fx: number; top: number }) => (
+    <div
+      style={{
+        position: 'absolute',
+        left: fx * tw - ch / 2,
+        top,
+        width: ch,
+        height: ch * 0.85,
+        borderRadius: 4,
+        background: seat,
+        boxShadow: '0 1px 3px rgba(124,92,58,0.2)',
+      }}
+    />
+  );
   return (
     <div
       aria-hidden
@@ -690,7 +708,7 @@ function MeetingStation({ spots, floorW, accent }: { spots: Spot[]; floorW: numb
         position: 'absolute',
         left: `${cx}%`,
         top: `${cy}%`,
-        transform: 'translate(-50%, 16%)',
+        transform: 'translate(-50%, 8%)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -698,26 +716,32 @@ function MeetingStation({ spots, floorW, accent }: { spots: Spot[]; floorW: numb
         zIndex: 2,
       }}
     >
-      <div
-        style={{
-          width: w,
-          height: w * 0.56,
-          borderRadius: 14,
-          background: SCENE.node,
-          border: `1px solid ${SCENE.hairline}`,
-          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 14px rgba(124,92,58,0.16)`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: accent,
-        }}
-      >
-        <Users style={{ width: w * 0.26, height: w * 0.26 }} strokeWidth={1.6} />
+      <div style={{ position: 'relative', width: tw, height: th + ch * 2 + 6 }}>
+        {slots.map((fx, i) => (
+          <Chair key={`t${i}`} fx={fx} top={0} />
+        ))}
+        {/* Mesa de directorio */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: ch + 3,
+            width: tw,
+            height: th,
+            borderRadius: 12,
+            background: 'linear-gradient(180deg,#ffffff 0%,#f0e9db 100%)',
+            border: '1px solid rgba(124,92,58,0.28)',
+            boxShadow: '0 4px 10px rgba(124,92,58,0.16)',
+          }}
+        />
+        {slots.map((fx, i) => (
+          <Chair key={`b${i}`} fx={fx} top={ch + 6 + th} />
+        ))}
       </div>
       <span
         className="font-mono"
         style={{
-          fontSize: Math.max(8, Math.round(w * 0.13)),
+          fontSize: Math.max(8, Math.round(tw * 0.11)),
           color: SCENE.inkDim,
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
@@ -725,6 +749,79 @@ function MeetingStation({ spots, floorW, accent }: { spots: Spot[]; floorW: numb
         }}
       >
         Reunión
+      </span>
+    </div>
+  );
+}
+
+/** Café / break: barra con máquina de café + tazas (estilo MD). */
+function CafeArea({ spot, floorW }: { spot: Spot; floorW: number }) {
+  const bw = Math.max(44, floorW * 0.1); // ancho de la barra
+  const bh = bw * 0.34;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        left: `${spot.x}%`,
+        top: `${spot.y}%`,
+        // Contra la "pared del fondo": arriba de donde se para el agente que va al
+        // café, así la barra + máquina quedan siempre a la vista.
+        transform: 'translate(-50%, -118%)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 4,
+        zIndex: 2,
+      }}
+    >
+      <div style={{ position: 'relative', width: bw, height: bh * 1.9 }}>
+        {/* Máquina de café (atrás, sobre la barra) */}
+        <div
+          style={{
+            position: 'absolute',
+            left: bw * 0.16,
+            top: 0,
+            width: bw * 0.26,
+            height: bh * 1.1,
+            borderRadius: 4,
+            background: 'linear-gradient(180deg,#3a3740 0%,#26242c 100%)',
+            border: '1px solid #15131b',
+            boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
+          }}
+        >
+          {/* luz de la máquina */}
+          <div style={{ position: 'absolute', top: bh * 0.18, left: '50%', transform: 'translateX(-50%)', width: Math.max(2, bw * 0.05), height: Math.max(2, bw * 0.05), borderRadius: '50%', background: '#f5b740' }} />
+        </div>
+        {/* Tazas */}
+        <div style={{ position: 'absolute', left: bw * 0.56, top: bh * 0.72, width: bw * 0.1, height: bh * 0.4, borderRadius: '0 0 3px 3px', background: '#e7ddc9', border: '1px solid rgba(124,92,58,0.3)' }} />
+        <div style={{ position: 'absolute', left: bw * 0.7, top: bh * 0.72, width: bw * 0.1, height: bh * 0.4, borderRadius: '0 0 3px 3px', background: '#d9cdb4', border: '1px solid rgba(124,92,58,0.3)' }} />
+        {/* Barra / counter */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            bottom: 0,
+            width: bw,
+            height: bh,
+            borderRadius: 8,
+            background: 'linear-gradient(180deg,#cf9f66 0%,#b9884f 100%)',
+            border: '1px solid rgba(124,92,58,0.3)',
+            boxShadow: '0 5px 12px rgba(124,92,58,0.18)',
+          }}
+        />
+      </div>
+      <span
+        className="font-mono"
+        style={{
+          fontSize: Math.max(8, Math.round(bw * 0.12)),
+          color: SCENE.inkDim,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        Café
       </span>
     </div>
   );
