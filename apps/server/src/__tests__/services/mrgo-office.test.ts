@@ -45,6 +45,24 @@ describe('services/mrgo/office — sanitizeOffice', () => {
     expect(sanitizeOffice({ paused: 'ventas' }).paused).toEqual([]);
     expect(sanitizeOffice([]).paused).toEqual([]);
   });
+
+  it('sanea las posiciones: clave válida + x/y recortados a [0,100]', () => {
+    const out = sanitizeOffice({
+      paused: [],
+      positions: {
+        ventas: { x: 50, y: 60 },
+        ceo: { x: -10, y: 140 }, // se recorta a 0 / 100
+        nope: { x: 10, y: 10 }, // clave inválida → se descarta
+        soporte: { x: 'a', y: 5 }, // x inválido → se descarta
+      },
+    });
+    expect(out.positions).toEqual({ ventas: { x: 50, y: 60 }, ceo: { x: 0, y: 100 } });
+  });
+
+  it('positions vacío cuando no viene o no es objeto', () => {
+    expect(sanitizeOffice({ paused: [] }).positions).toEqual({});
+    expect(sanitizeOffice({ paused: [], positions: [] }).positions).toEqual({});
+  });
 });
 
 describe('services/mrgo/office — loadOffice', () => {
@@ -75,7 +93,7 @@ describe('services/mrgo/office — saveOffice', () => {
     const arg = create.mock.calls[0][0] as { data: { type: string; businessId: string; config: unknown } };
     expect(arg.data.type).toBe('MRGO_OFFICE');
     expect(arg.data.businessId).toBe('biz_1');
-    expect(arg.data.config).toEqual({ paused: ['ceo', 'ventas'] });
+    expect(arg.data.config).toEqual({ paused: ['ceo', 'ventas'], positions: {} });
   });
 
   it('actualiza con FOR UPDATE si el Connection ya existe', async () => {

@@ -18,6 +18,7 @@ import {
   Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
   Terminal, Gauge, CheckSquare, Bell, Zap, Share2, Activity as ActivityIcon, Sparkles, Thermometer,
   Pause, Play, Palette, Smile, Heart, Glasses, Shirt, Check, Pencil, Wand2, Store, ExternalLink,
+  Move, RotateCcw, X,
 } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
 import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
@@ -174,6 +175,10 @@ export default function OficinaPage() {
   const [delivery, setDelivery] = useState<{ to: string; nonce: number } | null>(null);
   // Agentes pausados (solo foco visual de la oficina; no cambia el backend).
   const [pausados, setPausados] = useState<Set<string>>(new Set());
+  // Posiciones personalizadas de los puestos (editor del piso) + modo edición.
+  const [posiciones, setPosiciones] = useState<Record<string, { x: number; y: number }>>({});
+  const [editandoPiso, setEditandoPiso] = useState(false);
+  const [guardandoPiso, setGuardandoPiso] = useState(false);
   const [feed, setFeed] = useState<FeedEvent[]>([]);
   // Id del evento cuya acción pendiente se está confirmando (para el spinner).
   const [confirmando, setConfirmando] = useState<string | null>(null);
@@ -250,7 +255,9 @@ export default function OficinaPage() {
     let activo = true;
     getMrGoOffice()
       .then((office) => {
-        if (activo && Array.isArray(office.paused)) setPausados(new Set(office.paused));
+        if (!activo) return;
+        if (Array.isArray(office.paused)) setPausados(new Set(office.paused));
+        if (office.positions && typeof office.positions === 'object') setPosiciones(office.positions);
       })
       .catch(() => {
         /* estado de oficina opcional: si falla, arranca sin pausas */
@@ -526,14 +533,15 @@ export default function OficinaPage() {
   }, [ceo, equipo, emociones, resaltado, pausados, tools, toolByKey, configByKey]);
 
   // Layout del piso + "vida" (los agentes caminan al café / reunión y vuelven).
-  const layout = useMemo(() => buildOfficeLayout(roomAgents), [roomAgents]);
+  // Las posiciones personalizadas pisan el arreglo automático.
+  const layout = useMemo(() => buildOfficeLayout(roomAgents, posiciones), [roomAgents, posiciones]);
   const life = useOfficeLife({
     keys: roomAgents.map((a) => a.key),
     deskSpots: layout.deskSpots,
     coffeeSpot: layout.coffeeSpot,
     meetingSpots: layout.meetingSpots,
     paused: pausados,
-    enabled: true,
+    enabled: !editandoPiso, // en edición los avatares no deambulan
   });
 
   /** Pausar / reactivar un agente (foco visual de la oficina). Persiste el nuevo
@@ -543,9 +551,65 @@ export default function OficinaPage() {
     if (next.has(key)) next.delete(key);
     else next.add(key);
     setPausados(next);
-    saveMrGoOffice({ paused: [...next] }).catch(() => {
+    // Guardamos pausas + posiciones juntas (es el mismo registro de oficina).
+    saveMrGoOffice({ paused: [...next], positions: posiciones }).catch(() => {
       toast({ type: 'error', message: 'No se pudo guardar el estado de la oficina.' });
     });
+  }
+
+  // ─── Editor del piso (drag-and-drop) ─────────────────────────────────────
+  // Snapshot de las posiciones al entrar en edición, para poder cancelar.
+  const posicionesSnapshot = useRef<Record<string, { x: number; y: number }>>({});
+
+  /** Entra en modo edición: guarda un snapshot para poder cancelar. */
+  function entrarEditarPiso() {
+    posicionesSnapshot.current = { ...posiciones };
+    setSeleccionado(null);
+    setEditandoPiso(true);
+  }
+
+  /** Mueve el puesto de un agente (lo reporta el avatar al arrastrarlo). */
+  function moverPuesto(key: string, spot: { x: number; y: number }) {
+    setPosiciones((prev) => ({ ...prev, [key]: spot }));
+  }
+
+  /** Guarda las posiciones del piso y sale de edición. */
+  async function guardarPiso() {
+    if (guardandoPiso) return;
+    setGuardandoPiso(true);
+    try {
+      const saved = await saveMrGoOffice({ paused: [...pausados], positions: posiciones });
+      setPosiciones(saved.positions ?? {});
+      setEditandoPiso(false);
+      toast({ type: 'success', message: 'Posiciones del piso guardadas.' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      toast({ type: 'error', message: msg || 'No se pudo guardar el piso.' });
+    } finally {
+      setGuardandoPiso(false);
+    }
+  }
+
+  /** Restablece el arreglo automático (borra las posiciones personalizadas). */
+  async function restablecerPiso() {
+    if (guardandoPiso) return;
+    setGuardandoPiso(true);
+    try {
+      const saved = await saveMrGoOffice({ paused: [...pausados], positions: {} });
+      setPosiciones(saved.positions ?? {});
+      toast({ type: 'info', message: 'Piso restablecido al arreglo automático.' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      toast({ type: 'error', message: msg || 'No se pudo restablecer el piso.' });
+    } finally {
+      setGuardandoPiso(false);
+    }
+  }
+
+  /** Cancela la edición: descarta los cambios no guardados (snapshot). */
+  function cancelarEdicionPiso() {
+    setPosiciones(posicionesSnapshot.current);
+    setEditandoPiso(false);
   }
 
   /** Darle una orden directa a un agente: prefija el comando y enfoca. */
@@ -736,7 +800,7 @@ export default function OficinaPage() {
           {/* Izquierda — La oficina (~70%) */}
           <section className="lg:col-span-7">
             <div className="rounded-xl border border-[#e7e0d2] bg-white p-5">
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[#4a4034]">
                   La oficina
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
@@ -744,9 +808,54 @@ export default function OficinaPage() {
                     En vivo
                   </span>
                 </h2>
-                <span className="text-xs text-[#a99d87]">
-                  {(ceo ? 1 : 0) + equipo.length} en funciones
-                </span>
+                {editandoPiso ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="hidden text-[11px] text-[#a99d87] sm:inline">
+                      Arrastrá los avatares a su lugar
+                    </span>
+                    <button
+                      type="button"
+                      onClick={restablecerPiso}
+                      disabled={guardandoPiso}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#ddd4c4] bg-white px-2.5 py-1.5 text-xs font-medium text-[#857a66] transition-colors hover:border-[#e8692a] hover:text-[#e8692a] disabled:opacity-60"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Restablecer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelarEdicionPiso}
+                      disabled={guardandoPiso}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#ddd4c4] bg-white px-2.5 py-1.5 text-xs font-medium text-[#857a66] transition-colors hover:border-[#4a4034] hover:text-[#4a4034] disabled:opacity-60"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={guardarPiso}
+                      disabled={guardandoPiso}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#e8692a] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#d25e22] disabled:opacity-60"
+                    >
+                      {guardandoPiso ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      Guardar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-[#a99d87]">
+                      {(ceo ? 1 : 0) + equipo.length} en funciones
+                    </span>
+                    <button
+                      type="button"
+                      onClick={entrarEditarPiso}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#ddd4c4] bg-white px-2.5 py-1.5 text-xs font-medium text-[#857a66] transition-colors hover:border-[#7c3aed] hover:text-[#7c3aed]"
+                    >
+                      <Move className="h-3.5 w-3.5" />
+                      Editar piso
+                    </button>
+                  </div>
+                )}
               </div>
 
               <OfficeFloor
@@ -759,6 +868,9 @@ export default function OficinaPage() {
                 showDetailPanel={false}
                 activity={activity}
                 delivery={delivery}
+                positions={posiciones}
+                editable={editandoPiso}
+                onMoveAgent={moverPuesto}
               />
             </div>
           </section>

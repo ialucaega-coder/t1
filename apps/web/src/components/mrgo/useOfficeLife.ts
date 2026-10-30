@@ -126,6 +126,15 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
   // Memo estable de la lista de claves para dependencias de efectos.
   const keysSignature = useMemo(() => keys.join('|'), [keys]);
 
+  // Firma de los escritorios: cambia cuando el dueño mueve a alguien (o cuando
+  // carga el estado persistido de posiciones, que llega async DESPUÉS del
+  // montaje). Sin esto, el efecto de sincronización no se re-dispararía al
+  // llegar las posiciones custom y los agentes quedarían en su sitio automático.
+  const desksSignature = useMemo(() => {
+    return keys.map((k) => `${k}:${deskSpots[k]?.x ?? ''},${deskSpots[k]?.y ?? ''}`).join('|');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keysSignature, deskSpots]);
+
   // ---- Reconciliación de refs de entrada en cada render ----
   // Mantenemos los refs sincronizados con las props sin recrear timers.
   const safeDesks = useMemo(() => {
@@ -201,8 +210,18 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
         }
 
         if (existing) {
-          // Conservamos su vida actual (puede estar vagando).
-          next[k] = existing;
+          // Si está en su escritorio ('working') y el escritorio se movió
+          // (p. ej. el dueño reubicó el puesto, o recién cargó la posición
+          // persistida), lo re-anclamos a la nueva posición. Si está vagando
+          // (walking/coffee/meeting/idle) lo dejamos: volverá al escritorio
+          // actualizado por sí solo (walkHome lee deskRef.current).
+          if (existing.state === 'working' && (existing.x !== desk.x || existing.y !== desk.y)) {
+            next[k] = { ...existing, x: desk.x, y: desk.y };
+            changed = true;
+          } else {
+            // Conservamos su vida actual (puede estar vagando).
+            next[k] = existing;
+          }
         } else {
           // Clave nueva: arranca en su escritorio trabajando.
           next[k] = { x: desk.x, y: desk.y, state: 'working', facing: 'right' };
@@ -228,8 +247,12 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
         delete timersRef.current[k];
       }
     }
+    // `desksSignature` ya codifica la lista de claves Y sus posiciones (se
+    // construye mapeando `keys`), así que cubre tanto alta/baja de agentes como
+    // movimiento/carga de escritorios. Mantenemos la MISMA aridad del array que
+    // antes (3 elementos) para no cambiar el tamaño de deps entre renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keysSignature, isEnabled, paused]);
+  }, [desksSignature, isEnabled, paused]);
 
   // ---- Bucle de vida: un único setInterval ----
   useEffect(() => {

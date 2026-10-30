@@ -70,6 +70,12 @@ export interface OfficeFloorProps {
   /** Señal de delegación: cuando cambia `nonce`, vuela un sobre del CEO al
    *  agente `to`. */
   delivery?: { to: string; nonce: number } | null;
+  /** Posiciones personalizadas de los puestos (editor del piso). */
+  positions?: Record<string, Spot>;
+  /** Modo edición: los avatares se pueden arrastrar para reubicar su puesto. */
+  editable?: boolean;
+  /** Se llama al soltar (o mover) un avatar en modo edición, con el %. */
+  onMoveAgent?: (key: string, spot: Spot) => void;
   className?: string;
 }
 
@@ -232,8 +238,15 @@ const FLOOR_PLANTS: { x: number; y: number; size: number }[] = [
   { x: 97.7, y: 94.5, size: 1.15 },
 ];
 
-/** Calcula todo el plano a partir de los agentes presentes. */
-export function computeFloor(agents: RoomAgent[]): FloorLayout {
+/**
+ * Calcula todo el plano a partir de los agentes presentes. Si se pasan
+ * `positions` (editor del piso), esas coordenadas PISAN al puesto calculado del
+ * agente correspondiente (el resto sigue el arreglo automático).
+ */
+export function computeFloor(
+  agents: RoomAgent[],
+  positions?: Record<string, Spot>,
+): FloorLayout {
   const zones: ZoneRect[] = [];
   const desks: Record<string, Spot> = {};
 
@@ -320,11 +333,22 @@ export function computeFloor(agents: RoomAgent[]): FloorLayout {
     if (!desks[a.key]) desks[a.key] = { x: 50, y: 70 };
   }
 
+  // Override: posiciones personalizadas del editor del piso (si las hay).
+  if (positions) {
+    for (const a of agents) {
+      const p = positions[a.key];
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) desks[a.key] = { x: p.x, y: p.y };
+    }
+  }
+
   return { zones, desks, coffeeSpot, meetingSpots };
 }
 
 /** Wrapper para el hook de vida (usa las mismas coordenadas del plano). */
-export function buildOfficeLayout(agents: { key: string; director?: boolean }[]): {
+export function buildOfficeLayout(
+  agents: { key: string; director?: boolean }[],
+  positions?: Record<string, Spot>,
+): {
   deskSpots: Record<string, Spot>;
   coffeeSpot: Spot;
   meetingSpots: Spot[];
@@ -338,7 +362,7 @@ export function buildOfficeLayout(agents: { key: string; director?: boolean }[])
     emotion: 'working' as MrGoEmotion,
     director: a.director,
   }));
-  const f = computeFloor(asRoom);
+  const f = computeFloor(asRoom, positions);
   return { deskSpots: f.desks, coffeeSpot: f.coffeeSpot, meetingSpots: f.meetingSpots };
 }
 
@@ -388,9 +412,12 @@ export function OfficeFloor({
   showDetailPanel = true,
   activity,
   delivery,
+  positions,
+  editable = false,
+  onMoveAgent,
   className,
 }: OfficeFloorProps) {
-  const layout = computeFloor(agents);
+  const layout = computeFloor(agents, positions);
   const selected = selectedKey ? agents.find((a) => a.key === selectedKey) ?? null : null;
   const direccion = layout.zones.find((z) => z.id === 'direccion');
 
@@ -406,6 +433,19 @@ export function OfficeFloor({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Editor del piso: convierte la posición del puntero a % del piso (recortado
+  // a un margen seguro) y avisa al padre para que persista la nueva posición.
+  function handleAvatarDrag(key: string, clientX: number, clientY: number) {
+    const el = floorRef.current;
+    if (!el || !onMoveAgent) return;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return;
+    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+    const x = clamp(((clientX - r.left) / r.width) * 100, 3, 97);
+    const y = clamp(((clientY - r.top) / r.height) * 100, 8, 97);
+    onMoveAgent(key, { x, y });
+  }
 
   // ── Sobre que vuela CEO → agente al delegar una orden ──────────────────────
   // Coordenadas origen (CEO) / destino (agente) del sobre. El efecto de vuelo lo
@@ -527,12 +567,14 @@ export function OfficeFloor({
         {floorW > 0 &&
           agents.map((a) => {
             const home = layout.desks[a.key] ?? { x: 50, y: 70 };
-            const l = life?.[a.key];
+            const l = editable ? undefined : life?.[a.key];
             const baseX = l?.x ?? home.x;
             const baseY = l?.y ?? home.y;
             // Override por actividad: si está ejecutando una tool con estación,
             // camina hasta ella (la transición CSS de left/top anima el viaje).
-            const stId = a.paused ? null : stationForActivity(activity?.[a.key]);
+            // En modo edición no hay vida ni estaciones: el avatar queda en su
+            // puesto (o donde se lo arrastra).
+            const stId = editable || a.paused ? null : stationForActivity(activity?.[a.key]);
             const station = stId ? ACTION_STATIONS[stId] : null;
             const x = station ? station.spot.x : baseX;
             const y = station ? station.spot.y : baseY;
@@ -558,6 +600,8 @@ export function OfficeFloor({
                 floorW={floorW}
                 selected={selectedKey === a.key}
                 onSelect={onSelect}
+                editable={editable}
+                onDragMove={editable ? (cx, cy) => handleAvatarDrag(a.key, cx, cy) : undefined}
               />
             );
           })}
@@ -1128,6 +1172,8 @@ function AgentView({
   floorW,
   selected,
   onSelect,
+  editable = false,
+  onDragMove,
 }: {
   agent: RoomAgent;
   x: number;
@@ -1140,16 +1186,21 @@ function AgentView({
   floorW: number;
   selected: boolean;
   onSelect?: (key: string) => void;
+  /** Modo edición: el avatar se arrastra para reubicar su puesto. */
+  editable?: boolean;
+  /** Reporta la posición del puntero (clientX/Y) mientras se arrastra. */
+  onDragMove?: (clientX: number, clientY: number) => void;
 }) {
-  const clickable = Boolean(onSelect);
+  const clickable = Boolean(onSelect) && !editable;
   const active = selected || agent.highlighted;
+  const [dragging, setDragging] = useState(false);
   // Avatares MÁS GRANDES (~35% respecto al diseño anterior) y bien separados.
   const avatarPx = Math.max(42, floorW * (agent.director ? 0.14 : 0.112));
   const labelFs = Math.max(10, Math.round(avatarPx * 0.17));
 
   return (
     <div
-      role={clickable ? 'button' : undefined}
+      role={editable ? 'button' : clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
       onClick={clickable ? () => onSelect!(agent.key) : undefined}
       onKeyDown={
@@ -1162,22 +1213,60 @@ function AgentView({
             }
           : undefined
       }
-      aria-label={`${agent.nombre} — ${agent.rol} · ${estado.label}`}
+      onPointerDown={
+        editable
+          ? (e) => {
+              e.preventDefault();
+              try {
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              } catch {
+                /* algunos punteros no soportan captura */
+              }
+              setDragging(true);
+              onDragMove?.(e.clientX, e.clientY);
+            }
+          : undefined
+      }
+      onPointerMove={
+        editable && dragging ? (e) => onDragMove?.(e.clientX, e.clientY) : undefined
+      }
+      onPointerUp={
+        editable
+          ? (e) => {
+              setDragging(false);
+              try {
+                (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+              } catch {
+                /* el puntero ya se soltó */
+              }
+            }
+          : undefined
+      }
+      onPointerCancel={editable ? () => setDragging(false) : undefined}
+      aria-label={
+        editable
+          ? `Arrastrá para reubicar a ${agent.nombre}`
+          : `${agent.nombre} — ${agent.rol} · ${estado.label}`
+      }
       className="mrgo-agent"
       style={{
         position: 'absolute',
         left: `${x}%`,
         top: `${y}%`,
         transform: 'translate(-50%, -86%)',
-        transition: fastMove
-          ? 'left 1.15s ease-in-out, top 1.15s ease-in-out'
-          : 'left 2.6s ease-in-out, top 2.6s ease-in-out',
-        zIndex: Math.round(y * 10),
+        // En edición la posición sigue al puntero (sin transición ni "vida").
+        transition: editable
+          ? 'none'
+          : fastMove
+            ? 'left 1.15s ease-in-out, top 1.15s ease-in-out'
+            : 'left 2.6s ease-in-out, top 2.6s ease-in-out',
+        zIndex: dragging ? 9999 : Math.round(y * 10),
         width: avatarPx,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        cursor: clickable ? 'pointer' : 'default',
+        cursor: editable ? (dragging ? 'grabbing' : 'grab') : clickable ? 'pointer' : 'default',
+        touchAction: editable ? 'none' : undefined,
       }}
     >
       {/* UNA etiqueta limpia con el nombre (Crown lucide si es director).
@@ -1207,6 +1296,21 @@ function AgentView({
       {/* Avatar (respira/flota; se espeja al caminar a la izquierda) + punto de
           estado en la esquina (reemplaza el chip de texto para descongestionar). */}
       <div style={{ position: 'relative', lineHeight: 0 }}>
+        {/* Señal de "arrastrable" en modo edición: anillo punteado detrás. */}
+        {editable && (
+          <span
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: '2% 6%',
+              borderRadius: '50%',
+              border: `2px dashed ${dragging ? '#e8692a' : 'rgba(124,58,237,0.6)'}`,
+              background: dragging ? 'rgba(232,105,42,0.08)' : 'rgba(124,58,237,0.06)',
+              pointerEvents: 'none',
+              zIndex: 2,
+            }}
+          />
+        )}
         <div
           style={{
             transform: facing === 'left' ? 'scaleX(-1)' : undefined,

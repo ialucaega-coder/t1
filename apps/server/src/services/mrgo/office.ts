@@ -20,16 +20,33 @@ const OFFICE_CONNECTION_TYPE = 'MRGO_OFFICE';
 const OFFICE_CONNECTION_NAME = 'Oficina de Mr Go';
 const AGENT_SET: ReadonlySet<string> = new Set(AGENT_KEYS);
 
+/** Posición de un puesto en el piso, en % del alto/ancho (0–100). */
+export interface DeskPosition {
+  x: number;
+  y: number;
+}
+
 /** Estado persistente de la oficina. */
 export interface OfficeState {
   /** Claves de agentes EN PAUSA (foco visual del piso). */
   paused: string[];
+  /**
+   * Posiciones personalizadas de los puestos (editor drag-and-drop), por clave
+   * de agente. Si un agente no está acá, su puesto se calcula automáticamente.
+   */
+  positions: Record<string, DeskPosition>;
+}
+
+/** Recorta un número a [0,100] con 2 decimales; null si no es finito. */
+function clampPct(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return Math.round(Math.min(100, Math.max(0, v)) * 100) / 100;
 }
 
 /**
  * Normaliza/valida el estado entrante: descarta claves fuera del catálogo,
- * deduplica, mantiene el orden canónico del catálogo. Determinístico y
- * defensivo (datos de API). Nunca lanza.
+ * deduplica, mantiene el orden canónico del catálogo; sanea las posiciones
+ * (clave válida + x/y en [0,100]). Determinístico y defensivo. Nunca lanza.
  */
 export function sanitizeOffice(raw: unknown): OfficeState {
   const cfg =
@@ -39,8 +56,21 @@ export function sanitizeOffice(raw: unknown): OfficeState {
   for (const k of list) {
     if (typeof k === 'string' && AGENT_SET.has(k)) valid.add(k);
   }
+
+  // Posiciones personalizadas: solo claves del catálogo con x/y válidos.
+  const positions: Record<string, DeskPosition> = {};
+  const rawPos = cfg.positions;
+  if (rawPos && typeof rawPos === 'object' && !Array.isArray(rawPos)) {
+    for (const [key, val] of Object.entries(rawPos as Record<string, unknown>)) {
+      if (!AGENT_SET.has(key) || !val || typeof val !== 'object') continue;
+      const x = clampPct((val as Record<string, unknown>).x);
+      const y = clampPct((val as Record<string, unknown>).y);
+      if (x !== null && y !== null) positions[key] = { x, y };
+    }
+  }
+
   // Orden canónico del catálogo (estable para la UI).
-  return { paused: AGENT_KEYS.filter((k) => valid.has(k)) };
+  return { paused: AGENT_KEYS.filter((k) => valid.has(k)), positions };
 }
 
 /** Devuelve el estado persistente de la oficina del negocio (pausas). */

@@ -117,9 +117,13 @@ const memorySchema = z.object({
   facts: z.array(z.string().trim().max(MAX_FACT_LEN)).max(MAX_FACTS).optional(),
 });
 
-// Estado persistente de la oficina (qué agentes están en pausa).
+// Estado persistente de la oficina: pausas + posiciones del editor del piso.
+// El servicio (`sanitizeOffice`) valida claves y recorta x/y a [0,100].
 const officeSchema = z.object({
   paused: z.array(agentKeyEnum).max(AGENT_KEYS.length),
+  positions: z
+    .record(z.string(), z.object({ x: z.number(), y: z.number() }))
+    .optional(),
 });
 
 // Giro del negocio ("bots por giro"). El id se valida contra el catálogo en el

@@ -272,8 +272,16 @@ export function saveMrGoMemory(memory: { profile?: string; facts?: string[] }) {
  * PAUSA (foco visual). El arreglo del piso es determinístico según los agentes
  * activos, así que no hace falta guardarlo aparte.
  */
+/** Posición de un puesto en el piso, en % (0–100). */
+export interface MrGoDeskPosition {
+  x: number;
+  y: number;
+}
+
 export interface MrGoOffice {
   paused: string[];
+  /** Posiciones personalizadas de los puestos (editor del piso), por agente. */
+  positions?: Record<string, MrGoDeskPosition>;
 }
 
 /** Lee el estado de la oficina (pausas) del negocio. */
