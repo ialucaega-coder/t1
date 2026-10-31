@@ -259,7 +259,7 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
     }
 
     if (data === 'action:menu') {
-      clearState(ctx.chat!.id);
+      await clearState(ctx);
       const business = await prisma.business.findUnique({
         where: { id: businessId },
         select: { name: true },

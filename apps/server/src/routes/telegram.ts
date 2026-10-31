@@ -77,8 +77,17 @@ router.post(
       return;
     }
 
+    // Token del bot (ya descifrado): con varias instancias, la que recibe el
+    // update puede no tener el bot en memoria y lo arma al vuelo con este token.
+    let botToken: string | undefined;
     try {
-      await handleUpdate(businessId, req.body);
+      botToken = config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
+    } catch {
+      botToken = undefined;
+    }
+
+    try {
+      await handleUpdate(businessId, req.body, botToken);
     } catch (error) {
       console.error(`Error procesando update de Telegram para ${businessId}:`, error);
     }
@@ -192,14 +201,23 @@ router.delete(
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
-    // Detener el bot
-    await stopBot(businessId);
-
-    // Desactivar conexión en la DB
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
       orderBy: { id: 'asc' },
     });
+
+    // Detener el bot. Se pasa el token por si el bot vive en OTRA instancia: así
+    // igual se borra el webhook en Telegram.
+    const cfg = connection?.config as { botToken?: string; botTokenEnc?: string } | null;
+    let token: string | undefined;
+    try {
+      token = cfg?.botTokenEnc ? safeDecrypt(cfg.botTokenEnc) : cfg?.botToken;
+    } catch {
+      token = undefined;
+    }
+    await stopBot(businessId, token);
+
+    // Desactivar conexión en la DB
 
     if (connection) {
       await prisma.connection.update({

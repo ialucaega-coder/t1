@@ -13,6 +13,7 @@
  */
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma';
+import { sharedTryLock } from '../lib/sharedState';
 import {
   generateDailyReport,
   generateReminders,
@@ -167,13 +168,30 @@ export async function runPostSaleFollowUps(): Promise<void> {
 let started = false;
 
 /**
+ * Corre un job diario en UNA sola instancia: toma un lock por (job, día) en el
+ * almacén compartido (Redis) y solo quien lo obtiene ejecuta. Así, con N
+ * instancias, los reportes/recordatorios no se duplican aunque ninguna tenga
+ * `RUN_SCHEDULER=false`. Sin Redis (una instancia) el lock es local y no cambia
+ * nada. El TTL (23 h) cubre el día; si la instancia que tomó el lock cae a mitad
+ * del job, ese job no se reintenta hasta el día siguiente (preferible a duplicar
+ * avisos a todos los clientes).
+ */
+async function runExclusive(job: string, fn: () => Promise<void>): Promise<void> {
+  const day = new Date().toISOString().slice(0, 10);
+  if (!(await sharedTryLock(`sched:${job}:${day}`, 23 * 60 * 60 * 1000))) {
+    console.log(`[scheduler] ${job}: otra instancia ya lo corre hoy, se omite`);
+    return;
+  }
+  await fn();
+}
+
+/**
  * Programa los jobs diarios. Idempotente (no duplica los cron).
  *
- * Escalado horizontal: los cron viven en la memoria del proceso, así que si el
- * server corre con más de una instancia cada una dispararía los jobs y
- * duplicaría reportes/recordatorios para todos los negocios. Para escalar,
- * poné `RUN_SCHEDULER=false` en TODAS las instancias salvo UNA. Por defecto
- * corre (compatibilidad con el despliegue de una sola instancia).
+ * Escalado horizontal: los cron viven en la memoria de cada proceso, pero cada
+ * disparo toma un lock por (job, día) en Redis (`runExclusive`), así que con N
+ * instancias el job corre una sola vez. `RUN_SCHEDULER=false` sigue sirviendo para
+ * dejar una instancia fuera de los jobs (p. ej. las que solo atienden tráfico).
  */
 export function startScheduler(): void {
   if (started || process.env.NODE_ENV === 'test') return;
@@ -186,22 +204,22 @@ export function startScheduler(): void {
 
   // Reporte diario a las 20:00 (hora del servidor).
   cron.schedule('0 20 * * *', () => {
-    runDailyReports().catch((err) => console.error('[scheduler] runDailyReports:', err));
+    runExclusive('daily-reports', runDailyReports).catch((err) => console.error('[scheduler] runDailyReports:', err));
   });
 
   // Recordatorios de las reservas de mañana, a las 09:00.
   cron.schedule('0 9 * * *', () => {
-    runReminders().catch((err) => console.error('[scheduler] runReminders:', err));
+    runExclusive('reminders', runReminders).catch((err) => console.error('[scheduler] runReminders:', err));
   });
 
   // Recuperación de no-shows, a las 21:00 (cierre del día).
   cron.schedule('0 21 * * *', () => {
-    runNoShowRecovery().catch((err) => console.error('[scheduler] runNoShowRecovery:', err));
+    runExclusive('no-show-recovery', runNoShowRecovery).catch((err) => console.error('[scheduler] runNoShowRecovery:', err));
   });
 
   // Seguimiento post-venta de los turnos completados ayer, a las 11:00.
   cron.schedule('0 11 * * *', () => {
-    runPostSaleFollowUps().catch((err) => console.error('[scheduler] runPostSaleFollowUps:', err));
+    runExclusive('post-sale', runPostSaleFollowUps).catch((err) => console.error('[scheduler] runPostSaleFollowUps:', err));
   });
 
   console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00, post-venta 11:00)');

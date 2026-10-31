@@ -23,7 +23,8 @@ import {
 } from '../services/manychat/config';
 import { testApiKey } from '../services/manychat/client';
 import { processMessage } from '../services/chatbot';
-import { cache, cacheKey } from '../lib/cache';
+import { cacheKey } from '../lib/cache';
+import { sharedIncr } from '../lib/sharedState';
 
 const router = Router();
 
@@ -61,7 +62,8 @@ function dynamicBlock(text: string, conversationId?: string) {
   };
 }
 
-// Rate limit propio del webhook (best-effort, in-memory, ventana de 1 min). Va
+// Rate limit propio del webhook (compartido entre instancias vía Redis, con
+// fallback en memoria; ventana de 1 min). Va
 // aparte del limitador global por IP (que no sirve acá: ManyChat llama desde IPs
 // compartidas por todos los negocios). Topeamos por negocio y por suscriptor
 // porque cada mensaje dispara la IA (costo) y escribe en la base.
@@ -70,19 +72,15 @@ const WH_MAX_PER_BUSINESS = 120;
 const WH_MAX_PER_SUBSCRIBER = 15;
 
 /** Devuelve true si hay que frenar (se responde cortesía, nunca 429 a ManyChat). */
-function webhookRateLimited(businessId: string, subscriberId?: string): boolean {
+async function webhookRateLimited(businessId: string, subscriberId?: string): Promise<boolean> {
   const minute = Math.floor(Date.now() / WH_WINDOW_MS);
   const bKey = cacheKey(businessId, 'mc-wh', String(minute));
-  const bCount = cache.get<number>(bKey) ?? 0;
-  if (bCount >= WH_MAX_PER_BUSINESS) return true;
+  if ((await sharedIncr(bKey, WH_WINDOW_MS)) > WH_MAX_PER_BUSINESS) return true;
 
   if (subscriberId) {
     const sKey = cacheKey(businessId, 'mc-wh-sub', subscriberId, String(minute));
-    const sCount = cache.get<number>(sKey) ?? 0;
-    if (sCount >= WH_MAX_PER_SUBSCRIBER) return true;
-    cache.set(sKey, sCount + 1, WH_WINDOW_MS);
+    if ((await sharedIncr(sKey, WH_WINDOW_MS)) > WH_MAX_PER_SUBSCRIBER) return true;
   }
-  cache.set(bKey, bCount + 1, WH_WINDOW_MS);
   return false;
 }
 
@@ -177,7 +175,7 @@ router.post(
     }
 
     // 3) Rate limit propio por negocio/suscriptor (protege el costo de IA).
-    if (webhookRateLimited(businessId, subscriberId)) {
+    if (await webhookRateLimited(businessId, subscriberId)) {
       res.json(dynamicBlock('Estamos recibiendo muchos mensajes. Probá de nuevo en un minuto. 🙏'));
       return;
     }

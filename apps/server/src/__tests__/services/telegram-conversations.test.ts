@@ -22,6 +22,8 @@ vi.mock('../../lib/prisma', () => {
   return { prisma };
 });
 
+vi.mock('../../lib/redis', () => ({ getRedis: () => null })); // estado en memoria
+
 import { prisma } from '../../lib/prisma';
 import { handleConfirmation, setState, getState } from '../../services/telegram/conversations';
 
@@ -29,9 +31,10 @@ const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown a
 
 const CHAT_ID = 123;
 
-function buildCtx(): { ctx: Context; reply: ReturnType<typeof vi.fn> } {
+function buildCtx(botId = 777): { ctx: Context; reply: ReturnType<typeof vi.fn> } {
   const reply = vi.fn(async () => undefined);
   const ctx = {
+    me: { id: botId },
     chat: { id: CHAT_ID },
     from: { id: 999, first_name: 'Ana', username: 'ana' },
     reply,
@@ -39,10 +42,10 @@ function buildCtx(): { ctx: Context; reply: ReturnType<typeof vi.fn> } {
   return { ctx, reply };
 }
 
-function seedConfirmState() {
-  setState(CHAT_ID, {
+async function seedConfirmState(botId = 777, businessId = 'biz_1') {
+  await setState(buildCtx(botId).ctx, {
     step: 'confirm',
-    businessId: 'biz_1',
+    businessId,
     serviceId: 's1',
     serviceName: 'Corte',
     professionalId: 'p1',
@@ -60,7 +63,7 @@ describe('telegram handleConfirmation', () => {
   });
 
   it('busca el servicio acotado al negocio del chat (no cruza tenants)', async () => {
-    seedConfirmState();
+    await seedConfirmState();
     mock(prisma.booking.findMany).mockResolvedValue([]);
     mock(prisma.booking.create).mockResolvedValue({ id: 'booking_abcdef12' });
 
@@ -73,7 +76,7 @@ describe('telegram handleConfirmation', () => {
   });
 
   it('crea la reserva cuando no hay solape (toma el advisory lock en la tx)', async () => {
-    seedConfirmState();
+    await seedConfirmState();
     mock(prisma.booking.findMany).mockResolvedValue([]); // sin reservas ese día
     mock(prisma.booking.create).mockResolvedValue({ id: 'booking_abcdef12' });
 
@@ -95,11 +98,11 @@ describe('telegram handleConfirmation', () => {
       })
     );
     expect(reply).toHaveBeenCalledWith(expect.stringContaining('Reserva confirmada'), expect.anything());
-    expect(getState(CHAT_ID)).toBeUndefined(); // estado limpiado
+    expect(await getState(buildCtx().ctx)).toBeUndefined(); // estado limpiado
   });
 
   it('NO crea la reserva y avisa cuando el horario se solapa', async () => {
-    seedConfirmState();
+    await seedConfirmState();
     // Ya hay una reserva 09:30–10:30 que pisa el slot 10:00–10:30.
     mock(prisma.booking.findMany).mockResolvedValue([{ startTime: '09:30', endTime: '10:30' }]);
 
@@ -108,11 +111,11 @@ describe('telegram handleConfirmation', () => {
 
     expect(prisma.booking.create).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith(expect.stringContaining('se acaba de ocupar'));
-    expect(getState(CHAT_ID)).toBeUndefined();
+    expect(await getState(buildCtx().ctx)).toBeUndefined();
   });
 
   it('no toca la DB si el usuario cancela la confirmación', async () => {
-    seedConfirmState();
+    await seedConfirmState();
     const { ctx, reply } = buildCtx();
 
     await handleConfirmation(ctx, false);
@@ -120,5 +123,15 @@ describe('telegram handleConfirmation', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.booking.create).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith(expect.stringContaining('cancelada'));
+  });
+});
+
+describe('telegram estado por bot', () => {
+  it('el mismo chat hablando con bots de dos negocios no mezcla el estado', async () => {
+    await seedConfirmState(111, 'biz_A');
+    await seedConfirmState(222, 'biz_B');
+
+    expect((await getState(buildCtx(111).ctx))?.businessId).toBe('biz_A');
+    expect((await getState(buildCtx(222).ctx))?.businessId).toBe('biz_B');
   });
 });

@@ -5,7 +5,8 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { getIO } from '../lib/socket';
-import { cache, cacheKey } from '../lib/cache';
+import { cacheKey } from '../lib/cache';
+import { sharedIncr, sharedGet, sharedSet } from '../lib/sharedState';
 import * as whatsapp from '../services/whatsapp/client';
 import { issueOtp, verifyOtp, publicBookingRequiresOtp } from '../lib/otp';
 
@@ -24,22 +25,20 @@ const MAX_VISION_MSGS_PER_DAY = 300;
 // rate limit global es POR IP (no frena a muchos usuarios distintos atacando un
 // mismo negocio). Este tope es POR NEGOCIO y protege el costo de IA del dueño:
 // si se supera, respondemos amablemente SIN llamar al proveedor. Caché en
-// memoria (best-effort); si el proceso reinicia, se reinicia el contador.
+// compartido entre instancias vía Redis (sharedState); sin Redis cae a memoria.
 const MAX_CHAT_MSGS_PER_DAY = 1000;
 
 /**
  * Incrementa y controla el contador diario de mensajes con imágenes del negocio.
- * Devuelve `true` si ya se superó el tope (hay que rechazar). Node es de un solo
- * hilo, así que el get+set no tiene carrera dentro del proceso.
+ * Devuelve `true` si ya se superó el tope (hay que rechazar). El incremento es
+ * atómico en Redis, así que el tope vale para el negocio completo aunque haya
+ * varias instancias (antes cada una llevaba su propio contador).
  */
-function overVisionDailyLimit(businessId: string): boolean {
+async function overVisionDailyLimit(businessId: string): Promise<boolean> {
   const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
   const key = cacheKey(businessId, 'vision-msgs', day);
-  const count = cache.get<number>(key) ?? 0;
-  if (count >= MAX_VISION_MSGS_PER_DAY) return true;
   // TTL de 24h: la clave del día vive lo suficiente y luego se descarta sola.
-  cache.set(key, count + 1, 24 * 60 * 60 * 1000);
-  return false;
+  return (await sharedIncr(key, 24 * 60 * 60 * 1000)) > MAX_VISION_MSGS_PER_DAY;
 }
 
 /**
@@ -47,13 +46,10 @@ function overVisionDailyLimit(businessId: string): boolean {
  * Devuelve `true` si ya se superó el tope (hay que rechazar antes de llamar al
  * LLM). Mismo mecanismo que el de visión, pero para todo mensaje.
  */
-function overChatDailyLimit(businessId: string): boolean {
+async function overChatDailyLimit(businessId: string): Promise<boolean> {
   const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
   const key = cacheKey(businessId, 'chat-msgs', day);
-  const count = cache.get<number>(key) ?? 0;
-  if (count >= MAX_CHAT_MSGS_PER_DAY) return true;
-  cache.set(key, count + 1, 24 * 60 * 60 * 1000);
-  return false;
+  return (await sharedIncr(key, 24 * 60 * 60 * 1000)) > MAX_CHAT_MSGS_PER_DAY;
 }
 
 // URL de imagen válida: debe ser http(s). Se usa para el superpoder "Oído y
@@ -164,7 +160,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
   // Guarda de costo por negocio: si se superó el tope diario de mensajes,
   // respondemos amablemente SIN llamar al LLM (protege el gasto de IA del dueño
   // ante un chat público anónimo). Se chequea antes de procesar el mensaje.
-  if (overChatDailyLimit(bot.businessId)) {
+  if (await overChatDailyLimit(bot.businessId)) {
     res.json({
       text: 'Estamos recibiendo muchas consultas hoy. Por favor, escribinos más tarde o dejanos tu contacto y te respondemos a la brevedad.',
       intent: 'FAQ',
@@ -185,7 +181,7 @@ router.post('/chat', asyncHandler(async (req, res) => {
   // Guarda de costo: si el mensaje trae imágenes, controlamos el tope diario de
   // visión del negocio antes de reenviar a la IA. Al superarlo, respondemos de
   // forma amable sin llamar al proveedor (evita el gasto).
-  if (images && overVisionDailyLimit(bot.businessId)) {
+  if (images && (await overVisionDailyLimit(bot.businessId))) {
     res.json({
       text: 'Recibimos muchas imágenes hoy. Escribinos tu consulta por texto y con gusto te ayudamos.',
       intent: 'FAQ',
@@ -372,12 +368,12 @@ router.post('/book/:slug/request-otp', asyncHandler(async (req, res) => {
   // Rate limit: cooldown entre envíos + tope diario por teléfono/negocio.
   const day = new Date().toISOString().slice(0, 10);
   const cooldownKey = cacheKey(business.id, 'otp-cooldown', phone);
-  if (cache.get<number>(cooldownKey)) {
+  if (await sharedGet<number>(cooldownKey)) {
     res.status(429).json({ error: 'Esperá un momento antes de pedir otro código.' });
     return;
   }
   const countKey = cacheKey(business.id, 'otp-count', day, phone);
-  const sent = cache.get<number>(countKey) ?? 0;
+  const sent = (await sharedGet<number>(countKey)) ?? 0;
   if (sent >= MAX_OTP_PER_DAY) {
     res.status(429).json({ error: 'Demasiados intentos hoy. Probá más tarde.' });
     return;
@@ -395,8 +391,8 @@ router.post('/book/:slug/request-otp', asyncHandler(async (req, res) => {
     return;
   }
 
-  cache.set(cooldownKey, 1, OTP_COOLDOWN_MS);
-  cache.set(countKey, sent + 1, 24 * 60 * 60 * 1000);
+  await sharedSet(cooldownKey, 1, OTP_COOLDOWN_MS);
+  await sharedIncr(countKey, 24 * 60 * 60 * 1000);
   res.json({ sent: true });
 }));
 

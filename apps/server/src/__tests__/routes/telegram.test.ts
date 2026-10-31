@@ -108,7 +108,8 @@ describe('routes/telegram', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true });
-      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 42 }));
+      // Se le pasa el token del bot para que una instancia sin el bot en memoria lo arme.
+      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 42 }), '123:ABCdef');
     });
 
     it('responde 200 aunque handleUpdate falle (no reintenta Telegram)', async () => {
@@ -143,7 +144,7 @@ describe('routes/telegram', () => {
         .send({ update_id: 5 });
 
       expect(res.status).toBe(200);
-      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 5 }));
+      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 5 }), 'enc');
     });
 
     it('rechaza 403 si el secret_token del header no coincide', async () => {
@@ -267,6 +268,20 @@ describe('routes/telegram', () => {
       expect(res.status).toBe(401);
     });
 
+    it('pasa el token a stopBot para borrar el webhook aunque el bot viva en otra instancia', async () => {
+      mock(stopBot).mockResolvedValue(undefined);
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1', businessId: 'biz_1', config: { botToken: '123:ABCdef' },
+      });
+      mock(prisma.connection.update).mockResolvedValue({ id: 'conn_1', isActive: false });
+
+      await request(app)
+        .delete('/api/telegram/disconnect')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(stopBot).toHaveBeenCalledWith('biz_1', '123:ABCdef');
+    });
+
     it('detiene el bot y desactiva la conexion existente', async () => {
       mock(stopBot).mockResolvedValue(undefined);
       mock(prisma.connection.findFirst).mockResolvedValue({ id: 'conn_1', businessId: 'biz_1' });
@@ -278,7 +293,7 @@ describe('routes/telegram', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ success: true });
-      expect(stopBot).toHaveBeenCalledWith('biz_1');
+      expect(stopBot).toHaveBeenCalledWith('biz_1', undefined);
       expect(prisma.connection.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'conn_1' }, data: { isActive: false, config: {} } })
       );
