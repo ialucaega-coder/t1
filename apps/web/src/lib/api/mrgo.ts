@@ -154,12 +154,39 @@ export function getMrGoAgents() {
 }
 
 /**
+ * Las llamadas que corren el LLM (y pueden encadenar varias acciones) tardan más
+ * que el timeout global de 20 s. Si el cliente corta antes que el server, el
+ * dueño ve un error mientras la acción real sigue ejecutándose y reintenta.
+ */
+const AI_CALL_TIMEOUT_MS = 120_000;
+
+/**
+ * Header `Idempotency-Key` para acciones EN VIVO. La clave es nueva por cada
+ * intento del usuario: el server reserva la clave antes de ejecutar y responde
+ * 409 a un reenvío con la misma, así que un reintento automático (red, proxy)
+ * no repite un WhatsApp o un cobro. En dry_run no hace falta.
+ */
+function liveHeaders(live: boolean): Record<string, string> | undefined {
+  if (!live) return undefined;
+  const key =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return { 'Idempotency-Key': key };
+}
+
+/**
  * Le da una orden al equipo: el orquestador decide qué agente la atiende y, si
  * `execute` es true, EJECUTA el tool propuesto en vivo (acciones externas
  * reales). Por defecto no ejecuta en vivo: las acciones externas se simulan.
  */
 export function orchestrate(text: string, channel?: string, execute = false) {
-  return httpClient.post<OrchestratorDecision>('/mrgo/orchestrate', { text, channel, execute });
+  return httpClient.post<OrchestratorDecision>(
+    '/mrgo/orchestrate',
+    { text, channel, execute },
+    liveHeaders(execute),
+    AI_CALL_TIMEOUT_MS,
+  );
 }
 
 /** Persiste qué agentes están activos (y su motor de IA opcional). */
@@ -209,7 +236,12 @@ export interface AgentLoopResult {
  * en vivo y las acciones externas pausan esperando confirmación (ver confirmMrGo).
  */
 export function runMrGo(text: string, channel?: string, execute = false, maxSteps?: number) {
-  return httpClient.post<AgentLoopResult>('/mrgo/run', { text, channel, execute, maxSteps });
+  return httpClient.post<AgentLoopResult>(
+    '/mrgo/run',
+    { text, channel, execute, maxSteps },
+    liveHeaders(execute),
+    AI_CALL_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -218,7 +250,7 @@ export function runMrGo(text: string, channel?: string, execute = false, maxStep
  * Para que Mr Go SIGA la cadena después de confirmar, usá `resumeMrGo`.
  */
 export function confirmMrGo(tool: string, params?: Record<string, unknown>) {
-  return httpClient.post<ActionResult>('/mrgo/confirm', { tool, params });
+  return httpClient.post<ActionResult>('/mrgo/confirm', { tool, params }, liveHeaders(true), AI_CALL_TIMEOUT_MS);
 }
 
 /** Contexto para reanudar el loop tras confirmar (reconstruye el hilo ReAct). */
@@ -242,18 +274,23 @@ export function resumeMrGo(
   pending: { tool: string; params?: Record<string, unknown>; thought?: string },
   ctx: ResumeContext,
 ) {
-  return httpClient.post<AgentLoopResult>('/mrgo/confirm', {
-    tool: pending.tool,
-    params: pending.params,
-    thought: pending.thought,
-    resume: {
-      text: ctx.text,
-      channel: ctx.channel,
-      agentKey: ctx.agentKey,
-      steps: ctx.steps,
-      maxSteps: ctx.maxSteps,
+  return httpClient.post<AgentLoopResult>(
+    '/mrgo/confirm',
+    {
+      tool: pending.tool,
+      params: pending.params,
+      thought: pending.thought,
+      resume: {
+        text: ctx.text,
+        channel: ctx.channel,
+        agentKey: ctx.agentKey,
+        steps: ctx.steps,
+        maxSteps: ctx.maxSteps,
+      },
     },
-  });
+    liveHeaders(true),
+    AI_CALL_TIMEOUT_MS,
+  );
 }
 
 /**

@@ -41,6 +41,12 @@ vi.mock('../../services/actions/executor', async (importOriginal) => {
   return { ...actual, executeAction: vi.fn() };
 });
 
+// La reserva de Idempotency-Key toca la DB: se mockea para probar solo el contrato HTTP.
+vi.mock('../../lib/idempotency', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/idempotency')>();
+  return { ...actual, claimIdempotentKey: vi.fn() };
+});
+
 vi.mock('../../services/mrgo/office', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/mrgo/office')>();
   return { ...actual, loadOffice: vi.fn(), saveOffice: vi.fn() };
@@ -56,6 +62,7 @@ import { loadOffice, saveOffice } from '../../services/mrgo/office';
 import { loadIndustry, saveIndustry } from '../../services/mrgo/industry';
 import { orchestrate } from '../../services/mrgo/orchestrator';
 import { executeAction } from '../../services/actions/executor';
+import { claimIdempotentKey } from '../../lib/idempotency';
 import { mrgoRouter } from '../../routes/mrgo';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -77,6 +84,95 @@ describe('routes/mrgo — loop agéntico', () => {
     vi.clearAllMocks();
     // Por defecto el CEO se queda con la orden (sin delegar en un especialista).
     mock(orchestrate).mockResolvedValue({ nextAgent: 'ceo', emotion: 'neutral', reasoning: '' });
+    mock(claimIdempotentKey).mockResolvedValue(true);
+  });
+
+  describe('Idempotency-Key (at-most-once en acciones en vivo)', () => {
+    const okRun = {
+      agent: 'ceo', emotion: 'neutral', steps: [], finalMessage: 'ok', stoppedReason: 'final',
+    };
+
+    it('/run en vivo con clave nueva: la reserva (scope por ruta y negocio) y ejecuta', async () => {
+      mock(runAgentLoop).mockResolvedValue(okRun);
+      const res = await request(app)
+        .post('/api/mrgo/run')
+        .set(...AUTH)
+        .set('Idempotency-Key', 'k-1')
+        .send({ text: 'Mandá un WhatsApp', execute: true });
+
+      expect(res.status).toBe(200);
+      expect(claimIdempotentKey).toHaveBeenCalledWith(expect.anything(), 'biz_1', 'MRGO_IDEMPOTENCY', 'run:k-1');
+      expect(runAgentLoop).toHaveBeenCalledTimes(1);
+    });
+
+    it('/run en vivo con clave ya usada: 409 y NO ejecuta nada', async () => {
+      mock(claimIdempotentKey).mockResolvedValue(false);
+      const res = await request(app)
+        .post('/api/mrgo/run')
+        .set(...AUTH)
+        .set('Idempotency-Key', 'k-1')
+        .send({ text: 'Mandá un WhatsApp', execute: true });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('DUPLICATE_REQUEST');
+      expect(runAgentLoop).not.toHaveBeenCalled();
+      expect(orchestrate).not.toHaveBeenCalled();
+    });
+
+    it('/run en dry_run no reserva clave aunque venga el header', async () => {
+      mock(runAgentLoop).mockResolvedValue(okRun);
+      const res = await request(app)
+        .post('/api/mrgo/run')
+        .set(...AUTH)
+        .set('Idempotency-Key', 'k-1')
+        .send({ text: 'Probá' });
+
+      expect(res.status).toBe(200);
+      expect(claimIdempotentKey).not.toHaveBeenCalled();
+    });
+
+    it('/run en vivo sin header sigue funcionando (compatibilidad)', async () => {
+      mock(runAgentLoop).mockResolvedValue(okRun);
+      const res = await request(app)
+        .post('/api/mrgo/run')
+        .set(...AUTH)
+        .send({ text: 'Mandá un WhatsApp', execute: true });
+
+      expect(res.status).toBe(200);
+      expect(claimIdempotentKey).not.toHaveBeenCalled();
+    });
+
+    it('/confirm con clave repetida: 409 y NO ejecuta la acción', async () => {
+      mock(claimIdempotentKey).mockResolvedValue(false);
+      const res = await request(app)
+        .post('/api/mrgo/confirm')
+        .set(...AUTH)
+        .set('Idempotency-Key', 'k-2')
+        .send({ tool: 'enviar_whatsapp', params: { to: '+5491100000000', message: 'hola' } });
+
+      expect(res.status).toBe(409);
+      expect(executeAction).not.toHaveBeenCalled();
+      expect(claimIdempotentKey).toHaveBeenCalledWith(expect.anything(), 'biz_1', 'MRGO_IDEMPOTENCY', 'confirm:k-2');
+    });
+
+    it('/confirm con tool inválido responde 400 sin consumir la clave', async () => {
+      const res = await request(app)
+        .post('/api/mrgo/confirm')
+        .set(...AUTH)
+        .set('Idempotency-Key', 'k-3')
+        .send({ tool: 'no_existe' });
+
+      expect(res.status).toBe(400);
+      expect(claimIdempotentKey).not.toHaveBeenCalled();
+    });
+
+    it('/orchestrate con execute reserva la clave; sin execute no', async () => {
+      await request(app).post('/api/mrgo/orchestrate').set(...AUTH).set('Idempotency-Key', 'k-4').send({ text: 'hola' });
+      expect(claimIdempotentKey).not.toHaveBeenCalled();
+
+      await request(app).post('/api/mrgo/orchestrate').set(...AUTH).set('Idempotency-Key', 'k-4').send({ text: 'hola', execute: true });
+      expect(claimIdempotentKey).toHaveBeenCalledWith(expect.anything(), 'biz_1', 'MRGO_IDEMPOTENCY', 'orchestrate:k-4');
+    });
   });
 
   describe('POST /api/mrgo/run', () => {

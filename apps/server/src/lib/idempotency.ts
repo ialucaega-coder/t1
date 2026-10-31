@@ -21,11 +21,12 @@
  *     return { created };
  *   });
  */
-import type { Prisma } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 
 /** Scopes (van en Connection.type). Uno por tipo de operación idempotente. */
 export const IDEMP_TYPE_ORDER = 'ORDER_IDEMPOTENCY';
 export const IDEMP_TYPE_TRANSACTION = 'TRANSACTION_IDEMPOTENCY';
+export const IDEMP_TYPE_MRGO = 'MRGO_IDEMPOTENCY';
 
 /**
  * Cliente Prisma o transacción. TransactionClient acepta tanto `prisma` (que
@@ -76,3 +77,26 @@ export async function recordIdempotentKey(
     },
   });
 }
+
+/**
+ * Reserva la clave de forma atómica ANTES de ejecutar una operación con efectos
+ * externos (semántica at-most-once). Devuelve `true` si esta llamada la tomó y
+ * `false` si ya estaba tomada (reintento o doble envío). El advisory lock
+ * serializa duplicados concurrentes de la misma clave. La clave queda consumida
+ * aunque la operación falle: un reintento legítimo debe usar una clave nueva.
+ */
+export async function claimIdempotentKey(
+  client: Pick<PrismaClient, '$transaction'>,
+  businessId: string,
+  type: string,
+  key: string,
+): Promise<boolean> {
+  return client.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyLockKey(type, businessId, key)}, 0))`;
+    const dup = await findIdempotentEntityId(tx, businessId, type, key);
+    if (dup) return false;
+    await recordIdempotentKey(tx, businessId, type, key, 'claimed');
+    return true;
+  });
+}
+

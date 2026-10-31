@@ -48,7 +48,11 @@ export class HttpClient {
     return this.token;
   }
 
-  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    options: RequestInit = {},
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     const token = this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -59,10 +63,12 @@ export class HttpClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // Aborta el request si supera REQUEST_TIMEOUT_MS (evita spinners infinitos
-    // cuando el backend está lento o caído).
+    // Aborta el request si supera `timeoutMs` (evita spinners infinitos cuando
+    // el backend está lento o caído). Las llamadas largas (loop de IA) pasan el
+    // suyo: con el global de 20 s se cortaba el cliente mientras el server
+    // seguía ejecutando, y un reintento podía repetir acciones reales.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let res: Response;
     try {
@@ -111,8 +117,8 @@ export class HttpClient {
     return this.request<T>(path);
   }
 
-  post<T>(path: string, body: unknown, headers?: Record<string, string>) {
-    return this.request<T>(path, { method: 'POST', body: JSON.stringify(body), headers });
+  post<T>(path: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number) {
+    return this.request<T>(path, { method: 'POST', body: JSON.stringify(body), headers }, timeoutMs);
   }
 
   put<T>(path: string, body: unknown) {

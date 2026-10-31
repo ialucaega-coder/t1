@@ -13,7 +13,7 @@
  *   import { mrgoRouter } from './routes/mrgo';
  *   app.use('/api/mrgo', mrgoRouter);
  */
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -38,6 +38,27 @@ import { executeAction } from '../services/actions/executor';
 import { loadMemory, saveMemory, MAX_PROFILE_LEN, MAX_FACT_LEN, MAX_FACTS } from '../services/mrgo/memory';
 import { loadOffice, saveOffice } from '../services/mrgo/office';
 import { loadIndustry, saveIndustry } from '../services/mrgo/industry';
+import { prisma } from '../lib/prisma';
+import { IDEMP_TYPE_MRGO, readIdempotencyKey, claimIdempotentKey } from '../lib/idempotency';
+
+/**
+ * Garantía at-most-once para acciones EN VIVO. Si el cliente manda el header
+ * `Idempotency-Key`, la clave se reserva antes de ejecutar: un reintento (timeout
+ * del cliente, doble envío, proxy que reenvía) con la misma clave recibe 409 en
+ * vez de repetir un WhatsApp, un cobro o una campaña. Sin header no cambia nada
+ * (compatibilidad). Devuelve `false` si ya respondió 409 y la ruta debe cortar.
+ */
+async function claimLiveKey(req: Request, res: Response, businessId: string, scope: string): Promise<boolean> {
+  const key = readIdempotencyKey(req.header('Idempotency-Key'));
+  if (!key) return true;
+  const claimed = await claimIdempotentKey(prisma, businessId, IDEMP_TYPE_MRGO, `${scope}:${key}`);
+  if (claimed) return true;
+  res.status(409).json({
+    error: 'Esta orden ya fue recibida. Revisá el resultado antes de reenviarla.',
+    code: 'DUPLICATE_REQUEST',
+  });
+  return false;
+}
 
 // Zod exige una tupla no vacía para z.enum; el catálogo nunca está vacío.
 const agentKeyEnum = z.enum(AGENT_KEYS as [string, ...string[]]);
@@ -176,6 +197,7 @@ router.post(
   validate(orchestrateSchema),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+    if (req.body.execute && !(await claimLiveKey(req, res, businessId, 'orchestrate'))) return;
     const decision = await orchestrate({
       businessId,
       text: req.body.text,
@@ -214,6 +236,7 @@ router.post(
       maxSteps?: number;
     };
     const mode = req.body.execute ? 'live' : 'dry_run';
+    if (mode === 'live' && !(await claimLiveKey(req, res, businessId, 'run'))) return;
 
     // Delegación: si el dueño no forzó un agente, el CEO rutea y elige al
     // especialista que atiende la orden; el loop corre COMO ese agente (con su
@@ -255,6 +278,8 @@ router.post(
       };
     };
     if (!isValidToolKey(tool)) return res.status(400).json({ error: 'Tool desconocido' });
+    // /confirm siempre ejecuta EN VIVO: la clave se reserva después de validar.
+    if (!(await claimLiveKey(req, res, businessId, 'confirm'))) return;
 
     // Con `resume`: ejecuta la acción confirmada EN VIVO y REANUDA la cadena
     // (devuelve la traza completa; puede volver a pausar en otra acción externa).
