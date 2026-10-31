@@ -142,6 +142,7 @@ function normalize(config: unknown): WorkflowRule[] {
 export async function loadWorkflows(businessId: string): Promise<WorkflowRule[]> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: WORKFLOWS_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalize(conn?.config);
 }
@@ -160,6 +161,7 @@ export async function saveWorkflows(businessId: string, rules: unknown): Promise
     let conn = await tx.connection.findFirst({
       where: { businessId, type: WORKFLOWS_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {
@@ -213,6 +215,7 @@ async function mutateRules(
     const existing = await tx.connection.findFirst({
       where: { businessId, type: WORKFLOWS_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!existing) {

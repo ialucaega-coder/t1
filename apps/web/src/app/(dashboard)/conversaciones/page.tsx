@@ -144,23 +144,37 @@ export default function ConversacionesPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // Los eventos de socket llegan en ráfagas: se juntan en un solo refresco
+  // (lista + detalle si corresponde) en vez de pedir todo por cada evento.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshDetailPending = useRef(false);
+  const scheduleRefresh = useCallback((includeDetail: boolean) => {
+    if (includeDetail) refreshDetailPending.current = true;
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      const withDetail = refreshDetailPending.current;
+      refreshDetailPending.current = false;
+      if (withDetail) refetchDetail();
+      refetch();
+    }, 400);
+  }, [refetch, refetchDetail]);
+
+  useEffect(() => () => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+  }, []);
+
   useSocketEvent<{ conversationId: string }>('conversation:new-message', (data) => {
-    if (data.conversationId === selectedId) {
-      refetchDetail();
-    }
-    refetch();
-  }, [selectedId]);
+    scheduleRefresh(data.conversationId === selectedId);
+  }, [selectedId, scheduleRefresh]);
 
   useSocketEvent<{ conversationId: string }>('conversation:closed', () => {
-    refetch();
-  });
+    scheduleRefresh(false);
+  }, [scheduleRefresh]);
 
   useSocketEvent<{ conversationId: string }>('conversation:updated', (data) => {
-    if (data.conversationId === selectedId) {
-      refetchDetail();
-    }
-    refetch();
-  }, [selectedId]);
+    scheduleRefresh(data.conversationId === selectedId);
+  }, [selectedId, scheduleRefresh]);
 
   // Etiquetas únicas presentes en las conversaciones cargadas (para el filtro).
   const allTags = useMemo(() => {
@@ -240,9 +254,9 @@ export default function ConversacionesPage() {
     setSelectedId(id);
     try {
       await conversationsApi.markRead(id);
-      refetch();
+      scheduleRefresh(false);
     } catch { /* marcar leído no es crítico */ }
-  }, [refetch]);
+  }, [scheduleRefresh]);
 
   async function handleReply() {
     if (!replyText.trim() || !selectedId || sending) return;

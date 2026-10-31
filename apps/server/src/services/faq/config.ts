@@ -68,6 +68,7 @@ function normalize(config: unknown): FaqItem[] {
 export async function loadFaqItems(businessId: string): Promise<FaqItem[]> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: FAQ_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalize(conn?.config);
 }
@@ -85,6 +86,7 @@ export async function saveFaqItems(businessId: string, items: unknown): Promise<
     let conn = await tx.connection.findFirst({
       where: { businessId, type: FAQ_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

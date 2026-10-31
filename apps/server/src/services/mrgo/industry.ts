@@ -40,6 +40,7 @@ export function sanitizeIndustry(raw: unknown): IndustryState {
 export async function loadIndustry(businessId: string): Promise<IndustryState> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MRGO_INDUSTRY_TYPE },
+    orderBy: { id: 'asc' },
   });
   return sanitizeIndustry(conn?.config);
 }
@@ -54,6 +55,7 @@ export async function saveIndustry(businessId: string, input: unknown): Promise<
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MRGO_INDUSTRY_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

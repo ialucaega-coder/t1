@@ -53,6 +53,7 @@ export function sanitizeMemory(config: unknown): MrGoMemory {
 export async function loadMemory(businessId: string): Promise<MrGoMemory> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MEMORY_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return sanitizeMemory(conn?.config);
 }
@@ -63,6 +64,7 @@ export async function saveMemory(businessId: string, input: Partial<MrGoMemory>)
     const existing = await tx.connection.findFirst({
       where: { businessId, type: MEMORY_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     // Merge sobre lo guardado: permite actualizar solo `profile` o solo `facts`.

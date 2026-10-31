@@ -42,7 +42,7 @@ export async function buildOnboarding(businessId: string): Promise<Onboarding> {
     await Promise.all([
       loadBrandVoice(businessId),
       loadFaqItems(businessId),
-      prisma.connection.findFirst({ where: { businessId, type: 'AI_ENGINE' }, select: { id: true } }),
+      prisma.connection.findFirst({ where: { businessId, type: 'AI_ENGINE' }, select: { id: true }, orderBy: { id: 'asc' } }),
       prisma.bot.count({ where: { businessId } }),
       prisma.bot.count({ where: { businessId, status: 'ACTIVE' } }),
       prisma.service.count({ where: { businessId, deletedAt: null } }),
@@ -125,6 +125,7 @@ async function isDismissed(businessId: string): Promise<boolean> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: ONBOARDING_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = conn?.config;
   return Boolean(cfg && typeof cfg === 'object' && !Array.isArray(cfg) && (cfg as Record<string, unknown>).dismissed);
@@ -136,6 +137,7 @@ export async function setDismissed(businessId: string, dismissed: boolean): Prom
     const conn = await tx.connection.findFirst({
       where: { businessId, type: ONBOARDING_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
     if (!conn) {
       await tx.connection.create({

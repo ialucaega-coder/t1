@@ -56,7 +56,7 @@ describe('services/mrgo/industry — loadIndustry', () => {
     findFirst.mockResolvedValue({ config: { giroId: 'spa' } });
     const out = await loadIndustry('biz_1');
     expect(out.giroId).toBe('spa');
-    expect(findFirst).toHaveBeenCalledWith({ where: { businessId: 'biz_1', type: 'MRGO_INDUSTRY' } });
+    expect(findFirst).toHaveBeenCalledWith({ where: { businessId: 'biz_1', type: 'MRGO_INDUSTRY' }, orderBy: { id: 'asc' } });
   });
 
   it('devuelve vacío si no hay registro', async () => {

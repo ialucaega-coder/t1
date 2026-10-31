@@ -303,6 +303,7 @@ export function resolveAgents(saved: AgentConfig[]): AgentConfig[] {
 export async function loadAgents(businessId: string): Promise<AgentConfig[]> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MRGO_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return resolveAgents(normalize(conn?.config));
 }
@@ -321,6 +322,7 @@ export async function saveAgents(businessId: string, agents: unknown): Promise<A
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MRGO_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

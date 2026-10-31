@@ -40,6 +40,7 @@ function normalizeLive(config: unknown): boolean {
 export async function isAutomationLive(businessId: string): Promise<boolean> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: SETTINGS_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalizeLive(conn?.config);
 }
@@ -58,6 +59,7 @@ export async function setAutomationLive(businessId: string, live: boolean): Prom
     const conn = await tx.connection.findFirst({
       where: { businessId, type: SETTINGS_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

@@ -77,6 +77,7 @@ export function sanitizeOffice(raw: unknown): OfficeState {
 export async function loadOffice(businessId: string): Promise<OfficeState> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: OFFICE_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return sanitizeOffice(conn?.config);
 }
@@ -94,6 +95,7 @@ export async function saveOffice(businessId: string, office: unknown): Promise<O
     let conn = await tx.connection.findFirst({
       where: { businessId, type: OFFICE_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

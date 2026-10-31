@@ -56,6 +56,7 @@ function normalize(config: unknown): BrandVoice {
 export async function loadBrandVoice(businessId: string): Promise<BrandVoice> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: BRAND_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalize(conn?.config);
 }
@@ -74,6 +75,7 @@ export async function saveBrandVoice(businessId: string, patch: Partial<BrandVoi
     let conn = await tx.connection.findFirst({
       where: { businessId, type: BRAND_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

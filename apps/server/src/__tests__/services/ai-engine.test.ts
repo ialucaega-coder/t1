@@ -5,11 +5,17 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('../../lib/prisma', () => ({
-  prisma: {
+// `upsertConfig` corre dentro de `$transaction` con un advisory lock: el mock
+// ejecuta el callback con el mismo objeto como `tx` y un `$executeRaw` no-op.
+vi.mock('../../lib/prisma', () => {
+  const prisma = {
     connection: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
-  },
-}));
+    $executeRaw: vi.fn().mockResolvedValue(1),
+    $transaction: vi.fn(),
+  };
+  prisma.$transaction.mockImplementation(async (cb: (tx: typeof prisma) => unknown) => cb(prisma));
+  return { prisma };
+});
 
 vi.mock('../../services/ai/factory', () => ({
   getDefaultAIProvider: vi.fn(() => ({ name: 'fallback-default' })),
@@ -77,6 +83,14 @@ describe('engine config', () => {
     const cfg = await setActiveEngine(uniqueBiz(), 'gpt-4o');
     expect(cfg.activeEngineId).toBe('gpt-4o');
     expect(mock(prisma.connection.create)).toHaveBeenCalled();
+  });
+
+  it('el guardado corre en una transacción con advisory lock (sin lost-update)', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1', config: { activeEngineId: 'gpt-4o', keys: {} } });
+    mock(prisma.connection.update).mockResolvedValue({ id: 'c1' });
+    await setActiveEngine(uniqueBiz(), 'gpt-4o');
+    expect(mock(prisma.$transaction)).toHaveBeenCalledTimes(1);
+    expect(mock(prisma.$executeRaw)).toHaveBeenCalledTimes(1);
   });
 
   it('setEngineKey guarda y luego borra la key (apiKey vacía)', async () => {

@@ -76,6 +76,7 @@ export function stageFor(map: LifecycleMap, clientId: string): LifecycleStage {
 export async function loadLifecycle(businessId: string): Promise<LifecycleMap> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: LIFECYCLE_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return sanitizeLifecycleMap(conn?.config);
 }
@@ -100,6 +101,7 @@ export async function setClientStage(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: LIFECYCLE_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

@@ -58,6 +58,7 @@ async function loadMap(businessId: string): Promise<ValidFromMap> {
     const conn = await prisma.connection.findFirst({
       where: { businessId, type: REVOCATION_TYPE },
       select: { config: true },
+      orderBy: { id: 'asc' },
     });
     map = normalize(conn?.config);
   } catch {
@@ -108,6 +109,7 @@ export async function revokeUserSessions(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: REVOCATION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

@@ -70,6 +70,7 @@ function normalize(config: unknown): WhitelabelUi {
 export async function loadWhitelabelUi(businessId: string): Promise<WhitelabelUi> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: WHITELABEL_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalize(conn?.config);
 }
@@ -90,6 +91,7 @@ export async function saveWhitelabelUi(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: WHITELABEL_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

@@ -66,30 +66,49 @@ export async function loadEngineConfig(businessId: string): Promise<EngineConfig
     // gana la misma. Lo ideal sería @@unique([businessId, type]) en el schema.
     orderBy: { id: 'asc' },
   });
-  const cfg = (conn?.config as Partial<EngineConfig> | null) || {};
+  return parseEngineConfig(conn?.config);
+}
+
+/** Normaliza el JSON crudo de `Connection.config` a un EngineConfig seguro. */
+function parseEngineConfig(raw: unknown): EngineConfig {
+  const cfg = (raw as Partial<EngineConfig> | null) || {};
   return {
     activeEngineId: typeof cfg.activeEngineId === 'string' ? cfg.activeEngineId : DEFAULT_ENGINE_ID,
     keys: (cfg.keys && typeof cfg.keys === 'object' ? cfg.keys : {}) as EngineConfig['keys'],
   };
 }
 
-/** Upsert de la Connection AI_ENGINE conservando el resto de la config. */
+/**
+ * Upsert de la Connection AI_ENGINE conservando el resto de la config.
+ *
+ * Atómico: lectura-modificación-escritura dentro de una transacción serializada
+ * por un advisory lock (negocio+tipo). Antes dos guardados simultáneos (p. ej.
+ * `setEngineKey` + `setActiveEngine`) leían la misma config y el último pisaba al
+ * otro, pudiendo perder una API key cifrada. El advisory lock (y no solo
+ * `FOR UPDATE`) también cubre la carrera de creación cuando la fila todavía no
+ * existe. `pg_advisory_xact_lock` se libera solo al commit/rollback.
+ */
 async function upsertConfig(businessId: string, mutate: (cfg: EngineConfig) => EngineConfig): Promise<EngineConfig> {
-  const existing = await prisma.connection.findFirst({
-    where: { businessId, type: CONNECTION_TYPE },
-    orderBy: { id: 'asc' },
-  });
-  const current = await loadEngineConfig(businessId);
-  const next = mutate(current);
+  const next = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cfg:${CONNECTION_TYPE}:${businessId}`}, 0))`;
 
-  const configJson = next as unknown as Prisma.InputJsonObject;
-  if (existing) {
-    await prisma.connection.update({ where: { id: existing.id }, data: { config: configJson, isActive: true } });
-  } else {
-    await prisma.connection.create({
-      data: { name: 'Motor de IA', type: CONNECTION_TYPE, icon: 'Cpu', config: configJson, isActive: true, businessId },
+    const existing = await tx.connection.findFirst({
+      where: { businessId, type: CONNECTION_TYPE },
+      select: { id: true, config: true },
+      orderBy: { id: 'asc' },
     });
-  }
+    const updated = mutate(parseEngineConfig(existing?.config));
+    const configJson = updated as unknown as Prisma.InputJsonObject;
+
+    if (existing) {
+      await tx.connection.update({ where: { id: existing.id }, data: { config: configJson, isActive: true } });
+    } else {
+      await tx.connection.create({
+        data: { name: 'Motor de IA', type: CONNECTION_TYPE, icon: 'Cpu', config: configJson, isActive: true, businessId },
+      });
+    }
+    return updated;
+  });
   invalidateBusiness(businessId);
   return next;
 }

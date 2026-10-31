@@ -27,6 +27,7 @@ function normalize(config: unknown): string[] {
 export async function loadIntegrationRequests(businessId: string): Promise<string[]> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalize(conn?.config);
 }
@@ -46,6 +47,7 @@ export async function toggleIntegrationRequest(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

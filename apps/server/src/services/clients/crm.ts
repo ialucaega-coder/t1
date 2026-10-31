@@ -125,6 +125,7 @@ export function sanitizeCrm(raw: unknown): ClientCrm {
 export async function loadClientCrm(businessId: string): Promise<ClientCrm> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CRM_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return conn ? sanitizeCrm(conn.config) : { ...EMPTY_CRM };
 }
@@ -134,6 +135,7 @@ async function persist(businessId: string, mutate: (current: ClientCrm) => Clien
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CRM_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

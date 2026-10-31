@@ -67,6 +67,7 @@ export async function loadVoiceSettings(businessId: string): Promise<VoiceSettin
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
 
   const saved = (conn?.config as Partial<VoiceSettings> | null) || {};
@@ -95,6 +96,7 @@ export async function saveVoiceSettings(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

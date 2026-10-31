@@ -101,3 +101,10 @@ export interface AIProviderConfig {
    */
   baseURL?: string;
 }
+
+/**
+ * Timeout por request a un proveedor de IA (ms). Sin esto el SDK espera hasta
+ * 10 minutos y un proveedor lento cuelga handlers y satura el pool. Configurable
+ * con LLM_TIMEOUT_MS; default 30 s (suficiente para una respuesta de chat).
+ */
+export const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) > 0 ? Number(process.env.LLM_TIMEOUT_MS) : 30_000;

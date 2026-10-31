@@ -70,7 +70,7 @@ describe('services/mrgo/office — loadOffice', () => {
     findFirst.mockResolvedValue({ config: { paused: ['ventas', 'nope'] } });
     const out = await loadOffice('biz_1');
     expect(out.paused).toEqual(['ventas']);
-    expect(findFirst).toHaveBeenCalledWith({ where: { businessId: 'biz_1', type: 'MRGO_OFFICE' } });
+    expect(findFirst).toHaveBeenCalledWith({ where: { businessId: 'biz_1', type: 'MRGO_OFFICE' }, orderBy: { id: 'asc' } });
   });
 
   it('devuelve vacío si no hay registro', async () => {

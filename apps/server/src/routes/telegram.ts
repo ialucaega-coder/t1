@@ -43,6 +43,7 @@ router.post(
     // Verificar que la conexión existe y está activa
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM', isActive: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!connection) {
@@ -134,6 +135,7 @@ router.post(
     // Guardar o actualizar conexión en la DB
     const existingConnection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
+      orderBy: { id: 'asc' },
     });
 
     const config = {
@@ -196,6 +198,7 @@ router.delete(
     // Desactivar conexión en la DB
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
+      orderBy: { id: 'asc' },
     });
 
     if (connection) {
@@ -221,6 +224,7 @@ router.get(
 
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
+      orderBy: { id: 'asc' },
     });
 
     if (!connection || !connection.isActive) {

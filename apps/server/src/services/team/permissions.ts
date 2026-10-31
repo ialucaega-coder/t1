@@ -183,6 +183,7 @@ export function resolveCapabilities(role: unknown, override?: string[]): string[
 export async function loadPermissionOverrides(businessId: string): Promise<PermissionOverrides> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: PERMISSIONS_CONNECTION_TYPE },
+    orderBy: { id: 'asc' },
   });
   return normalizeOverrides(conn?.config);
 }
@@ -209,6 +210,7 @@ export async function saveMemberPermissions(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: PERMISSIONS_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

@@ -94,6 +94,7 @@ async function mutateGallery<T>(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: GALLERY_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {
@@ -133,6 +134,7 @@ async function mutateGallery<T>(
 export async function loadGallery(businessId: string): Promise<GalleryItem[]> {
   const connection = await prisma.connection.findFirst({
     where: { businessId, type: GALLERY_TYPE },
+    orderBy: { id: 'asc' },
   });
   if (!connection) return [];
   const items = parseItems(connection.config);

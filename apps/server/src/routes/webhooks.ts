@@ -105,6 +105,7 @@ router.patch(
     const id = String(req.params.id);
     const existing = await prisma.connection.findFirst({
       where: { id, businessId: req.auth!.businessId, type: 'webhook' },
+      orderBy: { id: 'asc' },
     });
     if (!existing) throw new AppError(404, 'Webhook not found');
 
@@ -146,6 +147,7 @@ router.delete(
     const id = String(req.params.id);
     const existing = await prisma.connection.findFirst({
       where: { id, businessId: req.auth!.businessId, type: 'webhook' },
+      orderBy: { id: 'asc' },
     });
     if (!existing) throw new AppError(404, 'Webhook not found');
     await prisma.connection.delete({ where: { id } });
@@ -160,6 +162,7 @@ router.post(
     const id = String(req.params.id);
     const webhook = await prisma.connection.findFirst({
       where: { id, businessId: req.auth!.businessId, type: 'webhook' },
+      orderBy: { id: 'asc' },
     });
     if (!webhook) throw new AppError(404, 'Webhook not found');
 

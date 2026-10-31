@@ -48,6 +48,7 @@ export async function getMpStatus(businessId: string): Promise<MpStatus> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MP_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   return {
@@ -62,6 +63,7 @@ export async function loadMpConfig(businessId: string): Promise<MpConfig | null>
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MP_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   if (!cfg.accessTokenEnc) return null;
@@ -85,6 +87,7 @@ export async function saveMpConfig(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MP_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {
@@ -125,6 +128,7 @@ export async function disconnectMp(businessId: string): Promise<void> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MP_CONNECTION_TYPE },
     select: { id: true },
+    orderBy: { id: 'asc' },
   });
   if (!conn) return;
   await prisma.connection.update({

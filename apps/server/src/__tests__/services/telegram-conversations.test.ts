@@ -11,7 +11,7 @@ import type { Context } from 'grammy';
 
 vi.mock('../../lib/prisma', () => {
   const prisma = {
-    service: { findUnique: vi.fn() },
+    service: { findFirst: vi.fn() },
     user: { findUnique: vi.fn(), create: vi.fn() },
     booking: { findMany: vi.fn(), create: vi.fn() },
     $executeRaw: vi.fn(async () => 1),
@@ -55,8 +55,21 @@ function seedConfirmState() {
 describe('telegram handleConfirmation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mock(prisma.service.findUnique).mockResolvedValue({ id: 's1', duration: 30, price: 500 });
+    mock(prisma.service.findFirst).mockResolvedValue({ id: 's1', duration: 30, price: 500 });
     mock(prisma.user.findUnique).mockResolvedValue({ id: 'client_1' });
+  });
+
+  it('busca el servicio acotado al negocio del chat (no cruza tenants)', async () => {
+    seedConfirmState();
+    mock(prisma.booking.findMany).mockResolvedValue([]);
+    mock(prisma.booking.create).mockResolvedValue({ id: 'booking_abcdef12' });
+
+    const { ctx } = buildCtx();
+    await handleConfirmation(ctx, true);
+
+    expect(prisma.service.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ businessId: 'biz_1' }),
+    });
   });
 
   it('crea la reserva cuando no hay solape (toma el advisory lock en la tx)', async () => {

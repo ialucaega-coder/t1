@@ -52,6 +52,7 @@ export async function getMcStatus(businessId: string): Promise<McStatus> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MC_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   let webhookToken: string | undefined;
@@ -74,6 +75,7 @@ export async function loadMcConfig(businessId: string): Promise<McConfig | null>
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MC_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   if (!cfg.apiKeyEnc) return null;
@@ -93,6 +95,7 @@ export async function saveMcConfig(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MC_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {
@@ -144,6 +147,7 @@ export async function verifyMcWebhookToken(businessId: string, token: string | u
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MC_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   // Solo aceptamos si la conexión está activa (API key + enabled) y hay token.
@@ -175,6 +179,7 @@ export async function regenerateMcWebhookToken(businessId: string): Promise<McSt
     const conn = await tx.connection.findFirst({
       where: { businessId, type: MC_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
     if (!conn) return false;
     await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${conn.id} FOR UPDATE`;
@@ -197,6 +202,7 @@ export async function disconnectMc(businessId: string): Promise<void> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: MC_CONNECTION_TYPE },
     select: { id: true },
+    orderBy: { id: 'asc' },
   });
   if (!conn) return;
   await prisma.connection.update({

@@ -40,6 +40,7 @@ export async function getCmpStatus(businessId: string): Promise<CmpStatus> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CMP_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   return {
@@ -53,6 +54,7 @@ export async function loadCmpConfig(businessId: string): Promise<CmpConfig | nul
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CMP_CONNECTION_TYPE },
     select: { config: true },
+    orderBy: { id: 'asc' },
   });
   const cfg = parse(conn?.config);
   if (!cfg.apiKeyEnc) return null;
@@ -72,6 +74,7 @@ export async function saveCmpConfig(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CMP_CONNECTION_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {
@@ -111,6 +114,7 @@ export async function disconnectCmp(businessId: string): Promise<void> {
   const conn = await prisma.connection.findFirst({
     where: { businessId, type: CMP_CONNECTION_TYPE },
     select: { id: true },
+    orderBy: { id: 'asc' },
   });
   if (!conn) return;
   await prisma.connection.update({

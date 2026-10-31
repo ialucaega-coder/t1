@@ -229,6 +229,7 @@ router.get(
     const conn = await prisma.connection.findFirst({
       where: { businessId, type: FEATURE_FLAGS_TYPE },
       select: { config: true },
+      orderBy: { id: 'asc' },
     });
     res.json({
       catalog: FEATURE_FLAG_CATALOG,
@@ -251,6 +252,7 @@ router.put(
       let conn = await tx.connection.findFirst({
         where: { businessId, type: FEATURE_FLAGS_TYPE },
         select: { id: true },
+        orderBy: { id: 'asc' },
       });
 
       if (!conn) {

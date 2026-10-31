@@ -114,6 +114,7 @@ function parseTemplates(config: unknown): WaTemplate[] {
 export async function loadWaTemplates(businessId: string): Promise<WaTemplate[]> {
   const connection = await prisma.connection.findFirst({
     where: { businessId, type: WA_TEMPLATES_TYPE },
+    orderBy: { id: 'asc' },
   });
   if (!connection) return [];
   const templates = parseTemplates(connection.config);
@@ -140,6 +141,7 @@ export async function mutateWaTemplates<T>(
     let conn = await tx.connection.findFirst({
       where: { businessId, type: WA_TEMPLATES_TYPE },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!conn) {

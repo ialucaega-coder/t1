@@ -8,6 +8,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import type { AIProvider, AIProviderConfig, ConversationContext, ImageInput } from '../provider';
+import { LLM_TIMEOUT_MS } from '../provider';
 
 const DEFAULT_MODEL = 'claude-sonnet-4-5';
 const DEFAULT_MAX_TOKENS = 1024;
@@ -21,7 +22,9 @@ export class AnthropicProvider implements AIProvider {
   private temperature: number;
 
   constructor(config: AIProviderConfig) {
-    this.client = new Anthropic({ apiKey: config.apiKey });
+    // Timeout explícito: el default del SDK (10 min) deja requests colgados si el
+    // proveedor se pone lento.
+    this.client = new Anthropic({ apiKey: config.apiKey, timeout: LLM_TIMEOUT_MS, maxRetries: 1 });
     this.model = config.model || DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.temperature = config.temperature ?? 0.7;

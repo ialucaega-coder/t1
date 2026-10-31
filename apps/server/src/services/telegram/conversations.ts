@@ -80,8 +80,10 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
   const state = getState(chatId);
   if (!state) return;
 
-  const service = await prisma.service.findUnique({
-    where: { id: serviceId },
+  // `serviceId` viene de callback_data (controlable por el cliente): se acota al
+  // negocio del chat para que no resuelva un servicio de otro tenant.
+  const service = await prisma.service.findFirst({
+    where: { id: serviceId, businessId: state.businessId },
     include: {
       professionals: {
         where: { isAvailable: true },
@@ -166,8 +168,8 @@ export async function handleProfessionalSelected(ctx: Context, professionalId: s
   const state = getState(chatId);
   if (!state) return;
 
-  const prof = await prisma.professional.findUnique({
-    where: { id: professionalId },
+  const prof = await prisma.professional.findFirst({
+    where: { id: professionalId, businessId: state.businessId },
     include: { user: { select: { name: true } } },
   });
 
@@ -217,7 +219,7 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   }
 
   // Obtener servicio para la duración
-  const service = await prisma.service.findUnique({ where: { id: state.serviceId } });
+  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
   if (!service) return;
 
   // Obtener reservas existentes para ese día y profesional
@@ -287,7 +289,7 @@ export async function handleTimeSelected(ctx: Context, time: string): Promise<vo
   state.step = 'confirm';
   setState(chatId, state);
 
-  const service = await prisma.service.findUnique({ where: { id: state.serviceId } });
+  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
 
   const summary = [
     '📋 *Resumen de tu reserva:*',
@@ -329,7 +331,7 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
   }
 
   try {
-    const service = await prisma.service.findUnique({ where: { id: state.serviceId } });
+    const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
     if (!service) {
       await ctx.reply('⚠️ Servicio no encontrado.');
       clearState(chatId);

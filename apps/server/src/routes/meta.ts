@@ -225,7 +225,7 @@ router.post(
       connectedAt: new Date().toISOString(),
     };
 
-    const existing = await prisma.connection.findFirst({ where: { businessId, type } });
+    const existing = await prisma.connection.findFirst({ where: { businessId, type }, orderBy: { id: 'asc' } });
     if (existing) {
       await prisma.connection.update({
         where: { id: existing.id },
@@ -263,7 +263,7 @@ router.delete(
     }
     const type = connectionTypeFor(platform);
 
-    const connection = await prisma.connection.findFirst({ where: { businessId, type } });
+    const connection = await prisma.connection.findFirst({ where: { businessId, type }, orderBy: { id: 'asc' } });
     if (connection) {
       await prisma.connection.update({
         where: { id: connection.id },

@@ -7,6 +7,7 @@
  */
 import OpenAI from 'openai';
 import type { AIProvider, AIProviderConfig, ConversationContext, ImageInput } from '../provider';
+import { LLM_TIMEOUT_MS } from '../provider';
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_MAX_TOKENS = 1024;
@@ -49,9 +50,15 @@ export class OpenAIProvider implements AIProvider {
   constructor(config: AIProviderConfig) {
     // baseURL permite apuntar a cualquier API compatible con OpenAI (Groq,
     // DeepSeek, Mistral, Together, Perplexity, Cohere, Gemini, Ollama, LM Studio).
+    // Sin timeout explícito el SDK espera hasta 10 min por request: un proveedor
+    // lento dejaría handlers colgados y saturaría el event loop. Los modelos
+    // locales (Ollama/LM Studio) son más lentos, así que tienen más margen.
+    const isLocal = Boolean(config.baseURL && /\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(config.baseURL));
     this.client = new OpenAI({
       apiKey: config.apiKey,
       ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+      timeout: isLocal ? 120_000 : LLM_TIMEOUT_MS,
+      maxRetries: 1,
     });
     this.model = config.model || DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
