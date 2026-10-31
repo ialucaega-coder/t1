@@ -180,7 +180,7 @@ router.post(
         body: JSON.stringify({
           event: 'webhook.test',
           timestamp: new Date().toISOString(),
-          data: { message: 'Webhook de prueba desde Local B' },
+          data: { message: 'Webhook de prueba desde Mr. Go Assistance' },
         }),
         // Anti-SSRF: no seguimos redirects. assertSafePublicUrl valida la URL
         // inicial, pero un 302 a http://169.254.169.254/ (metadata de la nube) o

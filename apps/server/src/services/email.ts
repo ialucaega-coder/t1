@@ -13,7 +13,7 @@ import {
 
 // ─── Configuración ──────────────────────────────────────────────────
 
-const EMAIL_FROM = process.env.EMAIL_FROM ?? 'Local B <noreply@localb.app>';
+const EMAIL_FROM = process.env.EMAIL_FROM ?? 'Mr. Go Assistance <noreply@localb.app>';
 
 // Cliente Resend perezoso: no lo construimos en la carga del módulo para que
 // la ausencia de RESEND_API_KEY no rompa el arranque del server (ni los tests
@@ -116,7 +116,7 @@ export async function sendWelcomeEmail(
 ): Promise<boolean> {
   return send({
     to,
-    subject: `Bienvenido/a a ${businessName || 'Local B'}`,
+    subject: `Bienvenido/a a ${businessName || 'Mr. Go Assistance'}`,
     html: welcomeTemplate(userName, businessName),
   });
 }

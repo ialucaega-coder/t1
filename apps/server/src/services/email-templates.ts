@@ -1,5 +1,5 @@
 // ─── Email Templates ────────────────────────────────────────────────
-// Plantillas HTML para emails transaccionales de Local B.
+// Plantillas HTML para emails transaccionales de Mr. Go Assistance.
 // Diseñadas con inline CSS para máxima compatibilidad con clientes de correo.
 
 const BRAND_COLOR = '#38BDF8';
@@ -26,7 +26,7 @@ function baseLayout(content: string, preheader: string = ''): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Local B</title>
+  <title>Mr. Go Assistance</title>
 </head>
 <body style="margin:0;padding:0;background-color:${LIGHT_BG};font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;">${preheader}</div>` : ''}
@@ -52,7 +52,7 @@ function baseLayout(content: string, preheader: string = ''): string {
           <tr>
             <td style="padding:24px 32px;background-color:${LIGHT_BG};text-align:center;border-top:1px solid #E2E8F0;">
               <p style="margin:0 0 8px;font-size:13px;color:${MUTED_COLOR};">
-                Este email fue enviado por Local B.
+                Este email fue enviado por Mr. Go Assistance.
               </p>
               <p style="margin:0;font-size:12px;color:${MUTED_COLOR};">
                 Si no esperabas este mensaje, podés ignorarlo.
@@ -125,7 +125,7 @@ export function bookingConfirmationTemplate(data: BookingEmailData): string {
     <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(data.clientName)}</strong>, tu reserva ha sido confirmada con éxito.</p>
     ${detailTable(rows)}
     <p style="margin:16px 0 0;font-size:14px;color:${MUTED_COLOR};">
-      Si necesitás modificar o cancelar tu reserva, ingresá a tu cuenta en Local B.
+      Si necesitás modificar o cancelar tu reserva, ingresá a tu cuenta en Mr. Go Assistance.
     </p>`;
 
   return baseLayout(content, `Tu reserva de ${data.serviceName} fue confirmada`);
@@ -181,7 +181,7 @@ export function orderStatusTemplate(data: OrderEmailData): string {
 
 export function welcomeTemplate(userName: string, businessName: string): string {
   const content = `
-    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">¡Bienvenido/a a Local B!</h2>
+    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">¡Bienvenido/a a Mr. Go Assistance!</h2>
     <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(userName)}</strong>, tu cuenta fue creada exitosamente${businessName ? ` en <strong>${escapeHtml(businessName)}</strong>` : ''}.</p>
     <p style="margin:0 0 24px;">Ahora podés:</p>
     <ul style="margin:0 0 24px;padding-left:20px;color:${TEXT_COLOR};">
@@ -199,7 +199,7 @@ export function welcomeTemplate(userName: string, businessName: string): string 
       </tr>
     </table>`;
 
-  return baseLayout(content, `Bienvenido/a a ${businessName || 'Local B'}`);
+  return baseLayout(content, `Bienvenido/a a ${businessName || 'Mr. Go Assistance'}`);
 }
 
 export function invoiceTemplate(data: InvoiceEmailData): string {

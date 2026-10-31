@@ -21,7 +21,7 @@ import {
 import PricingSection from '@/components/landing/PricingSection';
 
 export const metadata: Metadata = {
-  title: 'Local B — Tu negocio en piloto automático',
+  title: 'Mr. Go Assistance — Tu negocio en piloto automático',
   description:
     'Reservas, pedidos, cobros y atención por WhatsApp — todo desde un solo panel. Sin código.',
 };
@@ -100,7 +100,7 @@ const stats = [
 const jsonLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
-  name: 'Local B',
+  name: 'Mr. Go Assistance',
   applicationCategory: 'BusinessApplication',
   operatingSystem: 'Web',
   description:
@@ -135,7 +135,7 @@ export default function Home() {
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-500 text-sm font-bold text-white">
               B
             </span>
-            <span className="text-lg font-semibold tracking-tight text-white">Local B</span>
+            <span className="text-lg font-semibold tracking-tight text-white">Mr. Go Assistance</span>
           </Link>
           <nav className="hidden items-center gap-8 text-sm text-slate-300 md:flex">
             <a href="#features" className="transition-colors hover:text-white">
@@ -394,7 +394,7 @@ export default function Home() {
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-500 text-xs font-bold text-white">
               B
             </span>
-            <span className="text-sm font-semibold text-white">Local B</span>
+            <span className="text-sm font-semibold text-white">Mr. Go Assistance</span>
           </div>
 
           <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-slate-400">
@@ -409,7 +409,7 @@ export default function Home() {
             </Link>
           </nav>
 
-          <p className="text-xs text-slate-500">&copy; 2026 Local B. Todos los derechos reservados.</p>
+          <p className="text-xs text-slate-500">&copy; 2026 Mr. Go Assistance. Todos los derechos reservados.</p>
         </div>
       </footer>
     </div>

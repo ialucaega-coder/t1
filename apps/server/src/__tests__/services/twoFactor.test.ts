@@ -15,7 +15,7 @@ describe('services/twoFactor', () => {
 
       expect(setup.encryptedSecret).toContain(':'); // formato iv:tag:ct
       expect(setup.otpauthUri).toMatch(/^otpauth:\/\/totp\//);
-      expect(setup.otpauthUri).toContain('Local%20B'); // issuer
+      expect(setup.otpauthUri).toContain('Mr.%20Go%20Assistance'); // issuer
       expect(setup.qrDataUrl).toMatch(/^data:image\/png;base64,/);
     });
   });

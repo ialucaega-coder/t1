@@ -85,7 +85,7 @@ export function Sidebar() {
           <Flame className="h-5 w-5 text-white" />
         </div>
         <div>
-          <h1 className="text-base font-bold text-white">Local B</h1>
+          <h1 className="text-base font-bold text-white">Mr. Go Assistance</h1>
           <p className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
             CLOUD · COMPLETO
           </p>

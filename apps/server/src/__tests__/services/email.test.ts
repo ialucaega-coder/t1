@@ -83,9 +83,9 @@ describe('services/email', () => {
       expect(sendMock.mock.calls[0][0].subject).toBe('Tu pedido está entregado');
     });
 
-    it('sendWelcomeEmail cae a "Local B" cuando no hay nombre de negocio', async () => {
+    it('sendWelcomeEmail cae a "Mr. Go Assistance" cuando no hay nombre de negocio', async () => {
       await sendWelcomeEmail('a@b.com', 'Ana', '');
-      expect(sendMock.mock.calls[0][0].subject).toBe('Bienvenido/a a Local B');
+      expect(sendMock.mock.calls[0][0].subject).toBe('Bienvenido/a a Mr. Go Assistance');
     });
 
     it('sendInvoiceEmail usa el número de comprobante en el subject', async () => {

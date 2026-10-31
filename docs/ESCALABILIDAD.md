@@ -1,4 +1,4 @@
-# Plan de escalabilidad — Local B + Mr Go
+# Plan de escalabilidad — Mr. Go Assistance + Mr Go
 
 Origen: 3 auditorías de solo lectura (acceso a datos, infra, frontend). Todo es lectura estática de código: no hay EXPLAIN, ni carga real, ni valores de producción (`REDIS_URL`, `connection_limit`, réplicas, sticky sessions). Los impactos son estimaciones.
 

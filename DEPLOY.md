@@ -1,6 +1,6 @@
-# Deploy — Local B
+# Deploy — Mr. Go Assistance
 
-Guia de despliegue del monorepo **Local B** (Turborepo).
+Guia de despliegue del monorepo **Mr. Go Assistance** (Turborepo).
 
 - **`apps/web`** (Next.js 14) → **Vercel**
 - **`apps/server`** (Express + TypeScript) → **Google Cloud Run** (contenedor)

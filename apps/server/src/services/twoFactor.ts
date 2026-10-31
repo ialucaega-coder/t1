@@ -17,7 +17,7 @@ import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import { encrypt, decrypt } from '../lib/crypto';
 
-const ISSUER = 'Local B';
+const ISSUER = 'Mr. Go Assistance';
 
 // Tolerancia de 1 ventana (±30s) para absorber desfasajes de reloj del cliente.
 authenticator.options = { window: 1 };

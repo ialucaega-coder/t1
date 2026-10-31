@@ -178,7 +178,7 @@ function SearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
 
 export function Header() {
   const pathname = usePathname();
-  const page = PAGE_TITLES[pathname] || { breadcrumb: 'PANEL', title: 'Local B' };
+  const page = PAGE_TITLES[pathname] || { breadcrumb: 'PANEL', title: 'Mr. Go Assistance' };
   const [isOpen, setIsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);

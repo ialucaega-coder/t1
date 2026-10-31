@@ -1,4 +1,4 @@
-# Credenciales — dónde va cada cosa (Local B)
+# Credenciales — dónde va cada cosa (Mr. Go Assistance)
 
 Guía rápida de **qué credencial se carga dónde**. Dos grandes grupos:
 

@@ -43,7 +43,7 @@ export default function LoginPage() {
         <div className="inline-flex items-center justify-center h-12 w-12 rounded-xl bg-brand-500/20 mb-4">
           <Flame className="h-6 w-6 text-brand-400" />
         </div>
-        <h1 className="text-2xl font-bold text-white">Local B</h1>
+        <h1 className="text-2xl font-bold text-white">Mr. Go Assistance</h1>
         <p className="text-sm text-slate-400 mt-1">Inicia sesión en tu panel</p>
       </div>
 

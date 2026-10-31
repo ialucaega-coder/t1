@@ -374,7 +374,7 @@ export function PublicChat({ botId }: { botId: string }) {
           </div>
         </div>
         <p className="text-center text-[9px] text-slate-600 mt-2">
-          Powered by Local B
+          Powered by Mr. Go Assistance
         </p>
       </div>
     </div>

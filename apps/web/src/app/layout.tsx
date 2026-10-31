@@ -4,11 +4,11 @@ import { AuthProvider } from '@/lib/auth-context';
 import { PostHogProvider } from '@/lib/posthog-provider';
 
 export const metadata: Metadata = {
-  title: { default: 'Local B — Panel de gestión', template: '%s | Local B' },
+  title: { default: 'Mr. Go Assistance — Panel de gestión', template: '%s | Mr. Go Assistance' },
   description: 'Plataforma SaaS de reservas, pedidos y gestión para negocios locales. Bots inteligentes, agenda online y más.',
   keywords: ['reservas', 'booking', 'SaaS', 'chatbot', 'gestión', 'negocios'],
   openGraph: {
-    title: 'Local B',
+    title: 'Mr. Go Assistance',
     description: 'Automatiza tu negocio con bots inteligentes, agenda online y gestión integral.',
     type: 'website',
     locale: 'es_AR',

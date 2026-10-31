@@ -60,7 +60,7 @@ export default function WhitelabelPage() {
 
       <p className="text-sm text-slate-400">
         Tu panel, con tu marca. Ponle a tus bots un panel con tu logo, tu color y uno de
-        tres estilos — para que tus clientes vean tu marca, no la de Local B.
+        tres estilos — para que tus clientes vean tu marca, no la de Mr. Go Assistance.
       </p>
 
       <section className="card">

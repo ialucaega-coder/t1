@@ -105,10 +105,10 @@ describe('services/email-templates', () => {
       expect(html).toContain('Barbería X');
     });
 
-    it('funciona sin nombre de negocio (usa Local B en el preheader)', () => {
+    it('funciona sin nombre de negocio (usa Mr. Go Assistance en el preheader)', () => {
       const html = welcomeTemplate('Ana', '');
       expect(html).toContain('Ana');
-      expect(html).toContain('Bienvenido/a a Local B');
+      expect(html).toContain('Bienvenido/a a Mr. Go Assistance');
     });
 
     it('escapa el nombre de usuario', () => {

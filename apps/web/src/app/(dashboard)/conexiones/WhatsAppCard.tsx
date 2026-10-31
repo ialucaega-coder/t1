@@ -14,7 +14,7 @@ export function WhatsAppCard() {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [to, setTo] = useState('');
-  const [message, setMessage] = useState('Hola 👋 Esto es una prueba desde Local B.');
+  const [message, setMessage] = useState('Hola 👋 Esto es una prueba desde Mr. Go Assistance.');
   const [sending, setSending] = useState(false);
 
   const webhookUrl = `${API_URL}/whatsapp/webhook`;
