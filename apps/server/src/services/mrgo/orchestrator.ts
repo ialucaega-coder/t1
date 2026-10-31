@@ -149,7 +149,15 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
   const { businessId, channel } = input;
   const text = (input.text ?? '').trim().slice(0, MAX_INPUT_LEN);
 
-  const agents = await loadAgents(businessId);
+  // Lecturas independientes (agentes, giro, memoria y motor de IA): en paralelo la
+  // latencia es la de la más lenta; antes eran 4 round-trips seriales a la DB.
+  const providerPromise = getAIProviderForBusiness(businessId);
+  providerPromise.catch(() => {}); // evita unhandledRejection si salimos antes del await
+  const [agents, industry, memory] = await Promise.all([
+    loadAgents(businessId),
+    loadIndustry(businessId),
+    loadMemory(businessId),
+  ]);
   const activeAgents = agents.filter((a) => a.activo);
   if (activeAgents.length === 0) {
     return fallbackDecision(agents, 'no hay agentes activos configurados');
@@ -161,8 +169,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
   // Contexto del negocio: tono del giro elegido ("bots por giro") + memoria
   // (perfil + hechos). Ambos opcionales: si no hay nada, devuelven '' y no
   // afectan el prompt.
-  const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
-  const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const industria = buildIndustryPrompt(industry.giroId);
+  const memoria = buildMemoryPrompt(memory);
   const contexto = [industria, memoria].filter(Boolean).join('\n\n');
   const routingPrompt = buildRoutingSystemPrompt(activeAgents);
   const systemPrompt = contexto ? `${contexto}\n\n${routingPrompt}` : routingPrompt;
@@ -170,7 +178,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
 
   let rawResponse: string;
   try {
-    const provider = await getAIProviderForBusiness(businessId);
+    const provider = await providerPromise;
     rawResponse = await provider.generateResponse(userPrompt, {
       businessId,
       history: [],

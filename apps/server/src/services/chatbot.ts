@@ -34,36 +34,31 @@ async function isOverMessageQuota(businessId: string): Promise<boolean> {
 }
 import { hasParams, resolveSuperpowerParams, type SuperpowerParams } from '../constants/superpowerParams';
 
-export async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
-  const skills = await prisma.skill.findMany({
-    where: { businessId, isActive: true },
-    select: { name: true, config: true },
-  });
-  const superpowers = skills.filter((s) => {
-    const cfg = s.config as Record<string, unknown> | null;
-    return cfg?.kind === 'superpower';
-  });
-  return new Set(superpowers.map((s) => s.name));
-}
-
 /**
- * Carga los parámetros configurables (resueltos con defaults) de los
- * superpoderes activos que los tienen. Devuelve un Map name→params para que
- * buildSystemPrompt ajuste el texto inyectado según la personalización.
+ * Lee UNA vez las skills activas del negocio y de ahí saca los superpoderes
+ * activos y los parámetros configurables (resueltos con defaults) de los que los
+ * tienen. Antes eran dos queries idénticas por mensaje (hot-path del chat).
  */
-async function loadSuperpowerParams(businessId: string): Promise<Map<string, SuperpowerParams>> {
+async function loadSuperpowerState(
+  businessId: string,
+): Promise<{ superpowers: Set<string>; params: Map<string, SuperpowerParams> }> {
   const skills = await prisma.skill.findMany({
     where: { businessId, isActive: true },
     select: { name: true, config: true },
   });
-  const map = new Map<string, SuperpowerParams>();
+  const superpowers = new Set<string>();
+  const params = new Map<string, SuperpowerParams>();
   for (const s of skills) {
     const cfg = s.config as Record<string, unknown> | null;
-    if (cfg?.kind === 'superpower' && hasParams(s.name)) {
-      map.set(s.name, resolveSuperpowerParams(s.name, cfg.params));
-    }
+    if (cfg?.kind !== 'superpower') continue;
+    superpowers.add(s.name);
+    if (hasParams(s.name)) params.set(s.name, resolveSuperpowerParams(s.name, cfg.params));
   }
-  return map;
+  return { superpowers, params };
+}
+
+export async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
+  return (await loadSuperpowerState(businessId)).superpowers;
 }
 
 /** Canales por los que puede llegar un mensaje al bot. */
@@ -151,11 +146,20 @@ function detectIntent(message: string): ChatIntent {
  * prompt personalizado guardado (BusinessSettings, futuro), se debería
  * usar ese en vez de este genérico.
  */
-async function buildSystemPrompt(businessId: string, superpowers: Set<string>): Promise<string> {
-  const business = await prisma.business.findUnique({ where: { id: businessId } });
+async function buildSystemPrompt(
+  businessId: string,
+  superpowers: Set<string>,
+  params: Map<string, SuperpowerParams>,
+): Promise<string> {
+  // Las 4 lecturas son independientes: en paralelo la latencia es la de la más
+  // lenta y no la suma (antes eran 4 round-trips secuenciales a la DB).
+  const [business, brandVoice, faqItems, customPrompt] = await Promise.all([
+    prisma.business.findUnique({ where: { id: businessId }, select: { name: true, websiteUrl: true } }),
+    loadBrandVoice(businessId),
+    loadFaqItems(businessId),
+    loadSystemPrompt(businessId),
+  ]);
   const businessName = business?.name || 'el negocio';
-  // Parámetros configurables de los superpoderes (vacío si ninguno los tiene).
-  const params = await loadSuperpowerParams(businessId);
 
   const lines = [
     `Sos el asistente virtual de "${businessName}". Respondé de forma breve, cálida y profesional.`,
@@ -165,7 +169,6 @@ async function buildSystemPrompt(businessId: string, superpowers: Set<string>): 
   // --- Voz de Marca (identidad global del negocio, aplica a TODOS los canales) ---
   // Se inyecta siempre que esté configurada. El superpoder "Voz de marca"
   // simplemente refuerza que el bot la priorice por encima de otros estilos.
-  const brandVoice = await loadBrandVoice(businessId);
   const brandPrompt = buildBrandVoicePrompt(brandVoice, superpowers.has('Voz de marca'));
   if (brandPrompt) {
     lines.push(brandPrompt);
@@ -174,7 +177,6 @@ async function buildSystemPrompt(businessId: string, superpowers: Set<string>): 
   // --- Base de conocimiento / FAQ (respuestas a preguntas frecuentes del negocio) ---
   // Lista estructurada P→R que el dueño gestiona (ver services/faq). Se inyecta
   // como fuente de verdad para las consultas más comunes; si está vacía no suma nada.
-  const faqItems = await loadFaqItems(businessId);
   const faqPrompt = buildFaqPrompt(faqItems);
   if (faqPrompt) {
     lines.push(faqPrompt);
@@ -183,7 +185,6 @@ async function buildSystemPrompt(businessId: string, superpowers: Set<string>): 
   // --- Prompt de sistema personalizado del negocio ---
   // Se inyecta ANTES de las reglas de seguridad (anti-invento / modo seguro)
   // que vienen más abajo, para que esas reglas mantengan prioridad.
-  const customPrompt = await loadSystemPrompt(businessId);
   if (customPrompt.trim()) {
     lines.push('INSTRUCCIONES PERSONALIZADAS DEL NEGOCIO (seguilas salvo que contradigan las reglas de seguridad):\n' + customPrompt.trim());
   }
@@ -386,7 +387,7 @@ export async function processMessage(
   // Superpoderes del negocio: se consultan UNA sola vez por mensaje y se reusan
   // (antes se consultaban hasta 3 veces: en buildSystemPrompt, en el gate de
   // imágenes y al final — multiplicaba queries a DB y latencia en el hot-path).
-  const superpowers = await getActiveSuperpowers(businessId);
+  const { superpowers, params: superpowerParams } = await loadSuperpowerState(businessId);
 
   let responseText: string;
   let actions: ChatAction[] = [];
@@ -432,27 +433,36 @@ export async function processMessage(
     responseText = 'Este asistente alcanzó el límite de mensajes de su plan por este período. Escribinos de nuevo más tarde o contactá al negocio directamente.';
     actions = [{ type: 'escalateToHuman' }];
   } else {
-    let systemPrompt = await buildSystemPrompt(businessId, superpowers);
+    // Las lecturas del turno son independientes entre sí: se lanzan juntas y la
+    // latencia es la de la más lenta (antes ~8 round-trips en serie a la DB).
+    // El proveedor se resuelve en paralelo; su error (sin motor/keys) se maneja
+    // abajo, en el try de la generación, igual que antes.
+    const providerPromise = getAIProviderForBusiness(businessId);
+    providerPromise.catch(() => {}); // evita unhandledRejection si falla antes del await
+
+    const clientNamePromise: Promise<string | undefined> =
+      options.contactName || !options.clientId
+        ? Promise.resolve(options.contactName)
+        : // Scopeado por negocio: clientId puede venir del request, así que sin el
+          // businessId un atacante podría filtrar el nombre de un usuario de OTRO
+          // negocio hacia el prompt de IA (IDOR cross-tenant).
+          prisma.user
+            .findFirst({ where: { id: options.clientId, businessId }, select: { name: true } })
+            .then((c) => c?.name);
+
+    const [builtPrompt, catalog, clientName] = await Promise.all([
+      buildSystemPrompt(businessId, superpowers, superpowerParams),
+      getActiveCatalog(businessId),
+      clientNamePromise,
+    ]);
+    let systemPrompt = builtPrompt;
     if (options.systemPromptExtra?.trim()) {
       systemPrompt += '\n\n' + options.systemPromptExtra.trim();
     }
-    const catalog = await getActiveCatalog(businessId);
     const catalogText = formatCatalogText(catalog);
     let enrichedPrompt = systemPrompt + '\n\n' + catalogText;
     if (options.systemPromptExtra?.trim()) {
       enrichedPrompt += '\n\n' + options.systemPromptExtra.trim();
-    }
-
-    let clientName = options.contactName;
-    if (!clientName && options.clientId) {
-      // Scopeado por negocio: clientId puede venir del request, así que sin el
-      // businessId un atacante podría filtrar el nombre de un usuario de OTRO
-      // negocio hacia el prompt de IA (IDOR cross-tenant).
-      const client = await prisma.user.findFirst({
-        where: { id: options.clientId, businessId },
-        select: { name: true },
-      });
-      clientName = client?.name;
     }
 
     // Superpoder "Oído y vista": solo pasamos imágenes al proveedor si está
@@ -465,7 +475,7 @@ export async function processMessage(
 
     const aiStart = Date.now();
     try {
-      const provider = await getAIProviderForBusiness(businessId);
+      const provider = await providerPromise;
       responseText = await provider.generateResponse(clientMessage, {
         businessId,
         clientName,

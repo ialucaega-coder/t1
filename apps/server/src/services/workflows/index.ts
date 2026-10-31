@@ -331,12 +331,18 @@ export async function evaluateWorkflows(
   event: WorkflowEvent,
 ): Promise<WorkflowRule[]> {
   if (!isValidTrigger(event.trigger)) return [];
-  const rules = await loadWorkflows(businessId);
+  return selectMatchingRules(await loadWorkflows(businessId), event);
+}
+
+/**
+ * Filtra las reglas activas que matchean el evento. La `condicion` (opcional) se
+ * evalúa contra event.payload (ver conditions.ts); sin condición o si no es
+ * parseable, matchea igual (fail-open, compat).
+ */
+function selectMatchingRules(rules: WorkflowRule[], event: WorkflowEvent): WorkflowRule[] {
   return rules.filter(
     (r) => r.activo && r.trigger === event.trigger && matchesCondition(r.condicion, event.payload),
   );
-  // La `condicion` (opcional) se evalúa contra event.payload (ver conditions.ts);
-  // sin condición o si no es parseable, matchea igual (fail-open, compat).
 }
 
 /** Resultado de correr las reglas de un evento: la regla + lo que hizo su acción. */
@@ -366,7 +372,16 @@ export async function runWorkflows(
   event: WorkflowEvent,
   mode: ExecMode = 'dry_run',
 ): Promise<{ matched: number; results: WorkflowRunResult[] }> {
-  const rules = await evaluateWorkflows(businessId, event);
+  return runRules(businessId, await evaluateWorkflows(businessId, event), event, mode);
+}
+
+/** Ejecuta, en serie, las reglas ya seleccionadas para un evento. */
+async function runRules(
+  businessId: string,
+  rules: WorkflowRule[],
+  event: WorkflowEvent,
+  mode: ExecMode,
+): Promise<{ matched: number; results: WorkflowRunResult[] }> {
   const results: WorkflowRunResult[] = [];
   for (const rule of rules) {
     const result = await executeAction({
@@ -394,8 +409,14 @@ export async function runWorkflows(
  */
 export async function dispatchEvent(businessId: string, event: WorkflowEvent): Promise<void> {
   try {
+    if (!isValidTrigger(event.trigger)) return;
+    // Hot-path: este dispatch corre por CADA mensaje entrante. Se leen primero las
+    // reglas (1 query) y, si ninguna matchea, se corta: antes siempre se hacían 2
+    // queries a `connections` (modo + reglas) aunque el negocio no tuviera reglas.
+    const rules = selectMatchingRules(await loadWorkflows(businessId), event);
+    if (rules.length === 0) return;
     const mode = await getAutomationMode(businessId);
-    await runWorkflows(businessId, event, mode);
+    await runRules(businessId, rules, event, mode);
   } catch (err) {
     console.error(`[Workflows] dispatchEvent "${event.trigger}" falló (ignorado):`,
       err instanceof Error ? err.name : 'error');

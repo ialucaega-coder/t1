@@ -158,9 +158,19 @@ export async function resolveBusinessByRecipient(
   if (!id) return null;
 
   const type = connectionTypeFor(platform);
+  // El match por pageId/igId se hace EN LA DB (filtro por path del JSON): antes se
+  // traían las conexiones de TODOS los tenants y se filtraba en JS, o sea una
+  // lectura O(tenants) por cada mensaje entrante de IG/Messenger. El chequeo en JS
+  // de abajo se mantiene como red de seguridad.
   const connections = await prisma.connection.findMany({
-    where: { type, isActive: true, business: { isActive: true } },
+    where: {
+      type,
+      isActive: true,
+      business: { isActive: true },
+      OR: [{ config: { path: ['pageId'], equals: id } }, { config: { path: ['igId'], equals: id } }],
+    },
     select: { businessId: true, config: true },
+    orderBy: { id: 'asc' },
   });
 
   for (const conn of connections) {
@@ -272,7 +282,12 @@ export async function isRecipientClaimedByAnother(
 ): Promise<boolean> {
   const type = connectionTypeFor(platform);
   const connections = await prisma.connection.findMany({
-    where: { type, isActive: true, businessId: { not: businessId } },
+    where: {
+      type,
+      isActive: true,
+      businessId: { not: businessId },
+      OR: [{ config: { path: ['pageId'], equals: identityId } }, { config: { path: ['igId'], equals: identityId } }],
+    },
     select: { config: true },
   });
   return connections.some((c) => {

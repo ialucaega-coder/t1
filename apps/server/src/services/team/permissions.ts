@@ -17,6 +17,7 @@
  * de Marca (type='BRAND') y el Prompt de sistema (type='SYSTEM_PROMPT').
  */
 import { prisma } from '../../lib/prisma';
+import { invalidateCapabilityCache } from './capabilityCache';
 
 const PERMISSIONS_CONNECTION_TYPE = 'TEAM_PERMISSIONS';
 const PERMISSIONS_CONNECTION_NAME = 'Permisos del equipo';
@@ -243,6 +244,9 @@ export async function saveMemberPermissions(
       data: { config: { overrides } as unknown as object, isActive: true },
     });
   });
+
+  // Los permisos cambiaron: que el gating del backend los vea ya (no en 10 s).
+  invalidateCapabilityCache(businessId);
 
   return resolveCapabilities(role, clean);
 }

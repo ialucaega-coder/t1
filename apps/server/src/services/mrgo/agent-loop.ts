@@ -297,7 +297,15 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
   const mode: ExecMode = input.mode ?? 'dry_run';
   const maxSteps = clamp(input.maxSteps ?? DEFAULT_MAX_STEPS, 1, HARD_MAX_STEPS);
 
-  const agents = await loadAgents(businessId);
+  // Lecturas independientes en paralelo (agentes, giro, memoria y motor de IA):
+  // antes eran 4 round-trips seriales a la DB en cada corrida.
+  const providerPromise = getAIProviderForBusiness(businessId);
+  providerPromise.catch(() => {}); // evita unhandledRejection si salimos antes del await
+  const [agents, industry, memory] = await Promise.all([
+    loadAgents(businessId),
+    loadIndustry(businessId),
+    loadMemory(businessId),
+  ]);
   const agent = pickAgent(agents, input.agentKey);
   const agentConfig = agents.find((a) => a.key === agent);
   const emotion = 'neutral';
@@ -308,14 +316,14 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
 
   // Contexto del negocio: tono del giro ("bots por giro") + memoria. Ambos
   // opcionales (devuelven '' si no hay nada configurado).
-  const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
-  const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const industria = buildIndustryPrompt(industry.giroId);
+  const memoria = buildMemoryPrompt(memory);
   const contexto = [industria, memoria].filter(Boolean).join('\n\n');
   const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto, agentConfig);
 
   let provider: AIProvider;
   try {
-    provider = await getAIProviderForBusiness(businessId);
+    provider = await providerPromise;
   } catch {
     return {
       agent,
@@ -381,6 +389,13 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
       : {};
   const confirmedThought = input.confirmed.thought;
 
+  // Las lecturas de contexto (giro, memoria, motor de IA) no dependen de la acción:
+  // corren en paralelo con su ejecución en vez de esperar a que termine.
+  const providerPromise = getAIProviderForBusiness(businessId);
+  providerPromise.catch(() => {}); // evita unhandledRejection si salimos antes del await
+  const contextReads = Promise.all([loadIndustry(businessId), loadMemory(businessId)]);
+  contextReads.catch(() => {});
+
   // Ejecutar la acción confirmada EN VIVO (el dueño ya la aprobó explícitamente).
   const confirmedResult = await executeAction({ businessId, action: confirmedTool, params: confirmedParams, mode: 'live' });
   const prior = Array.isArray(input.priorSteps) ? input.priorSteps : [];
@@ -391,8 +406,9 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
 
   // Reconstruir el historial ReAct: pedido original → (tool → observación)× pasos
   // previos → la acción confirmada → su observación (= próximo prompt).
-  const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
-  const memoria = buildMemoryPrompt(await loadMemory(businessId));
+  const [industry, memory] = await contextReads;
+  const industria = buildIndustryPrompt(industry.giroId);
+  const memoria = buildMemoryPrompt(memory);
   const contexto = [industria, memoria].filter(Boolean).join('\n\n');
   const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto, agentConfig);
   const initialUserPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
@@ -406,7 +422,7 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
 
   let provider: AIProvider;
   try {
-    provider = await getAIProviderForBusiness(businessId);
+    provider = await providerPromise;
   } catch {
     // Sin motor no podemos continuar la cadena, pero la acción confirmada YA se
     // ejecutó: devolvemos ese resultado para que el dueño lo vea.

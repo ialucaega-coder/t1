@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { invalidateCapabilityCache } from '../services/team/capabilityCache';
 
 // ─── Feature flags de plataforma (persistidos en Connection) ────────────────
 
@@ -210,6 +211,7 @@ router.patch(
       },
       include: { plan: { select: { tier: true, name: true } } },
     });
+    invalidateCapabilityCache(businessId); // el plan cambió: el gating aplica ya
 
     res.json({
       businessId,

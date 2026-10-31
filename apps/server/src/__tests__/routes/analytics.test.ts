@@ -29,6 +29,7 @@ vi.mock('../../middleware/auth', () => ({
 
 import { prisma } from '../../lib/prisma';
 import { analyticsRouter } from '../../routes/analytics';
+import { cache } from '../../lib/cache';
 import { errorHandler } from '../../middleware/errorHandler';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -46,6 +47,7 @@ describe('routes/analytics', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    cache.clear(); // los endpoints cachean la respuesta unos segundos por negocio
     mock(prisma.conversation.count).mockResolvedValue(0);
     mock(prisma.conversation.findMany).mockResolvedValue([]);
     mock(prisma.booking.count).mockResolvedValue(0);

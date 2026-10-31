@@ -36,6 +36,8 @@ import {
 } from '../../services/team/permissions';
 import { prisma } from '../../lib/prisma';
 import { requireCapability } from '../../middleware/capability';
+import { cache } from '../../lib/cache';
+import { invalidateCapabilityCache } from '../../services/team/capabilityCache';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -53,6 +55,7 @@ function buildApp(withAuth: boolean, capability: string, role: 'ADMIN' | 'PROFES
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cache.clear(); // el middleware cachea plan/overrides unos segundos por negocio
   mock(loadBusinessPlanTier).mockResolvedValue('PRO');
   mock(loadPermissionOverrides).mockResolvedValue({});
 });
@@ -119,5 +122,46 @@ describe('middleware/requireCapability', () => {
     const res = await request(buildApp(true, 'clients', 'ADMIN')).get('/x');
     expect(res.status).toBe(200);
     expect(mock(loadPermissionOverrides)).not.toHaveBeenCalled();
+  });
+});
+
+describe('middleware/requireCapability — caché corta', () => {
+  it('no vuelve a leer el plan en requests seguidos del mismo negocio', async () => {
+    mock(resolveCapabilities).mockReturnValue(['bots']);
+    mock(capabilitiesForPlan).mockReturnValue(['bots']);
+    const app = buildApp(true, 'bots');
+
+    expect((await request(app).get('/x')).status).toBe(200);
+    expect((await request(app).get('/x')).status).toBe(200);
+
+    expect(loadBusinessPlanTier).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidateCapabilityCache fuerza releer (cambio de plan/permisos aplica ya)', async () => {
+    mock(resolveCapabilities).mockReturnValue(['bots']);
+    mock(capabilitiesForPlan).mockReturnValue(['bots']);
+    const app = buildApp(true, 'bots');
+
+    await request(app).get('/x');
+    invalidateCapabilityCache('biz_1');
+    await request(app).get('/x');
+
+    expect(loadBusinessPlanTier).toHaveBeenCalledTimes(2);
+  });
+
+  it('la caché es por negocio: otro tenant no reutiliza el plan', async () => {
+    mock(resolveCapabilities).mockReturnValue(['bots']);
+    mock(capabilitiesForPlan).mockReturnValue(['bots']);
+    await request(buildApp(true, 'bots')).get('/x'); // biz_1
+
+    const app2 = express();
+    app2.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = { userId: 'u9', businessId: 'biz_2', role: 'ADMIN' };
+      next();
+    });
+    app2.get('/x', requireCapability('bots'), (_req, res) => res.json({ ok: true }));
+    await request(app2).get('/x');
+
+    expect(loadBusinessPlanTier).toHaveBeenCalledTimes(2);
   });
 });

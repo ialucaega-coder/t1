@@ -1,5 +1,6 @@
 ﻿import Stripe from 'stripe';
 import { prisma } from '../lib/prisma';
+import { invalidateCapabilityCache } from './team/capabilityCache';
 import { Prisma, SubscriptionStatus } from '@prisma/client';
 import { AppError } from '../middleware/errorHandler';
 
@@ -331,6 +332,7 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<void> {
           },
         });
       }
+      invalidateCapabilityCache(businessId); // el plan cambió: el gating aplica ya
 
       console.log(`Subscription created/updated for business ${businessId}, plan ${planId}, interval ${interval}`);
       break;

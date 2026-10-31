@@ -69,9 +69,22 @@ describe('dispatchEvent', () => {
     await dispatchEvent(BIZ, { trigger: 'pago_recibido', payload: {} });
 
     expect(executeAction).not.toHaveBeenCalled();
+    // Hot-path: sin regla que matchee ni siquiera se consulta el modo (1 query, no 2).
+    expect(getAutomationMode).not.toHaveBeenCalled();
+  });
+
+  it('negocio sin reglas: corta antes de resolver el modo', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+
+    await dispatchEvent(BIZ, { trigger: 'mensaje_entrante', payload: {} });
+
+    expect(prisma.connection.findFirst).toHaveBeenCalledTimes(1);
+    expect(getAutomationMode).not.toHaveBeenCalled();
+    expect(executeAction).not.toHaveBeenCalled();
   });
 
   it('NUNCA lanza: si resolver el modo falla, se traga el error', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue(connWithRule);
     mock(getAutomationMode).mockRejectedValue(new Error('boom'));
 
     await expect(dispatchEvent(BIZ, { trigger: 'nueva_reserva', payload: {} })).resolves.toBeUndefined();

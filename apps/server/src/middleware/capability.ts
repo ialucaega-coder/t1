@@ -1,11 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
+import { cache } from '../lib/cache';
+import { CAP_TTL_MS, capKey, invalidateCapabilityCache } from '../services/team/capabilityCache';
 import {
   loadBusinessPlanTier,
   capabilitiesForPlan,
   resolveCapabilities,
   loadPermissionOverrides,
 } from '../services/team/permissions';
+
+async function memo<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = cache.get<T>(key);
+  if (hit !== undefined) return hit;
+  const value = await load();
+  cache.set(key, value, CAP_TTL_MS);
+  return value;
+}
+
+export { invalidateCapabilityCache };
 
 // El rol del login (ADMIN | PROFESSIONAL | CLIENT) mapea al rol de equipo.
 function authRoleToTeamRole(role: string): 'ADMIN' | 'PROFESSIONAL' | 'VIEWER' {
@@ -39,6 +51,27 @@ export async function loadOverrideForUser(
   return overrides[member.id];
 }
 
+/** Igual que `loadOverrideForUser` pero con la caché corta del middleware. */
+async function loadOverrideForUserCached(
+  businessId: string,
+  userId: string,
+): Promise<string[] | undefined> {
+  const overrides = await memo(capKey(businessId, 'overrides'), () =>
+    loadPermissionOverrides(businessId),
+  );
+  if (Object.keys(overrides).length === 0) return undefined;
+  const memberId = await memo<string | null>(capKey(businessId, 'member', userId), async () => {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user) return null;
+    const member = await prisma.teamMember.findFirst({
+      where: { businessId, email: user.email },
+      select: { id: true },
+    });
+    return member?.id ?? null;
+  });
+  return memberId ? overrides[memberId] : undefined;
+}
+
 /**
  * Exige que el usuario tenga habilitada una capacidad. Capacidad efectiva =
  * (override del miembro, o default del rol) ∩ (plan del negocio). Es el espejo
@@ -60,14 +93,16 @@ export function requireCapability(capability: string) {
     }
     try {
       const teamRole = authRoleToTeamRole(req.auth.role);
-      const planTier = await loadBusinessPlanTier(req.auth.businessId);
+      const planTier = await memo(capKey(req.auth.businessId, 'plan'), () =>
+        loadBusinessPlanTier(req.auth!.businessId),
+      );
       const planCaps = capabilitiesForPlan(planTier);
 
       // El ADMIN tiene todas las capacidades, así que ni cargamos overrides.
       const override =
         teamRole === 'ADMIN'
           ? undefined
-          : await loadOverrideForUser(req.auth.businessId, req.auth.userId);
+          : await loadOverrideForUserCached(req.auth.businessId, req.auth.userId);
 
       const roleCaps = resolveCapabilities(teamRole, override);
       const effective = roleCaps.filter((c) => planCaps.includes(c));

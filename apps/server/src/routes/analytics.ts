@@ -2,10 +2,15 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
+import { cacheResponse } from '../middleware/cacheResponse';
 import { prisma } from '../lib/prisma';
 import { getFunnel, type LifecycleStage } from '../services/clients/lifecycle';
 
 const router = Router();
+
+// Los endpoints de analytics agregan muchas filas por request: se cachean unos
+// segundos por negocio (mismo criterio que /api/stats).
+const ANALYTICS_TTL_MS = 30_000;
 
 /**
  * Forma de la atribución Click-to-WhatsApp guardada en
@@ -71,6 +76,7 @@ const AVG_TOKENS_PER_MESSAGE = 150;
 router.get(
   '/kpi',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const now = new Date();
@@ -140,6 +146,7 @@ router.get(
 router.get(
   '/conversations',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const days = 7;
@@ -185,6 +192,7 @@ router.get(
 router.get(
   '/satisfaction',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -232,6 +240,7 @@ router.get(
 router.get(
   '/improvements',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -323,6 +332,7 @@ router.get(
 router.get(
   '/costs',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -357,6 +367,7 @@ router.get(
 router.get(
   '/metrics',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -403,6 +414,7 @@ router.get(
 router.get(
   '/timeseries',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const days = 14;
@@ -466,6 +478,7 @@ router.get(
 router.get(
   '/funnel',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const { counts, total, stages } = await getFunnel(businessId);
@@ -504,6 +517,7 @@ router.get(
 router.get(
   '/attribution',
   requireAuth,
+  cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
