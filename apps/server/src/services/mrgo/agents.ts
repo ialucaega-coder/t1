@@ -134,11 +134,32 @@ export const ROLE_TOOLS: Record<string, readonly string[]> = {
   // catalogo, analitica, rrhh, operaciones: sin tools propios (solo responden).
 };
 
-/** ¿El agente-rol tiene permitido usar ese tool? (el ceo puede todo). */
-export function toolAllowedForAgent(agentKey: string, toolKey: string): boolean {
+/**
+ * Tools EFECTIVOS de un agente: por defecto los de su rol (`ROLE_TOOLS`), pero
+ * si el negocio definió un override por agente (`config.tools`, editable en el
+ * Studio) se devuelve la INTERSECCIÓN con el rol. Invariante de seguridad: el
+ * override SOLO puede restringir dentro del rol, nunca ampliar (un tool fuera
+ * del rol se ignora). `config` ausente o sin `tools` = rol completo (herencia).
+ */
+export function effectiveTools(
+  agentKey: string,
+  config?: Pick<AgentConfig, 'tools'>,
+): readonly string[] {
+  const roleTools = ROLE_TOOLS[agentKey] ?? [];
+  if (!config || !Array.isArray(config.tools)) return roleTools;
+  const roleSet = new Set(roleTools);
+  return config.tools.filter((t) => roleSet.has(t));
+}
+
+/** ¿El agente tiene permitido usar ese tool? Considera el override del negocio
+ *  (Studio) si se pasa `config`; sin `config`, usa los tools del rol. */
+export function toolAllowedForAgent(
+  agentKey: string,
+  toolKey: string,
+  config?: Pick<AgentConfig, 'tools'>,
+): boolean {
   if (!TOOL_SET.has(toolKey)) return false;
-  const allowed = ROLE_TOOLS[agentKey];
-  return Array.isArray(allowed) && allowed.includes(toolKey);
+  return effectiveTools(agentKey, config).includes(toolKey);
 }
 
 /** Verifica si una clave de rol pertenece al catálogo. */
@@ -168,11 +189,40 @@ export interface AgentConfig {
   emotion?: string;
   /** Mascota elegida: una del catálogo o 'none' (sin mascota). Si falta, la del rol. */
   pet?: string;
+  // ─── Gating de tools por agente (editable en el Studio) ────────────────────
+  /**
+   * Allowlist explícita de tools para este agente. Si falta (undefined), hereda
+   * TODOS los tools de su rol (`ROLE_TOOLS`). Si está, son los únicos tools que
+   * puede ejecutar (siempre intersectados con el rol: no se puede ampliar). Un
+   * array vacío = el agente no ejecuta ninguna acción (solo responde).
+   */
+  tools?: string[];
 }
 
 function clampText(value: unknown, max: number): string {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, max);
+}
+
+/**
+ * Normaliza el override de tools de un agente. Devuelve `undefined` (= heredar
+ * el rol completo) cuando `raw` no es un array o cuando el subconjunto válido
+ * iguala al set completo del rol; devuelve un array (posiblemente vacío) cuando
+ * de verdad RESTRINGE. Siempre: solo claves del catálogo permitidas por el rol,
+ * sin duplicados, en orden canónico. Nunca amplía más allá del rol.
+ */
+function sanitizeAgentTools(agentKey: string, raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined; // sin override → hereda el rol
+  const roleTools = ROLE_TOOLS[agentKey] ?? [];
+  const roleSet = new Set(roleTools);
+  const seen = new Set<string>();
+  for (const t of raw) {
+    if (typeof t === 'string' && TOOL_SET.has(t) && roleSet.has(t)) seen.add(t);
+  }
+  // Si quedó todo el rol (mismo tamaño ⇒ mismo set, por ser subconjunto válido)
+  // es herencia: no guardamos override.
+  if (seen.size === roleSet.size) return undefined;
+  return TOOL_KEYS.filter((k) => seen.has(k)); // orden canónico
 }
 
 /**
@@ -196,6 +246,11 @@ export function sanitizeAgents(raw: unknown): AgentConfig[] {
     const emotion = typeof e.emotion === 'string' && MRGO_EMOTIONS.has(e.emotion) ? e.emotion : '';
     const pet =
       e.pet === PET_NONE ? PET_NONE : typeof e.pet === 'string' && MRGO_PETS.has(e.pet) ? e.pet : '';
+    // Gating de tools: solo claves válidas Y permitidas por el rol (no se puede
+    // ampliar), deduplicadas y en orden canónico del catálogo. Si el override
+    // iguala al set completo del rol se omite (= herencia); así solo se persiste
+    // cuando de verdad RESTRINGE. Si `e.tools` no es array → undefined (hereda).
+    const tools = sanitizeAgentTools(e.key, e.tools);
     byKey.set(e.key, {
       key: e.key,
       activo: e.activo !== false, // por defecto activo
@@ -205,6 +260,7 @@ export function sanitizeAgents(raw: unknown): AgentConfig[] {
       ...(colorKey ? { colorKey } : {}),
       ...(emotion ? { emotion } : {}),
       ...(pet ? { pet } : {}),
+      ...(tools !== undefined ? { tools } : {}),
     });
   }
   // Orden canónico del catálogo (estable para la UI).
@@ -238,6 +294,7 @@ export function resolveAgents(saved: AgentConfig[]): AgentConfig[] {
       ...(cfg?.colorKey ? { colorKey: cfg.colorKey } : {}),
       ...(cfg?.emotion ? { emotion: cfg.emotion } : {}),
       ...(cfg?.pet ? { pet: cfg.pet } : {}),
+      ...(cfg && Array.isArray(cfg.tools) ? { tools: cfg.tools } : {}),
     };
   });
 }

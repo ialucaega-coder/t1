@@ -138,11 +138,18 @@ function pickAgent(agents: AgentConfig[], requested?: string): string {
 
 /** Arma el prompt de sistema del loop: identidad del agente + tools permitidos
  *  (con sus params) + el protocolo JSON de dos formas + reglas de seguridad. */
-function buildLoopSystemPrompt(agentKey: string, mode: ExecMode, memoria: string): string {
+function buildLoopSystemPrompt(
+  agentKey: string,
+  mode: ExecMode,
+  memoria: string,
+  config?: Pick<AgentConfig, 'tools'>,
+): string {
   const role = AGENT_CATALOG.find((a) => a.key === agentKey);
   const roleName = role ? `${role.nombre} — ${role.descripcion}` : 'Mr Go (CEO)';
 
-  const allowed = TOOL_CATALOG.filter((t) => toolAllowedForAgent(agentKey, t.key));
+  // Tools efectivos del agente: los del rol, menos los que el dueño apagó en el
+  // Studio (override por agente). El modelo solo ve y puede usar estos.
+  const allowed = TOOL_CATALOG.filter((t) => toolAllowedForAgent(agentKey, t.key, config));
   const toolLines = allowed.length
     ? allowed
         .map((t) => `- ${t.key}: ${t.descripcion}. Parámetros: ${TOOL_PARAM_HINTS[t.key] ?? '(sin parámetros)'}`)
@@ -184,6 +191,8 @@ function formatObservation(result: ActionResult): string {
 interface LoopContext {
   businessId: string;
   agent: string;
+  /** Config del agente que corre (para el gating de tools con override del Studio). */
+  agentConfig?: AgentConfig;
   emotion: string;
   mode: ExecMode;
   systemPrompt: string;
@@ -200,7 +209,7 @@ interface LoopContext {
  * comparten la corrida nueva y la reanudación tras confirmar. Nunca lanza.
  */
 async function continueLoop(ctx: LoopContext, firstPrompt: string, remaining: number): Promise<AgentLoopResult> {
-  const { businessId, agent, emotion, mode, systemPrompt, provider, turns, steps } = ctx;
+  const { businessId, agent, agentConfig, emotion, mode, systemPrompt, provider, turns, steps } = ctx;
   let currentPrompt = firstPrompt;
 
   for (let i = 0; i < remaining; i++) {
@@ -236,8 +245,9 @@ async function continueLoop(ctx: LoopContext, firstPrompt: string, remaining: nu
         : {};
     const thought = typeof json.thought === 'string' ? json.thought.trim().slice(0, 500) : undefined;
 
-    // Gating: el tool tiene que estar en el catálogo Y permitido para el agente.
-    if (!isValidToolKey(tool) || !toolAllowedForAgent(agent, tool)) {
+    // Gating: el tool tiene que estar en el catálogo Y permitido para el agente
+    // (rol + override del Studio).
+    if (!isValidToolKey(tool) || !toolAllowedForAgent(agent, tool, agentConfig)) {
       currentPrompt = `El tool "${tool}" no está disponible para vos. Elegí uno de la lista o terminá con action:"final".`;
       continue;
     }
@@ -289,6 +299,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
 
   const agents = await loadAgents(businessId);
   const agent = pickAgent(agents, input.agentKey);
+  const agentConfig = agents.find((a) => a.key === agent);
   const emotion = 'neutral';
 
   if (!text) {
@@ -300,7 +311,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
   const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
   const memoria = buildMemoryPrompt(await loadMemory(businessId));
   const contexto = [industria, memoria].filter(Boolean).join('\n\n');
-  const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto);
+  const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto, agentConfig);
 
   let provider: AIProvider;
   try {
@@ -319,7 +330,7 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
   const firstPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
   const steps: AgentStep[] = [];
 
-  return continueLoop({ businessId, agent, emotion, mode, systemPrompt, provider, turns, steps }, firstPrompt, maxSteps);
+  return continueLoop({ businessId, agent, agentConfig, emotion, mode, systemPrompt, provider, turns, steps }, firstPrompt, maxSteps);
 }
 
 /** Entrada para reanudar el loop tras confirmar una acción externa pendiente. */
@@ -355,11 +366,13 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
 
   const agents = await loadAgents(businessId);
   const agent = pickAgent(agents, input.agentKey);
+  const agentConfig = agents.find((a) => a.key === agent);
   const emotion = 'neutral';
 
   const confirmedTool = input.confirmed?.tool ?? '';
-  // La acción a confirmar tiene que ser válida y permitida para el agente.
-  if (!isValidToolKey(confirmedTool) || !toolAllowedForAgent(agent, confirmedTool)) {
+  // La acción a confirmar tiene que ser válida y permitida para el agente
+  // (rol + override del Studio).
+  if (!isValidToolKey(confirmedTool) || !toolAllowedForAgent(agent, confirmedTool, agentConfig)) {
     return { agent, emotion, steps: [], finalMessage: 'La acción a confirmar no es válida para este agente.', stoppedReason: 'final' };
   }
   const confirmedParams =
@@ -381,7 +394,7 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
   const industria = buildIndustryPrompt((await loadIndustry(businessId)).giroId);
   const memoria = buildMemoryPrompt(await loadMemory(businessId));
   const contexto = [industria, memoria].filter(Boolean).join('\n\n');
-  const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto);
+  const systemPrompt = buildLoopSystemPrompt(agent, mode, contexto, agentConfig);
   const initialUserPrompt = input.channel ? `[canal: ${input.channel}]\n${text}` : text;
   const turns: ConversationTurn[] = [{ role: 'user', content: initialUserPrompt }];
   for (const s of prior) {
@@ -416,5 +429,5 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
     return { agent, emotion, steps, finalMessage: 'Ejecuté la acción confirmada. Alcancé el máximo de pasos.', stoppedReason: 'max_steps' };
   }
 
-  return continueLoop({ businessId, agent, emotion, mode, systemPrompt, provider, turns, steps }, firstPrompt, remaining);
+  return continueLoop({ businessId, agent, agentConfig, emotion, mode, systemPrompt, provider, turns, steps }, firstPrompt, remaining);
 }

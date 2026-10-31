@@ -21,6 +21,8 @@ import { asyncHandler } from '../middleware/errorHandler';
 import {
   AGENT_CATALOG,
   TOOL_CATALOG,
+  TOOL_KEYS,
+  ROLE_TOOLS,
   AGENT_KEYS,
   DEFAULT_AGENT_KEY,
   MAX_PROVIDER_LEN,
@@ -51,6 +53,9 @@ const agentConfigSchema = z.object({
   colorKey: z.string().trim().max(20).optional(),
   emotion: z.string().trim().max(20).optional(),
   pet: z.string().trim().max(20).optional(),
+  // Override de tools por agente (Studio). Se deja pasar como lista de strings y
+  // el servicio (`sanitizeAgents`) valida contra el catálogo y el rol (no amplía).
+  tools: z.array(z.string().trim().max(40)).max(TOOL_KEYS.length).optional(),
 });
 
 const putAgentsSchema = z.object({
@@ -144,6 +149,9 @@ router.get(
       agents,
       roles: AGENT_CATALOG,
       tools: TOOL_CATALOG,
+      // Tools que CADA rol permite (fuente de verdad del gating): el Studio solo
+      // deja RESTRINGIR dentro de esta lista por agente.
+      roleTools: ROLE_TOOLS,
     });
   })
 );

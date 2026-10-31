@@ -118,9 +118,11 @@ function parseDecision(
   const decision: OrchestratorDecision = { nextAgent, emotion, reasoning };
 
   // El tool es opcional: solo lo aceptamos si está en el catálogo Y el agente
-  // elegido tiene permiso para usarlo (gating por rol estilo CrewAI). Así, por
-  // ejemplo, Soporte no puede terminar generando un link de pago.
-  if (isValidToolKey(raw.tool) && toolAllowedForAgent(nextAgent, raw.tool)) {
+  // elegido tiene permiso para usarlo (gating por rol estilo CrewAI, con el
+  // override por agente del Studio). Así, por ejemplo, Soporte no puede terminar
+  // generando un link de pago, ni un agente al que el dueño le apagó ese tool.
+  const nextAgentCfg = activeAgents.find((a) => a.key === nextAgent);
+  if (isValidToolKey(raw.tool) && toolAllowedForAgent(nextAgent, raw.tool, nextAgentCfg)) {
     decision.tool = raw.tool;
     if (raw.toolParams && typeof raw.toolParams === 'object' && !Array.isArray(raw.toolParams)) {
       decision.toolParams = raw.toolParams as Record<string, unknown>;

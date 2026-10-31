@@ -154,6 +154,9 @@ export default function OficinaPage() {
   const [roles, setRoles] = useState<MrGoRole[]>([]);
   const [agents, setAgents] = useState<MrGoAgentConfig[]>([]);
   const [tools, setTools] = useState<MrGoTool[]>([]);
+  // Tools que permite CADA rol (del backend). Fuente de verdad del gating: el
+  // Studio solo deja restringir dentro de esta lista por agente.
+  const [roleTools, setRoleTools] = useState<Record<string, string[]>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -204,6 +207,9 @@ export default function OficinaPage() {
   const [studioColor, setStudioColor] = useState<MrGoColorKey>('LILA');
   const [studioEmotion, setStudioEmotion] = useState<MrGoEmotion>('happy');
   const [studioPet, setStudioPet] = useState<MrGoPetKey | 'none'>('none');
+  // Tools habilitados del agente en edición (set de claves). Se siembra con los
+  // tools EFECTIVOS del agente (rol menos lo apagado); el dueño prende/apaga.
+  const [studioTools, setStudioTools] = useState<Set<string>>(new Set());
   const [guardandoStudio, setGuardandoStudio] = useState(false);
 
   // ─── Giro del negocio ("bots por giro") ─────────────────────────────────
@@ -220,6 +226,7 @@ export default function OficinaPage() {
       setAgents(data.agents);
       setRoles(data.roles);
       setTools(data.tools);
+      setRoleTools(data.roleTools ?? {});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo cargar el equipo de Mr Go.');
     } finally {
@@ -354,13 +361,21 @@ export default function OficinaPage() {
     const defPet: MrGoPetKey | undefined =
       studioKey === CEO_AGENT_KEY ? 'jinx' : petForRole(studioKey);
     setStudioPet((cfg?.pet as MrGoPetKey | 'none') ?? defPet ?? PET_NONE);
-  }, [studioKey, agents]);
+    // Tools: se siembra con los efectivos (rol menos lo ya apagado).
+    setStudioTools(new Set(effectiveToolKeys(studioKey)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studioKey, agents, roleTools]);
 
   /** Guarda la personalización del agente del Studio (merge sobre la config). */
   async function guardarStudio() {
     if (guardandoStudio) return;
     setGuardandoStudio(true);
     try {
+      // Override de tools: si quedan TODOS los del rol habilitados, se hereda
+      // (undefined, no se persiste override); si no, se guarda el subconjunto.
+      const roleKeys = roleToolKeys(studioKey);
+      const enabled = roleKeys.filter((k) => studioTools.has(k));
+      const toolsOverride = enabled.length === roleKeys.length ? undefined : enabled;
       const next: MrGoAgentConfig[] = agents.map((a) =>
         a.key === studioKey
           ? {
@@ -369,6 +384,7 @@ export default function OficinaPage() {
               colorKey: studioColor,
               emotion: studioEmotion,
               pet: studioPet,
+              tools: toolsOverride,
             }
           : a,
       );
@@ -386,6 +402,16 @@ export default function OficinaPage() {
     } finally {
       setGuardandoStudio(false);
     }
+  }
+
+  /** Prende/apaga un tool del agente en edición (Studio). */
+  function toggleStudioTool(toolKey: string) {
+    setStudioTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(toolKey)) next.delete(toolKey);
+      else next.add(toolKey);
+      return next;
+    });
   }
 
   // Índices por clave para unir config (activo) con presentación (nombre/desc).
@@ -492,10 +518,26 @@ export default function OficinaPage() {
     return emociones[key] ?? configByKey.get(key)?.emotion ?? 'working';
   }
 
-  /** Nombres de los tools que un rol puede ejecutar (CEO = todos). */
+  /** Claves de tools que PERMITE el rol (CEO = todas; del backend `roleTools`,
+   *  con fallback al espejo local). Es el universo editable por agente. */
+  function roleToolKeys(key: string): string[] {
+    if (key === CEO_AGENT_KEY) return tools.map((t) => t.key);
+    return roleTools[key] ?? ROLE_TOOL_KEYS[key] ?? [];
+  }
+
+  /** Claves de tools EFECTIVAS del agente: las del rol menos las apagadas en el
+   *  Studio (override `config.tools`). Sin override → todas las del rol. */
+  function effectiveToolKeys(key: string): string[] {
+    const roleKeys = roleToolKeys(key);
+    const override = configByKey.get(key)?.tools;
+    if (!Array.isArray(override)) return roleKeys;
+    const allow = new Set(override);
+    return roleKeys.filter((k) => allow.has(k));
+  }
+
+  /** Nombres de los tools que un agente puede ejecutar DE VERDAD (rol + override). */
   function toolsForRole(key: string): string[] {
-    const keys = key === CEO_AGENT_KEY ? tools.map((t) => t.key) : ROLE_TOOL_KEYS[key] ?? [];
-    return keys.map((k) => toolByKey.get(k)?.nombre ?? k);
+    return effectiveToolKeys(key).map((k) => toolByKey.get(k)?.nombre ?? k);
   }
 
   // Agentes para la escena de la oficina (CEO con flag director, va al centro).
@@ -530,7 +572,7 @@ export default function OficinaPage() {
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ceo, equipo, emociones, resaltado, pausados, tools, toolByKey, configByKey]);
+  }, [ceo, equipo, emociones, resaltado, pausados, tools, toolByKey, configByKey, roleTools]);
 
   // Layout del piso + "vida" (los agentes caminan al café / reunión y vuelven).
   // Las posiciones personalizadas pisan el arreglo automático.
@@ -1798,6 +1840,77 @@ export default function OficinaPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Superpoderes — tools que el agente PUEDE ejecutar (gating por rol
+                  editable). Apagá los que no quieras; Mr Go solo usa los encendidos. */}
+              {(() => {
+                const roleKeys = roleToolKeys(studioKey);
+                const nombreAg = studioNombre.trim() || roleByKey.get(studioKey)?.nombre || studioKey;
+                return (
+                  <div className="mt-6 border-t border-[#e7e0d2] pt-5">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <p className="flex items-center gap-1.5 text-xs font-semibold text-[#4a4034]">
+                        <Zap className="h-3.5 w-3.5 text-[#e8692a]" /> Superpoderes de {nombreAg}
+                      </p>
+                      {roleKeys.length > 0 && (
+                        <span className="text-[10px] text-[#a99d87]">
+                          {studioTools.size} de {roleKeys.length} activos
+                        </span>
+                      )}
+                    </div>
+                    <p className="mb-3 text-[11px] text-[#857a66]">
+                      Las acciones que este agente puede ejecutar. Apagá las que no quieras que use;
+                      Mr Go solo propondrá y correrá las encendidas.
+                    </p>
+                    {roleKeys.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-[#ddd4c4] bg-[#faf7f0] px-3 py-3 text-[11px] text-[#a99d87]">
+                        Este agente no ejecuta acciones: solo responde y coordina.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {roleKeys.map((k) => {
+                          const on = studioTools.has(k);
+                          const t = toolByKey.get(k);
+                          return (
+                            <button
+                              key={k}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleStudioTool(k)}
+                              className={`flex items-start gap-2.5 rounded-xl border p-3 text-left transition-colors ${
+                                on
+                                  ? 'border-[#e8692a]/50 bg-[#e8692a]/6'
+                                  : 'border-[#e7e0d2] bg-white hover:border-[#ddd4c4]'
+                              }`}
+                            >
+                              <span
+                                className={`mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${
+                                  on ? 'justify-end bg-[#e8692a]' : 'justify-start bg-[#d9d0bf]'
+                                }`}
+                              >
+                                <span className="h-4 w-4 rounded-full bg-white shadow-sm" />
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block text-xs font-semibold text-[#3a322a]">
+                                  {t?.nombre ?? k}
+                                </span>
+                                <span className="block text-[10px] leading-snug text-[#857a66]">
+                                  {t?.descripcion ?? ''}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {roleKeys.length > 0 && studioTools.size === 0 && (
+                      <p className="mt-2 text-[10px] text-[#c0632a]">
+                        Con todo apagado, {nombreAg} no ejecutará ninguna acción (solo responde).
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </section>
         </div>

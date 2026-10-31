@@ -30,6 +30,12 @@ export interface MrGoAgentConfig {
   emotion?: MrGoEmotion;
   /** Mascota elegida: una del catálogo o 'none' (sin mascota); si falta, la del rol. */
   pet?: MrGoPetKey | 'none';
+  /**
+   * Override de tools por agente (editable en el Studio). Si falta, hereda TODOS
+   * los tools de su rol. Si está, son los únicos que puede ejecutar (siempre un
+   * subconjunto del rol; [] = no ejecuta ninguna acción, solo responde).
+   */
+  tools?: string[];
 }
 
 /** Valor de `pet` que representa "sin mascota" (espeja PET_NONE del backend). */
@@ -60,6 +66,9 @@ export interface MrGoAgentsResponse {
   agents: MrGoAgentConfig[];
   roles: MrGoRole[];
   tools: MrGoTool[];
+  /** Tools que cada rol permite (clave de rol → claves de tool). Fuente de verdad
+   *  del gating: el Studio solo deja RESTRINGIR dentro de esta lista por agente. */
+  roleTools: Record<string, string[]>;
 }
 
 /**
