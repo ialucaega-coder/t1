@@ -81,6 +81,8 @@ export interface MetaIncomingMessage {
   images: ImageInput[];
   /** Audios adjuntos (para transcribir con Whisper si "Oído y vista" está activo). */
   audios: MetaAudio[];
+  /** Id del mensaje en Meta (`mid`): sirve para deduplicar reintentos del webhook. */
+  mid?: string;
 }
 
 /**
@@ -126,7 +128,8 @@ export function parseMetaEvents(body: Record<string, unknown>): MetaIncomingMess
       }
 
       if (!text && images.length === 0 && audios.length === 0) continue; // sin contenido útil
-      out.push({ platform, recipientId, senderId, text, images, audios });
+      const mid = typeof message.mid === 'string' ? message.mid : undefined;
+      out.push({ platform, recipientId, senderId, text, images, audios, ...(mid ? { mid } : {}) });
     }
   }
 

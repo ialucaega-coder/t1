@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { tenantRateLimit } from '../middleware/tenantRateLimit';
 import { asyncHandler } from '../middleware/errorHandler';
 import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
@@ -46,7 +47,7 @@ const chatSchema = z.object({
  * Procesa un mensaje de un cliente y devuelve la respuesta del bot.
  * Requiere autenticación: usa el businessId del token (multi-tenant).
  */
-router.post('/chat', requireAuth, asyncHandler(async (req, res) => {
+router.post('/chat', requireAuth, tenantRateLimit({ name: 'ai-chat', max: 60 }), asyncHandler(async (req, res) => {
   const data = chatSchema.parse(req.body);
   const response = await processMessage(req.auth!.businessId, data.message, data.channel, {
     history: data.history,
@@ -68,7 +69,7 @@ const generatePromptSchema = z.object({
  * Genera (o regenera) un prompt de sistema a partir de los datos reales
  * del negocio (nombre, servicios, etc.), listo para copiar/pegar o guardar.
  */
-router.post('/generate-prompt', requireAuth, asyncHandler(async (req, res) => {
+router.post('/generate-prompt', requireAuth, tenantRateLimit({ name: 'ai-generate-prompt', max: 10 }), asyncHandler(async (req, res) => {
   const { tone } = generatePromptSchema.parse(req.body);
   const businessId = req.auth!.businessId;
 

@@ -23,6 +23,7 @@ import { prisma } from '../../lib/prisma';
 import { executeAction, type ActionResult, type ExecMode } from '../actions/executor';
 import { getAutomationMode } from './settings';
 import { matchesCondition } from './conditions';
+import { defineQueue, enqueue } from '../../lib/queue';
 
 const WORKFLOWS_CONNECTION_TYPE = 'WORKFLOWS';
 const WORKFLOWS_CONNECTION_NAME = 'Automatizaciones';
@@ -408,6 +409,23 @@ async function runRules(
  * (el catch es redundante porque no lanza, pero deja la intención explícita).
  */
 export async function dispatchEvent(businessId: string, event: WorkflowEvent): Promise<void> {
+  // A la cola: el pipeline que dispara (mensaje entrante, reserva, pago) no espera
+  // ni comparte proceso con la ejecución de las acciones (WhatsApp, campañas…), y un
+  // deploy a mitad de camino no la pierde. Sin Redis corre inline, como antes.
+  // enqueue NUNCA lanza, así que dispatchEvent mantiene su contrato.
+  await enqueue<WorkflowJob>(WORKFLOW_EVENT_QUEUE, { businessId, event });
+}
+
+/** Cola de eventos de automatización. */
+const WORKFLOW_EVENT_QUEUE = 'workflow-event';
+
+interface WorkflowJob {
+  businessId: string;
+  event: WorkflowEvent;
+}
+
+/** Ejecuta un evento: lee las reglas, y si alguna matchea, corre sus acciones. */
+async function processWorkflowEvent({ businessId, event }: WorkflowJob): Promise<void> {
   try {
     if (!isValidTrigger(event.trigger)) return;
     // Hot-path: este dispatch corre por CADA mensaje entrante. Se leen primero las
@@ -422,3 +440,5 @@ export async function dispatchEvent(businessId: string, event: WorkflowEvent): P
       err instanceof Error ? err.name : 'error');
   }
 }
+
+defineQueue<WorkflowJob>(WORKFLOW_EVENT_QUEUE, processWorkflowEvent, { concurrency: 5 });

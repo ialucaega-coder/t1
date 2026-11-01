@@ -5,36 +5,73 @@
  * ruta como el executor de automatizaciones (acción `lanzar_campana`) compartan
  * la MISMA lógica de envío, sin duplicarla.
  *
- * Mantiene el comportamiento original: claim ATÓMICO para evitar doble-envío
- * (TOCTOU), resolución de destinatarios scoped por negocio, despacho secuencial
- * por WhatsApp/Email (SMS/Telegram aún no soportados), y persistencia del conteo.
+ * Flujo:
+ *  1. `sendCampaign` hace el claim ATÓMICO (draft/scheduled → 'sending'): dos
+ *     envíos concurrentes → solo uno gana; el otro ve "ya enviada/en envío".
+ *  2. Encola el trabajo (`campaign-send`). Con Redis lo ejecuta un worker y la
+ *     request devuelve enseguida (`envio.enCola: true`); sin Redis corre inline y
+ *     la request espera el resultado final, igual que antes de las colas.
+ *  3. `deliverCampaign` recorre los destinatarios por lotes (ids ordenados) y
+ *     guarda un CURSOR (enviados/fallidos/procesados) tras cada destinatario:
+ *     si el proceso muere o el job se reintenta, retoma donde quedó en vez de
+ *     reenviar a todos. Al terminar pasa a 'sent'; si agota los intentos, 'failed'.
  */
 import { prisma } from '../../lib/prisma';
 import { getIO } from '../../lib/socket';
 import { AppError } from '../../middleware/errorHandler';
+import { defineQueue, enqueue } from '../../lib/queue';
+import { sharedGet, sharedSet, sharedDel } from '../../lib/sharedState';
 import * as whatsapp from '../whatsapp/client';
 import { sendGenericNotification } from '../email';
 
 export interface SendCampaignResult {
-  envio: { enviados: number; fallidos: number; canalSoportado: boolean };
+  envio: { enviados: number; fallidos: number; canalSoportado: boolean; enCola?: boolean };
   [key: string]: unknown;
 }
 
+const CAMPAIGN_QUEUE = 'campaign-send';
+/** Reintentos del job completo (cada uno retoma desde el cursor). */
+const MAX_ATTEMPTS = 3;
+/** Tamaño de lote al resolver destinatarios (evita un IN gigante). */
+const RECIPIENT_BATCH = 500;
+/** Cada cuántos destinatarios se refleja el progreso en `sentCount` (visible en el panel). */
+const PROGRESS_EVERY = 25;
+const CURSOR_TTL_MS = 24 * 60 * 60 * 1000;
+
+interface CampaignJob {
+  businessId: string;
+  id: string;
+  message?: string;
+}
+
+/** Progreso persistido (Redis/memoria) para poder retomar un envío interrumpido. */
+interface Cursor {
+  processed: number;
+  enviados: number;
+  fallidos: number;
+  tries: number;
+}
+
+const cursorKey = (businessId: string, id: string) => `campaign:${businessId}:${id}:cursor`;
+
+/** Resultado del último envío inline (sin Redis) para devolverlo al caller. */
+const inlineResults = new Map<string, SendCampaignResult>();
+
 /**
  * Envía la campaña `id` del negocio. Lanza AppError(404) si no existe y
- * AppError(400) si ya fue enviada. Devuelve la campaña actualizada + el resumen
- * de envío (`envio`).
+ * AppError(400) si ya fue enviada (o se está enviando). Devuelve la campaña + el
+ * resumen de envío (`envio`); con colas reales el resumen es provisional
+ * (`enCola: true`) y el definitivo llega por el evento `campaign:sent`.
  */
 export async function sendCampaign(
   businessId: string,
   id: string,
   message?: string,
 ): Promise<SendCampaignResult> {
-  // Claim ATÓMICO: marca 'sent' solo si todavía NO lo estaba. Dos envíos
-  // concurrentes: solo uno gana el updateMany; el otro ve count=0 y corta.
+  // Claim ATÓMICO: pasa a 'sending' solo si NO estaba ya 'sent' ni 'sending'.
   const claim = await prisma.campaign.updateMany({
-    where: { id, businessId, status: { not: 'sent' } },
-    data: { status: 'sent' },
+    where: { id, businessId, status: { notIn: ['sent', 'sending'] } },
+    data: { status: 'sending' },
   });
   if (claim.count === 0) {
     const exists = await prisma.campaign.findFirst({ where: { id, businessId }, select: { id: true } });
@@ -44,66 +81,153 @@ export async function sendCampaign(
   const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
   if (!campaign) throw new AppError(404, 'Campaign not found'); // defensivo: no debería ocurrir tras el claim
 
-  const body = (message)?.trim() || campaign.description || campaign.name;
+  await sharedDel(cursorKey(businessId, id)); // envío nuevo: sin progreso previo
+
+  const how = await enqueue<CampaignJob>(
+    CAMPAIGN_QUEUE,
+    { businessId, id, message },
+    // El dedupe de doble disparo ya lo hace el claim atómico de arriba; el jobId es
+    // único por envío (si fuera fijo por campaña, reenviar una campaña 'failed'
+    // chocaría con el job viejo retenido en la cola). Reintentos con backoff; cada
+    // uno retoma desde el cursor.
+    { jobId: `campaign_${id}_${Date.now()}`, attempts: MAX_ATTEMPTS, backoffMs: 5000 },
+  );
+
+  if (how === 'queued') {
+    return {
+      ...campaign,
+      status: 'sending',
+      envio: { enviados: 0, fallidos: 0, canalSoportado: isSupportedChannel(campaign.channel), enCola: true },
+    };
+  }
+
+  // Inline: el job ya terminó; devolvemos su resultado.
+  const result = inlineResults.get(id);
+  inlineResults.delete(id);
+  if (result) return result;
+  const final = await prisma.campaign.findFirst({ where: { id, businessId } });
+  return {
+    ...(final ?? campaign),
+    envio: { enviados: final?.sentCount ?? 0, fallidos: 0, canalSoportado: isSupportedChannel(campaign.channel) },
+  };
+}
+
+function isSupportedChannel(channel: string): boolean {
+  // Canales con envío saliente real hoy: WhatsApp y Email.
+  return channel === 'whatsapp' || channel === 'email';
+}
+
+/**
+ * Handler del job: ejecuta el envío completo. Un error inesperado se relanza
+ * mientras queden intentos (BullMQ reintenta y se retoma desde el cursor); al
+ * agotarlos la campaña pasa a 'failed' en vez de quedar 'sending' para siempre.
+ */
+async function runCampaignJob({ businessId, id, message }: CampaignJob): Promise<void> {
+  const key = cursorKey(businessId, id);
+  const prev = (await sharedGet<Cursor>(key)) ?? { processed: 0, enviados: 0, fallidos: 0, tries: 0 };
+  const cursor: Cursor = { ...prev, tries: prev.tries + 1 };
+  await sharedSet(key, cursor, CURSOR_TTL_MS);
+
+  try {
+    const result = await deliverCampaign(businessId, id, message, cursor);
+    inlineResults.set(id, result);
+    await sharedDel(key);
+  } catch (err) {
+    console.error(`[Campaigns] envío de ${id} falló (intento ${cursor.tries}/${MAX_ATTEMPTS}):`, describeError(err));
+    if (cursor.tries < MAX_ATTEMPTS) throw err; // BullMQ reintenta (inline: no hay reintento)
+    await prisma.campaign
+      .updateMany({ where: { id, businessId }, data: { status: 'failed', sentCount: cursor.enviados } })
+      .catch(() => undefined);
+    await sharedDel(key);
+  }
+}
+
+defineQueue<CampaignJob>(CAMPAIGN_QUEUE, runCampaignJob, { concurrency: 2 });
+
+/** Envía a todos los destinatarios (retomando desde `cursor`) y cierra la campaña. */
+async function deliverCampaign(
+  businessId: string,
+  id: string,
+  message: string | undefined,
+  cursor: Cursor,
+): Promise<SendCampaignResult> {
+  const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
+  if (!campaign) throw new AppError(404, 'Campaign not found');
+
+  const body = message?.trim() || campaign.description || campaign.name;
   const subject = campaign.name;
   const channel = campaign.channel;
+  const soportado = isSupportedChannel(channel);
 
-  // Destinatarios: clientes del negocio con al menos una reserva (scoped).
+  // Destinatarios: clientes del negocio con al menos una reserva (scoped). Los ids
+  // se ordenan para que el cursor (cantidad procesada) sea estable entre intentos.
   const bookings = await prisma.booking.findMany({
     where: { businessId },
     select: { clientId: true },
     distinct: ['clientId'],
   });
-  const clientIds = bookings.map((b) => b.clientId);
-  const recipients = clientIds.length
-    ? await prisma.user.findMany({
-        where: { id: { in: clientIds }, businessId },
-        select: { id: true, name: true, email: true, phone: true },
-      })
-    : [];
+  const clientIds = bookings.map((b) => b.clientId).sort();
 
-  // Canales con envío saliente real hoy: WhatsApp y Email.
-  const soportado = channel === 'whatsapp' || channel === 'email';
-
-  let enviados = 0;
-  let fallidos = 0;
-
-  if (soportado) {
+  if (!soportado) {
+    cursor.fallidos = clientIds.length;
+  } else {
     const senderNumber = channel === 'whatsapp' ? await resolveBusinessSender(businessId) : undefined;
     const waReady = channel === 'whatsapp' ? whatsapp.isConfigured() : true;
+    const key = cursorKey(businessId, id);
 
-    // Secuencial: evita ráfagas. Un fallo por destinatario se cuenta y NO corta.
-    for (const r of recipients) {
-      try {
-        if (channel === 'email') {
-          if (!r.email) {
-            fallidos++;
-            continue;
+    // Por lotes de ids; dentro de cada lote, orden por id: el orden global es
+    // determinista, así `cursor.processed` (destinatarios ya tratados) identifica
+    // dónde retomar. Al reintentar se vuelven a consultar los lotes (barato) y se
+    // saltean las filas ya tratadas.
+    let index = 0;
+    for (let start = 0; start < clientIds.length; start += RECIPIENT_BATCH) {
+      const batchIds = clientIds.slice(start, start + RECIPIENT_BATCH);
+      const recipients = await prisma.user.findMany({
+        where: { id: { in: batchIds }, businessId },
+        select: { id: true, name: true, email: true, phone: true },
+        orderBy: { id: 'asc' },
+      });
+
+      // Secuencial: evita ráfagas. Un fallo por destinatario se cuenta y NO corta.
+      for (const r of recipients) {
+        index++;
+        if (index <= cursor.processed) continue; // ya enviado antes del corte
+
+        try {
+          if (channel === 'email') {
+            if (!r.email) {
+              cursor.fallidos++;
+            } else if (await sendGenericNotification(r.email, subject, body)) {
+              cursor.enviados++;
+            } else {
+              cursor.fallidos++;
+            }
+          } else if (!waReady || !r.phone) {
+            cursor.fallidos++;
+          } else {
+            await whatsapp.sendMessage(r.phone, body, senderNumber);
+            cursor.enviados++;
           }
-          const ok = await sendGenericNotification(r.email, subject, body);
-          if (ok) enviados++;
-          else fallidos++;
-        } else {
-          if (!waReady || !r.phone) {
-            fallidos++;
-            continue;
-          }
-          await whatsapp.sendMessage(r.phone, body, senderNumber);
-          enviados++;
+        } catch (err) {
+          cursor.fallidos++;
+          console.error(`[Campaigns] Error enviando (canal ${channel}):`, describeError(err));
         }
-      } catch (err) {
-        fallidos++;
-        console.error(`[Campaigns] Error enviando (canal ${channel}):`, describeError(err));
+
+        cursor.processed = index;
+        await sharedSet(key, cursor, CURSOR_TTL_MS); // checkpoint por destinatario
+        if (cursor.processed % PROGRESS_EVERY === 0) {
+          await prisma.campaign.update({ where: { id }, data: { sentCount: cursor.enviados } });
+        }
       }
     }
-  } else {
-    fallidos = recipients.length;
   }
 
-  // El estado ya quedó 'sent' por el claim; acá solo persistimos el conteo.
+  const { enviados, fallidos } = cursor;
+
+  // Cierre: 'sent' + conteo final.
   const updated = await prisma.campaign.update({
     where: { id },
-    data: { sentCount: enviados },
+    data: { status: 'sent', sentCount: enviados },
   });
 
   getIO()?.to(`business:${businessId}`).emit('campaign:sent', {

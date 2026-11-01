@@ -18,6 +18,7 @@ import {
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { parseWhatsAppReferral } from '../services/whatsapp/attribution';
 import { requireAuth, requireStaff } from '../middleware/auth';
+import { defineQueue, enqueue } from '../lib/queue';
 
 const sendMessageSchema = z.object({
   to: z.string().min(1),
@@ -25,6 +26,95 @@ const sendMessageSchema = z.object({
 });
 
 const router = Router();
+
+/** Cola de mensajes entrantes de WhatsApp (ver el webhook más abajo). */
+const WA_INBOUND_QUEUE = 'whatsapp-inbound';
+
+/** Datos serializables del mensaje entrante (viajan por Redis: sin secretos). */
+interface WhatsAppInboundJob {
+  businessId: string;
+  botId: string;
+  from: string;
+  to: string;
+  profileName: string;
+  rawBody: string;
+  body: string;
+  images: ReturnType<typeof parseTwilioImages>;
+  audios: ReturnType<typeof parseTwilioAudio>;
+  attribution?: NonNullable<ReturnType<typeof parseWhatsAppReferral>>;
+}
+
+/**
+ * Procesa un mensaje entrante: adjuntos (visión / transcripción), conversación,
+ * respuesta del bot y envío DESDE el número del negocio. Todo dentro de try/catch:
+ * un fallo se loguea y no se reintenta (reintentar tras haber guardado el mensaje
+ * duplicaría la conversación; el dedupe cubre los reintentos del proveedor).
+ */
+async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
+  const { businessId, botId, from, to, profileName, rawBody, body, images, audios, attribution } = job;
+  try {
+    // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
+    const hasAttachments = images.length > 0 || audios.length > 0;
+    const oidoYVista = hasAttachments
+      ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
+      : false;
+
+    // Visión: las MediaUrl de Twilio están tras Basic auth, así que Anthropic no
+    // puede bajarlas por URL. Solo si "Oído y vista" está activo las bajamos con
+    // credenciales y las convertimos a base64.
+    let visionImages = images;
+    if (images.length) {
+      visionImages = oidoYVista ? await downloadTwilioImagesAsBase64(images) : [];
+    }
+
+    // Audio: transcribimos las notas de voz con Whisper y usamos el texto como
+    // mensaje. Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada).
+    let finalBody = body;
+    if (audios.length && oidoYVista) {
+      const authHeader = getTwilioAuthHeader();
+      for (const audio of audios) {
+        if (!isTwilioMediaUrl(audio.url)) continue; // anti-SSRF: no mandar creds a otros hosts
+        const transcript = await transcribeAudioFromUrl(audio.url, {
+          headers: authHeader ? { Authorization: authHeader } : undefined,
+          mediaType: audio.mediaType,
+        });
+        if (transcript) {
+          finalBody = rawBody ? `${rawBody}\n${transcript}` : transcript;
+          break;
+        }
+      }
+    }
+
+    const existingConversation = await prisma.conversation.findFirst({
+      where: {
+        businessId,
+        botId,
+        channel: 'WHATSAPP',
+        contactPhone: from,
+        status: 'OPEN',
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const result = await processMessage(businessId, finalBody, 'WHATSAPP', {
+      conversationId: existingConversation?.id,
+      botId,
+      contactName: profileName,
+      contactPhone: from,
+      ...(visionImages.length ? { images: visionImages } : {}),
+      ...(attribution ? { attribution } : {}),
+    });
+
+    // Responde DESDE el número del negocio (el `To` al que escribió el
+    // cliente), no desde el número global, para respetar el multi-tenant.
+    await sendMessage(from, result.text, to.replace('whatsapp:', '').trim() || undefined);
+  } catch (error) {
+    console.error('WhatsApp webhook error:', error);
+  }
+}
+
+defineQueue<WhatsAppInboundJob>(WA_INBOUND_QUEUE, processWhatsAppInbound, { concurrency: 10 });
+
 
 // Twilio postea el webhook entrante como application/x-www-form-urlencoded (no
 // JSON), así que este router necesita su propio parser: el global solo tiene
@@ -89,73 +179,29 @@ router.post(
 
     const { businessId, botId } = target;
 
-    // Todo el post-procesamiento va dentro de try/catch para garantizar que el
-    // webhook SIEMPRE responda 200 (si una consulta a DB o una descarga lanza,
-    // Twilio no debe recibir un 500 y reintentar, duplicando el mensaje).
-    try {
-      // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
-      const hasAttachments = images.length > 0 || audios.length > 0;
-      const oidoYVista = hasAttachments
-        ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
-        : false;
-
-      // Visión: las MediaUrl de Twilio están tras Basic auth, así que Anthropic no
-      // puede bajarlas por URL. Solo si "Oído y vista" está activo las bajamos con
-      // credenciales y las convertimos a base64.
-      let visionImages = images;
-      if (images.length) {
-        visionImages = oidoYVista ? await downloadTwilioImagesAsBase64(images) : [];
-      }
-
-      // Audio: transcribimos las notas de voz con Whisper y usamos el texto como
-      // mensaje. Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada).
-      let finalBody = body;
-      if (audios.length && oidoYVista) {
-        const authHeader = getTwilioAuthHeader();
-        for (const audio of audios) {
-          if (!isTwilioMediaUrl(audio.url)) continue; // anti-SSRF: no mandar creds a otros hosts
-          const transcript = await transcribeAudioFromUrl(audio.url, {
-            headers: authHeader ? { Authorization: authHeader } : undefined,
-            mediaType: audio.mediaType,
-          });
-          if (transcript) {
-            finalBody = rawBody ? `${rawBody}\n${transcript}` : transcript;
-            break;
-          }
-        }
-      }
-
-      const existingConversation = await prisma.conversation.findFirst({
-        where: {
-          businessId,
-          botId,
-          channel: 'WHATSAPP',
-          contactPhone: from,
-          status: 'OPEN',
-        },
-        orderBy: { updatedAt: 'desc' },
-      });
-
-      // Atribución Click-to-WhatsApp: si el cliente vino de un anuncio, Twilio
-      // agrega los campos Referral* al body. Se captura sólo al CREAR la
-      // conversación (processMessage lo decide con conversationId).
-      const attribution = parseWhatsAppReferral(req.body);
-
-      const result = await processMessage(businessId, finalBody, 'WHATSAPP', {
-        conversationId: existingConversation?.id,
+    // El procesamiento (LLM + respuesta por la API de Twilio) va a una COLA: el
+    // webhook responde 200 enseguida (Twilio corta a ~15 s y reintenta) y un
+    // reintento del mismo MessageSid no duplica mensaje ni costo de IA (dedupe por
+    // jobId). Sin Redis se ejecuta inline, igual que antes.
+    const messageSid = String(req.body.MessageSid || req.body.SmsMessageSid || '').trim();
+    await enqueue<WhatsAppInboundJob>(
+      WA_INBOUND_QUEUE,
+      {
+        businessId,
         botId,
-        contactName: profileName,
-        contactPhone: from,
-        ...(visionImages.length ? { images: visionImages } : {}),
-        ...(attribution ? { attribution } : {}),
-      });
-
-      // Responde DESDE el número del negocio (el `To` al que escribió el
-      // cliente), no desde el número global, para respetar el multi-tenant.
-      await sendMessage(from, result.text, to.replace('whatsapp:', '').trim() || undefined);
-    } catch (error) {
-      console.error('WhatsApp webhook error:', error);
-    }
+        from,
+        to,
+        profileName,
+        rawBody,
+        body,
+        images,
+        audios,
+        // Atribución Click-to-WhatsApp: se parsea acá (necesita el body crudo de
+        // Twilio) y viaja ya normalizada.
+        attribution: parseWhatsAppReferral(req.body) ?? undefined,
+      },
+      messageSid ? { jobId: `wa_${messageSid}` } : {},
+    );
 
     res.status(200).send('OK');
   })

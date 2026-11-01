@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
+import { tenantRateLimit } from '../middleware/tenantRateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { Prisma } from '@prisma/client';
@@ -504,6 +505,7 @@ router.post(
 router.post(
   '/:id/copilot',
   requireAuth,
+  tenantRateLimit({ name: 'conv-copilot', max: 30 }),
   asyncHandler(async (req, res) => {
     try {
       const result = await generateCopilot(req.auth!.businessId, req.params.id as string);
@@ -526,6 +528,7 @@ router.post(
 router.post(
   '/:id/lead-score',
   requireAuth,
+  tenantRateLimit({ name: 'conv-lead-score', max: 30 }),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const conversationId = req.params.id as string;

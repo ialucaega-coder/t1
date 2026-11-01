@@ -309,7 +309,9 @@ const lanzarCampana: ActionHandler = {
 
     try {
       const r = await sendCampaign(businessId, campaignId, str(params, 'message', 'mensaje'));
-      const { enviados, fallidos } = r.envio;
+      const { enviados, fallidos, enCola } = r.envio;
+      // Con colas reales el envío sigue en segundo plano: no hay conteo final todavía.
+      if (enCola) return { ok: true, status: 'ejecutado', detail: 'campaña en envío (en cola)', data: { enCola: true } };
       return { ok: true, status: 'ejecutado', detail: `campaña enviada (${enviados} ok, ${fallidos} fallidos)`, data: { enviados, fallidos } };
     } catch (err) {
       // "ya enviada" (400) / "no existe" (404) → omitido; cualquier otro escala

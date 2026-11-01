@@ -16,6 +16,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { tenantRateLimit } from '../middleware/tenantRateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import {
@@ -194,6 +195,7 @@ router.put(
 router.post(
   '/orchestrate',
   requireAuth,
+  tenantRateLimit({ name: 'mrgo-orchestrate', max: 30 }),
   validate(orchestrateSchema),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
@@ -227,6 +229,7 @@ router.post(
 router.post(
   '/run',
   requireAuth,
+  tenantRateLimit({ name: 'mrgo-run', max: 12 }),
   validate(runSchema),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
@@ -262,6 +265,7 @@ router.post(
 router.post(
   '/confirm',
   requireAuth,
+  tenantRateLimit({ name: 'mrgo-confirm', max: 12 }),
   validate(confirmSchema),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;

@@ -68,6 +68,7 @@ import { mrgoRouter } from './routes/mrgo';
 import { mcpRouter } from './routes/mcp';
 import { platformRouter } from './routes/platform';
 import { restoreActiveBots } from './services/telegram/bot';
+import { startWorkers, closeQueues } from './lib/queue';
 import { startScheduler } from './services/scheduler';
 import { apiRateLimit } from './middleware/rateLimit';
 import {
@@ -371,6 +372,10 @@ async function bootstrap(): Promise<void> {
 
     // Programar jobs diarios de superpoderes (reportes / recordatorios)
     startScheduler();
+
+    // Consumidores de las colas (webhooks entrantes, automatizaciones). Sin Redis
+    // no hacen nada: los trabajos corren inline. RUN_WORKERS=false = solo encola.
+    startWorkers();
   });
 }
 
@@ -392,6 +397,8 @@ async function shutdown(signal: string): Promise<void> {
   try {
     io.close();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    // Los workers terminan los jobs en vuelo antes de cerrar (tope: forceExit de 10 s).
+    await closeQueues();
     await Promise.allSettled([socketSub?.quit(), closeRedis()]);
   } catch (err) {
     console.error('[shutdown] error al cerrar:', (err as Error).message);

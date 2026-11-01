@@ -17,6 +17,13 @@ import { afterEach, vi } from 'vitest';
 // 'dev-secret', que ya fue eliminado por seguridad.
 process.env.NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET || 'test-secret';
 process.env.NODE_ENV = process.env.NODE_ENV || 'test';
+// Las colas (BullMQ) corren INLINE en los tests: sin Redis real, el webhook espera a
+// que el handler termine, igual que en un despliegue de una sola instancia.
+process.env.QUEUES_DISABLED = 'true';
+// Y sin Redis real: un REDIS_URL heredado del entorno/.env haría que sharedState y
+// el rate limit hablen con un Redis externo desde los tests. Los tests que
+// necesitan Redis mockean `lib/redis` o fijan REDIS_URL ellos mismos.
+process.env.REDIS_URL = '';
 
 afterEach(() => {
   vi.clearAllMocks();

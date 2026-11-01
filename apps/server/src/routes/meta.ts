@@ -16,9 +16,11 @@ import {
   verifyTokenOwnership,
   isRecipientClaimedByAnother,
   type MetaPlatform,
+  type MetaIncomingMessage,
 } from '../services/meta/client';
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { requireAuth } from '../middleware/auth';
+import { defineQueue, enqueue } from '../lib/queue';
 
 // ────────────────────────────────────────────────────────────────
 // Rutas de Meta (Instagram Direct + Facebook Messenger).
@@ -63,6 +65,81 @@ router.get('/webhook', (req: Request, res: Response) => {
   res.sendStatus(403);
 });
 
+/** Cola de mensajes entrantes de Instagram/Messenger. */
+const META_INBOUND_QUEUE = 'meta-inbound';
+
+/**
+ * Procesa UN mensaje entrante de Meta: resuelve el negocio, adjuntos, conversación,
+ * respuesta del bot y envío por la Send API. Los errores se loguean (sin reintento:
+ * reintentar tras guardar el mensaje lo duplicaría; el dedupe por `mid` cubre los
+ * reintentos del webhook).
+ */
+async function processMetaInbound(msg: MetaIncomingMessage): Promise<void> {
+  const target = await resolveBusinessByRecipient(msg.platform, msg.recipientId);
+  if (!target) return;
+
+  const { businessId, botId, pageAccessToken } = target;
+
+  // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
+  const hasAttachments = msg.images.length > 0 || msg.audios.length > 0;
+  const oidoYVista = hasAttachments
+    ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
+    : false;
+
+  // Visión: las URLs de imagen de Meta son públicas y temporales, así que
+  // Anthropic puede descargarlas por URL directa (a diferencia de Twilio).
+  // Solo las pasamos si el superpoder está activo.
+  const images = oidoYVista ? msg.images : [];
+
+  // Audio: transcribimos notas de voz con Whisper (URLs públicas, sin auth).
+  // Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada a placeholder).
+  let transcript = '';
+  if (msg.audios.length && oidoYVista) {
+    for (const audio of msg.audios) {
+      const t = await transcribeAudioFromUrl(audio.url);
+      if (t) { transcript = t; break; }
+    }
+  }
+
+  const existing = await prisma.conversation.findFirst({
+    where: {
+      businessId,
+      botId,
+      contactPhone: msg.senderId,
+      status: 'OPEN',
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+
+  // El placeholder se calcula sobre los adjuntos ORIGINALES (antes del gate),
+  // para que un mensaje de solo-adjunto siempre reciba respuesta aunque el
+  // superpoder esté apagado (consistente con el canal de WhatsApp).
+  const placeholder = msg.images.length
+    ? '(imagen adjunta)'
+    : msg.audios.length
+    ? '(nota de voz)'
+    : '';
+  const body = transcript || msg.text || placeholder;
+  if (!body) return;
+
+  try {
+    const result = await processMessage(businessId, body, chatChannelFor(msg.platform), {
+      conversationId: existing?.id,
+      botId,
+      // Guardamos el id de Meta del usuario en contactPhone para poder
+      // reabrir la misma conversación y responderle.
+      contactPhone: msg.senderId,
+      ...(images.length ? { images } : {}),
+    });
+
+    await sendMessage(pageAccessToken, msg.senderId, result.text);
+  } catch (error) {
+    console.error('Error procesando mensaje de Meta:', error);
+  }
+}
+
+defineQueue<MetaIncomingMessage>(META_INBOUND_QUEUE, processMetaInbound, { concurrency: 10 });
+
 /**
  * POST /api/meta/webhook
  * Recibe los eventos de mensajería. Responde 200 siempre (Meta reintenta si no).
@@ -89,67 +166,11 @@ router.post(
     try {
       const messages = parseMetaEvents(req.body || {});
       for (const msg of messages) {
-        const target = await resolveBusinessByRecipient(msg.platform, msg.recipientId);
-        if (!target) continue;
-
-        const { businessId, botId, pageAccessToken } = target;
-
-        // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
-        const hasAttachments = msg.images.length > 0 || msg.audios.length > 0;
-        const oidoYVista = hasAttachments
-          ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
-          : false;
-
-        // Visión: las URLs de imagen de Meta son públicas y temporales, así que
-        // Anthropic puede descargarlas por URL directa (a diferencia de Twilio).
-        // Solo las pasamos si el superpoder está activo.
-        const images = oidoYVista ? msg.images : [];
-
-        // Audio: transcribimos notas de voz con Whisper (URLs públicas, sin auth).
-        // Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada a placeholder).
-        let transcript = '';
-        if (msg.audios.length && oidoYVista) {
-          for (const audio of msg.audios) {
-            const t = await transcribeAudioFromUrl(audio.url);
-            if (t) { transcript = t; break; }
-          }
-        }
-
-        const existing = await prisma.conversation.findFirst({
-          where: {
-            businessId,
-            botId,
-            contactPhone: msg.senderId,
-            status: 'OPEN',
-          },
-          orderBy: { updatedAt: 'desc' },
-        });
-
-        // El placeholder se calcula sobre los adjuntos ORIGINALES (antes del gate),
-        // para que un mensaje de solo-adjunto siempre reciba respuesta aunque el
-        // superpoder esté apagado (consistente con el canal de WhatsApp).
-        const placeholder = msg.images.length
-          ? '(imagen adjunta)'
-          : msg.audios.length
-          ? '(nota de voz)'
-          : '';
-        const body = transcript || msg.text || placeholder;
-        if (!body) continue;
-
-        try {
-          const result = await processMessage(businessId, body, chatChannelFor(msg.platform), {
-            conversationId: existing?.id,
-            botId,
-            // Guardamos el id de Meta del usuario en contactPhone para poder
-            // reabrir la misma conversación y responderle.
-            contactPhone: msg.senderId,
-            ...(images.length ? { images } : {}),
-          });
-
-          await sendMessage(pageAccessToken, msg.senderId, result.text);
-        } catch (error) {
-          console.error('Error procesando mensaje de Meta:', error);
-        }
+        // Cada mensaje va a una COLA: dedupe por `mid` (Meta reintenta el webhook) y
+        // un deploy a mitad de camino no pierde lo que estaba en vuelo. Sin Redis
+        // se ejecuta inline, igual que antes. El Page Access Token NO viaja en el
+        // job: el handler lo vuelve a resolver desde la DB.
+        await enqueue<MetaIncomingMessage>(META_INBOUND_QUEUE, msg, msg.mid ? { jobId: `meta_${msg.mid}` } : {});
       }
     } catch (error) {
       console.error('Meta webhook error:', error);

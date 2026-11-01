@@ -246,13 +246,13 @@ describe('routes/campaigns', () => {
       // Una llamada al adaptador de email por cada destinatario alcanzable.
       expect(sendGenericNotification).toHaveBeenCalledTimes(2);
       expect(sendGenericNotification).toHaveBeenCalledWith('ana@x.com', 'Promo', 'Hola!');
-      // El estado ya se setea en el claim atómico (updateMany); el update final
-      // solo persiste sentCount.
+      // El claim atómico (updateMany) deja la campaña en 'sending'; el update final
+      // la cierra como 'sent' con el conteo.
       expect(prisma.campaign.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: 'sent' } })
+        expect.objectContaining({ data: { status: 'sending' } })
       );
       expect(prisma.campaign.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'c1' }, data: { sentCount: 2 } })
+        expect.objectContaining({ where: { id: 'c1' }, data: { status: 'sent', sentCount: 2 } })
       );
     });
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { tenantRateLimit } from '../middleware/tenantRateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
@@ -66,6 +67,7 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
     router.get(
       '/analisis/:conversationId',
       requireAuth,
+      tenantRateLimit({ name: 'sp-analisis', max: 30 }),
       asyncHandler(async (req, res) => {
         const businessId = req.auth!.businessId;
         const conversationId = decodeURIComponent(String(req.params.conversationId));

@@ -25,7 +25,9 @@ import { useToast } from '@/components/common/Toast';
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {
   draft: { label: 'Borrador', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
   scheduled: { label: 'Programada', class: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  sending: { label: 'Enviando…', class: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
   sent: { label: 'Enviada', class: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
+  failed: { label: 'Falló el envío', class: 'bg-red-500/10 text-red-400 border-red-500/20' },
   cancelled: { label: 'Cancelada', class: 'bg-red-500/10 text-red-400 border-red-500/20' },
 };
 
