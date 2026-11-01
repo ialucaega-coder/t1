@@ -29,22 +29,16 @@ export function useClients(params?: { search?: string; tagId?: string; page?: nu
       setIsLoading(true);
       setError(null);
       try {
-        // El embudo cuenta sobre TODO el negocio (no solo la página), por eso
-        // es una llamada aparte. Si falla, no rompe el listado: cae a vacío.
-        const [res, funnelRes] = await Promise.all([
-          clientsApi.getClients({
-            search: params?.search,
-            tagId: params?.tagId,
-            page: params?.page,
-          }),
-          clientsApi.getClientFunnel().catch(() => EMPTY_FUNNEL),
-        ]);
+        const res = await clientsApi.getClients({
+          search: params?.search,
+          tagId: params?.tagId,
+          page: params?.page,
+        });
         if (!cancelled) {
           setClients(res.data);
           setTotal(res.total);
           setTotalPages(res.totalPages);
           setTagCatalog(res.tagCatalog ?? []);
-          setFunnel(funnelRes);
         }
       } catch (err) {
         if (!cancelled) {
@@ -59,6 +53,20 @@ export function useClients(params?: { search?: string; tagId?: string; page?: nu
     load();
     return () => { cancelled = true; };
   }, [params?.search, params?.tagId, params?.page, reloadToken]);
+
+  // El embudo cuenta sobre TODO el negocio (no depende de búsqueda/filtro/página),
+  // así que se pide aparte y solo al montar o refrescar — no en cada tecla. Si
+  // falla, no rompe el listado: cae a vacío.
+  useEffect(() => {
+    let cancelled = false;
+    clientsApi
+      .getClientFunnel()
+      .catch(() => EMPTY_FUNNEL)
+      .then((f) => {
+        if (!cancelled) setFunnel(f);
+      });
+    return () => { cancelled = true; };
+  }, [reloadToken]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 

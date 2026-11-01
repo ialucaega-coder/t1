@@ -83,23 +83,42 @@ export interface Conversation {
 
 export interface ConversationDetail extends Conversation {
   messages: { id: string; role: string; text: string; responseTime: number | null; createdAt: string }[];
+  /** Solo con paginación de mensajes (`limit`): hay mensajes anteriores sin cargar. */
+  hasMoreMessages?: boolean;
 }
 
-export function list(params?: { page?: number; pageSize?: number; status?: string; channel?: string; view?: InboxView }) {
+export function list(params?: {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  channel?: string;
+  view?: InboxView;
+  /** Búsqueda en servidor por nombre / teléfono / email del contacto. */
+  search?: string;
+}) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.pageSize) qs.set('pageSize', String(params.pageSize));
   if (params?.status) qs.set('status', params.status);
   if (params?.channel) qs.set('channel', params.channel);
   if (params?.view && params.view !== 'all') qs.set('view', params.view);
+  if (params?.search) qs.set('search', params.search);
   const query = qs.toString();
   return httpClient.get<{ data: Conversation[]; total: number; page: number; pageSize: number }>(
     `/conversations${query ? `?${query}` : ''}`
   );
 }
 
-export function getById(id: string) {
-  return httpClient.get<ConversationDetail>(`/conversations/${id}`);
+/**
+ * Detalle de la conversación. Sin `opts` trae el hilo completo; con `limit` trae
+ * los N mensajes más recientes y `before` (id de mensaje) los N anteriores a ese.
+ */
+export function getById(id: string, opts?: { limit?: number; before?: string }) {
+  const qs = new URLSearchParams();
+  if (opts?.limit) qs.set('limit', String(opts.limit));
+  if (opts?.before) qs.set('before', opts.before);
+  const query = qs.toString();
+  return httpClient.get<ConversationDetail>(`/conversations/${id}${query ? `?${query}` : ''}`);
 }
 
 export function close(id: string) {

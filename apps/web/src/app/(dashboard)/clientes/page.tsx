@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Search, UserPlus, Users, ChevronLeft, ChevronRight,
   Calendar, ShoppingBag, Mail, Phone, Clock, Trash2,
@@ -59,8 +59,19 @@ export default function ClientesPage() {
   const [editOpen, setEditOpen] = useState(false);
   const { toast } = useToast();
 
+  // Debounce: el input responde al instante pero la API recibe la búsqueda recién
+  // 300 ms después de la última tecla (antes: un request por tecla).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1); // la página se reinicia junto con la búsqueda aplicada (un solo request)
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const { clients, tagCatalog, total, totalPages, isLoading, error, refetch } = useClients({
-    search: search || undefined,
+    search: debouncedSearch || undefined,
     tagId: tagFilter || undefined,
     page,
   });
@@ -158,7 +169,7 @@ export default function ClientesPage() {
           type="text"
           placeholder="Buscar por nombre, email o teléfono..."
           value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          onChange={(e) => setSearch(e.target.value)}
           className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-1.5 pl-9 text-sm text-white placeholder:text-slate-600 focus:border-brand-400/50 focus:outline-none"
         />
       </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   MessageSquare, Clock, X, ChevronRight, User, Filter, Search,
   Send, Loader2, AlertTriangle, Bot, Phone, Mail, Wifi, WifiOff,
@@ -105,16 +105,29 @@ export default function ConversacionesPage() {
   const [channelFilter, setChannelFilter] = useState<string>('');
   const [tagFilter, setTagFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  // La búsqueda se hace en el servidor (sobre TODAS las conversaciones, no solo la
+  // página cargada) y con debounce: un request por pausa de tipeo, no por tecla.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
   const listParams = useMemo(() => {
-    const p: { status?: string; channel?: string } = {};
+    const p: { status?: string; channel?: string; search?: string } = {};
     if (statusFilter) p.status = statusFilter;
+    if (debouncedSearch) p.search = debouncedSearch;
     // Messenger/Voz se piden como WEBCHAT (su enum real) y se refinan en cliente.
     if (channelFilter) p.channel = SERVER_CHANNEL_FOR[channelFilter] || channelFilter;
     return Object.keys(p).length ? p : undefined;
-  }, [statusFilter, channelFilter]);
-  const { conversations, total, isLoading, error, refetch, closeConversation } = useConversations(listParams);
+  }, [statusFilter, channelFilter, debouncedSearch]);
+  const {
+    conversations, total, isLoading, isLoadingMore, hasMore, loadMore, error, refetch, closeConversation,
+  } = useConversations(listParams);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { detail, isLoading: detailLoading, refetchDetail } = useConversationDetail(selectedId);
+  const {
+    detail, isLoading: detailLoading, refetchDetail,
+    hasMoreMessages, isLoadingOlder, loadOlder, prependCount,
+  } = useConversationDetail(selectedId);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -193,21 +206,46 @@ export default function ConversacionesPage() {
     if (tagFilter) {
       list = list.filter((c) => c.metadata?.tags?.includes(tagFilter));
     }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter((c) => (
-        c.contactName?.toLowerCase().includes(q) ||
-        c.contactPhone?.toLowerCase().includes(q) ||
-        c.messages?.[0]?.text.toLowerCase().includes(q) ||
-        c.metadata?.tags?.some((t) => t.toLowerCase().includes(q))
-      ));
-    }
     return list;
-  }, [conversations, channelFilter, tagFilter, searchQuery]);
+  }, [conversations, channelFilter, tagFilter]);
 
+  // Scroll sentinel: al llegar al final de la lista pide la página siguiente.
+  const listEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const el = listEndRef.current;
+    if (!el || !hasMore || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMore();
+    }, { rootMargin: '120px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, loadMore, filtered.length]);
+
+  // Hilo: baja al final cuando llega un mensaje, pero NO cuando lo que cambió es
+  // el principio (el usuario cargó mensajes anteriores y no debe perder su lugar).
+  const messagesBoxRef = useRef<HTMLDivElement>(null);
+  const lastPrependRef = useRef(0);
+  const skipNextScroll = useRef(false);
+  const scrollHeightBeforeOlder = useRef(0);
+  useLayoutEffect(() => {
+    if (prependCount === lastPrependRef.current) return;
+    lastPrependRef.current = prependCount;
+    skipNextScroll.current = true; // el efecto de abajo corre justo después
+    const box = messagesBoxRef.current;
+    if (box) box.scrollTop += box.scrollHeight - scrollHeightBeforeOlder.current;
+  }, [prependCount]);
+  useEffect(() => {
+    if (skipNextScroll.current) {
+      skipNextScroll.current = false;
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [detail?.messages?.length]);
+  }, [detail?.messages?.length, prependCount]);
+
+  function handleLoadOlder() {
+    scrollHeightBeforeOlder.current = messagesBoxRef.current?.scrollHeight ?? 0;
+    void loadOlder();
+  }
 
   useEffect(() => {
     if (selectedId && detail) {
@@ -429,7 +467,7 @@ export default function ConversacionesPage() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar por nombre, teléfono, mensaje o etiqueta..."
+              placeholder="Buscar por nombre, teléfono o email..."
               className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-1.5 pl-9 text-sm text-white placeholder:text-slate-600 focus:border-brand-400/50 focus:outline-none"
             />
           </div>
@@ -598,6 +636,17 @@ export default function ConversacionesPage() {
               </button>
             );
           })}
+          {hasMore && (
+            <div ref={listEndRef} className="py-2 text-center">
+              <button
+                onClick={loadMore}
+                disabled={isLoadingMore}
+                className="text-xs text-slate-400 hover:text-white disabled:opacity-60"
+              >
+                {isLoadingMore ? 'Cargando…' : 'Cargar más conversaciones'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Chat detail */}
@@ -636,7 +685,7 @@ export default function ConversacionesPage() {
                       <span>·</span>
                       <span>{CHANNEL_LABELS[detail.displayChannel || detail.channel] || detail.displayChannel || detail.channel}</span>
                       <span>·</span>
-                      <span>{detail.messages.length} mensajes</span>
+                      <span>{detail.messages.length}{hasMoreMessages ? '+' : ''} mensajes</span>
                       {detail.contactPhone && (
                         <>
                           <span>·</span>
@@ -725,7 +774,18 @@ export default function ConversacionesPage() {
               )}
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: '22rem' }}>
+              <div ref={messagesBoxRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: '22rem' }}>
+                {hasMoreMessages && (
+                  <div className="text-center">
+                    <button
+                      onClick={handleLoadOlder}
+                      disabled={isLoadingOlder}
+                      className="text-xs text-slate-400 hover:text-white disabled:opacity-60"
+                    >
+                      {isLoadingOlder ? 'Cargando…' : 'Cargar mensajes anteriores'}
+                    </button>
+                  </div>
+                )}
                 {detail.messages.map((msg) => (
                   <div key={msg.id} className={`flex ${msg.role === 'USER' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${

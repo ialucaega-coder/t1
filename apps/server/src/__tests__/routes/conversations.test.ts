@@ -103,6 +103,87 @@ describe('routes/conversations (inbox)', () => {
     });
   });
 
+  describe('GET /api/conversations (search en servidor)', () => {
+    it('filtra por nombre/teléfono/email del contacto, scopeado al negocio', async () => {
+      (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (prisma.conversation.count as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+
+      const res = await request(app)
+        .get('/api/conversations?search=%20Ana%20')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      const where = (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0].where;
+      expect(where.businessId).toBe('biz_1');
+      expect(where.OR).toEqual([
+        { contactName: { contains: 'Ana', mode: 'insensitive' } },
+        { contactPhone: { contains: 'Ana' } },
+        { contactEmail: { contains: 'Ana', mode: 'insensitive' } },
+      ]);
+    });
+
+    it('sin search no agrega OR', async () => {
+      (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (prisma.conversation.count as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+
+      await request(app).get('/api/conversations').set('Authorization', `Bearer ${token}`);
+
+      const where = (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0].where;
+      expect(where.OR).toBeUndefined();
+    });
+  });
+
+  describe('GET /api/conversations/:id (mensajes por cursor)', () => {
+    const msgs = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `m${n - i}`, text: `t${n - i}` }));
+
+    it('con limit devuelve los N más recientes en orden cronológico y hasMoreMessages', async () => {
+      // El server pide limit+1 en orden descendente (m3, m2, m1 con limit=2).
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'c1', channel: 'WHATSAPP', metadata: null, messages: msgs(3),
+      });
+
+      const res = await request(app)
+        .get('/api/conversations/c1?limit=2')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.messages.map((m: { id: string }) => m.id)).toEqual(['m2', 'm3']);
+      expect(res.body.hasMoreMessages).toBe(true);
+      const include = (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mock.calls[0][0].include;
+      expect(include.messages.take).toBe(3);
+      expect(include.messages.cursor).toBeUndefined();
+    });
+
+    it('con before usa el id como cursor (saltea el propio) y hasMoreMessages=false al agotarse', async () => {
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'c1', channel: 'WHATSAPP', metadata: null, messages: msgs(2),
+      });
+
+      const res = await request(app)
+        .get('/api/conversations/c1?limit=5&before=m9')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.body.messages).toHaveLength(2);
+      expect(res.body.hasMoreMessages).toBe(false);
+      const include = (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mock.calls[0][0].include;
+      expect(include.messages.cursor).toEqual({ id: 'm9' });
+      expect(include.messages.skip).toBe(1);
+    });
+
+    it('sin limit devuelve el hilo completo como antes (sin hasMoreMessages)', async () => {
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'c1', channel: 'WHATSAPP', metadata: null, messages: [{ id: 'a' }, { id: 'b' }],
+      });
+
+      const res = await request(app).get('/api/conversations/c1').set('Authorization', `Bearer ${token}`);
+
+      expect(res.body.messages).toHaveLength(2);
+      expect(res.body.hasMoreMessages).toBeUndefined();
+      const include = (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mock.calls[0][0].include;
+      expect(include.messages).toEqual({ orderBy: { createdAt: 'asc' } });
+    });
+  });
+
   describe('GET /api/conversations/:id (displayChannel)', () => {
     it('expone displayChannel = realChannel (VOICE) sin pisar el enum channel', async () => {
       (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({

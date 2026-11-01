@@ -180,6 +180,64 @@ describe('lib/http-client', () => {
     });
   });
 
+  describe('dedupe de GET en vuelo', () => {
+    it('dos GET simultáneos a la misma ruta comparten un solo fetch', async () => {
+      const client = new HttpClient();
+      fetchMock.mockResolvedValue(res([{ id: 's1' }]));
+
+      const [a, b] = await Promise.all([client.get('/services'), client.get('/services')]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(a).toEqual([{ id: 's1' }]);
+      expect(b).toBe(a);
+    });
+
+    it('rutas distintas no se mezclan', async () => {
+      const client = new HttpClient();
+      fetchMock.mockImplementation(async (url: string) => res({ url }));
+
+      const [a, b] = await Promise.all([client.get('/a'), client.get('/b')]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(a).not.toEqual(b);
+    });
+
+    it('una vez resuelto, el siguiente GET vuelve a pedir (no cachea)', async () => {
+      const client = new HttpClient();
+      fetchMock.mockResolvedValue(res([]));
+
+      await client.get('/services');
+      await client.get('/services');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('un GET posterior a una escritura NO reutiliza el que estaba en vuelo', async () => {
+      const client = new HttpClient();
+      fetchMock.mockResolvedValue(res({}));
+
+      const antes = client.get('/services');
+      const escritura = client.post('/services', { name: 'x' });
+      const despues = client.get('/services');
+      await Promise.all([antes, escritura, despues]);
+
+      // GET (antes) + POST + GET (después): tres requests, el segundo GET es nuevo.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('un error en el GET compartido llega a todos y no queda pegado', async () => {
+      const client = new HttpClient();
+      fetchMock.mockResolvedValueOnce(res({ error: 'boom' }, { status: 500 }));
+
+      const results = await Promise.allSettled([client.get('/services'), client.get('/services')]);
+      expect(results.every((r) => r.status === 'rejected')).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      fetchMock.mockResolvedValueOnce(res([{ id: 's1' }]));
+      await expect(client.get('/services')).resolves.toEqual([{ id: 's1' }]);
+    });
+  });
+
   describe('verbos HTTP', () => {
     it('put manda method PUT y serializa el body', async () => {
       fetchMock.mockResolvedValue(res({ id: 's1' }));

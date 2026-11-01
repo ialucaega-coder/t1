@@ -11,6 +11,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 vi.mock('@/lib/api/clients', () => ({
   getClients: vi.fn(),
   getClient: vi.fn(),
+  // El embudo se pide aparte del listado (y nunca debe romperlo).
+  getClientFunnel: vi.fn(() =>
+    Promise.resolve({ counts: { NEW: 0, HOT: 0, PAYMENT: 0, CUSTOMER: 0 }, total: 0, stages: [] }),
+  ),
 }));
 
 import { useClients, useClientDetail } from '@/hooks/use-clients';

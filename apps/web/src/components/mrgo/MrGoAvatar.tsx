@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { memo, useId } from 'react';
 import {
   MR_GO_COLORS,
   MR_GO_PETS,
@@ -50,9 +50,9 @@ const EMOTION_ES: Record<MrGoEmotion, string> = {
 function bodySrc(color: MrGoColorKey, emotion: MrGoEmotion): string {
   if (color === 'LILA') {
     const emo = LILA_EMOTION_ASSETS.includes(emotion) ? emotion : 'happy';
-    return `/mrgo/body/LILA_${emo}.png`;
+    return `/mrgo/body/LILA_${emo}.webp`;
   }
-  return `/mrgo/body/${color}.png`;
+  return `/mrgo/body/${color}.webp`;
 }
 
 /** Hash estable [0,1) a partir de un string (para desincronizar la vida por instancia). */
@@ -72,7 +72,7 @@ function hash01(s: string): number {
  * puede montar sobre cualquier superficie. Inspirado en el "blobatar" vivo de la
  * oficina de Munder Difflin (respira/bob/expresión) adaptado a PNG.
  */
-export function MrGoAvatar({
+function MrGoAvatarImpl({
   color,
   emotion = 'happy',
   size = 120,
@@ -189,7 +189,7 @@ export function MrGoAvatar({
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`/mrgo/pet/${resolvedPet}.png`}
+              src={`/mrgo/pet/${resolvedPet}.webp`}
               alt=""
               draggable={false}
               title={`${MR_GO_PETS[resolvedPet].nombre} · ${MR_GO_PETS[resolvedPet].rol}`}
@@ -227,3 +227,7 @@ export function MrGoAvatar({
     </div>
   );
 }
+
+// Props primitivas: con memo, un re-render del padre (p. ej. la página de la oficina)
+// no vuelve a pintar los avatares cuyo color/emoción/tamaño no cambiaron.
+export const MrGoAvatar = memo(MrGoAvatarImpl);

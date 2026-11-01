@@ -170,9 +170,19 @@ router.get(
     const status = req.query.status as string | undefined;
     const channel = req.query.channel as string | undefined;
     const view = normalizeView(req.query.view);
+    // Búsqueda en servidor (nombre / teléfono / email del contacto): el cliente solo
+    // tiene cargada una página, así que filtrar en el navegador no encuentra las demás.
+    const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 100) : '';
 
     const where: Prisma.ConversationWhereInput = { businessId: req.auth!.businessId };
     if (channel) where.channel = channel as Prisma.ConversationWhereInput['channel'];
+    if (search) {
+      where.OR = [
+        { contactName: { contains: search, mode: 'insensitive' } },
+        { contactPhone: { contains: search } },
+        { contactEmail: { contains: search, mode: 'insensitive' } },
+      ];
+    }
 
     // La vista define el estado cuando corresponde (attention = HANDOFF); si no,
     // respetamos el filtro de estado explícito que mande la UI.
@@ -228,16 +238,38 @@ router.get(
   '/:id',
   requireAuth,
   asyncHandler(async (req, res) => {
+    // Paginación de mensajes por cursor (opcional). Sin `limit` devuelve el hilo
+    // completo como siempre. Con `limit` devuelve los N más recientes; `before` (id
+    // de mensaje) trae los N anteriores a ese. Siempre en orden cronológico.
+    const limitRaw = parseInt(req.query.limit as string);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : null;
+    const before = typeof req.query.before === 'string' && req.query.before ? req.query.before : null;
+
     const conversation = await prisma.conversation.findFirst({
       where: { id: req.params.id as string, businessId: req.auth!.businessId },
       include: {
         bot: { select: { name: true, channel: true } },
-        messages: { orderBy: { createdAt: 'asc' } },
+        messages: limit
+          ? {
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              take: limit + 1,
+              ...(before ? { cursor: { id: before }, skip: 1 } : {}),
+            }
+          : { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    let messages = conversation.messages;
+    let hasMoreMessages = false;
+    if (limit) {
+      hasMoreMessages = messages.length > limit;
+      messages = messages.slice(0, limit).reverse();
+    }
     res.json({
       ...conversation,
+      messages,
+      ...(limit ? { hasMoreMessages } : {}),
       displayChannel: displayChannelFor(conversation.channel, conversation.metadata),
     });
   })

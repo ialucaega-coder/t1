@@ -156,7 +156,7 @@ export function AgentCard({
       {/* Encabezado: avatar + nombre + estado */}
       <div className="flex items-start gap-2.5">
         <div className="shrink-0" style={{ opacity: paused ? 0.6 : 1 }}>
-          <MrGoAvatar color={color} emotion={emotion} alive={!paused} size={40} />
+          <MrGoAvatar color={color} emotion={emotion} alive={false} size={40} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

@@ -21,8 +21,8 @@ import {
   Move, RotateCcw, X,
 } from 'lucide-react';
 import { MrGoAvatar } from '@/components/mrgo/MrGoAvatar';
-import { OfficeFloor, buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
-import { useOfficeLife } from '@/components/mrgo/useOfficeLife';
+import { buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo/OfficeFloor';
+import { OfficeFloorLive } from '@/components/mrgo/OfficeFloorLive';
 import { AgentCard } from '@/components/mrgo/AgentCard';
 import { CommandPanel, type CommandPanelAgent } from '@/components/mrgo/CommandPanel';
 import { useAgentActivity } from '@/components/mrgo/useAgentActivity';
@@ -577,14 +577,8 @@ export default function OficinaPage() {
   // Layout del piso + "vida" (los agentes caminan al café / reunión y vuelven).
   // Las posiciones personalizadas pisan el arreglo automático.
   const layout = useMemo(() => buildOfficeLayout(roomAgents, posiciones), [roomAgents, posiciones]);
-  const life = useOfficeLife({
-    keys: roomAgents.map((a) => a.key),
-    deskSpots: layout.deskSpots,
-    coffeeSpot: layout.coffeeSpot,
-    meetingSpots: layout.meetingSpots,
-    paused: pausados,
-    enabled: !editandoPiso, // en edición los avatares no deambulan
-  });
+  // La "vida" (useOfficeLife) vive dentro de <OfficeFloorLive>: cada paseo de un
+  // agente re-renderiza solo el piso, no esta página entera.
 
   /** Pausar / reactivar un agente (foco visual de la oficina). Persiste el nuevo
    *  estado para que las pausas vuelvan igual tras recargar. */
@@ -900,9 +894,11 @@ export default function OficinaPage() {
                 )}
               </div>
 
-              <OfficeFloor
+              <OfficeFloorLive
                 agents={roomAgents}
-                life={life}
+                layout={layout}
+                paused={pausados}
+                lifeEnabled={!editandoPiso} // en edición los avatares no deambulan
                 selectedKey={seleccionado}
                 onSelect={(key) => setSeleccionado((prev) => (prev === key ? null : key))}
                 onOrderAgent={ordenarAAgente}
@@ -1028,7 +1024,7 @@ export default function OficinaPage() {
                               key={a.key}
                               className={`flex items-center gap-2 rounded-lg border border-[#e7e0d2] bg-[#faf7f0] px-2.5 py-1.5 ${paused ? 'opacity-60' : ''}`}
                             >
-                              <MrGoAvatar color={colorOf(a.key)} emotion={emocionDe(a.key)} size={22} alive={!paused} />
+                              <MrGoAvatar color={colorOf(a.key)} emotion={emocionDe(a.key)} size={22} alive={false} />
                               <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#3a322a]">{a.nombre}</span>
                               <span className="shrink-0 font-mono text-[10px] text-[#a99d87]">
                                 {engineByKey.get(a.key)?.model ?? 'motor'}
@@ -1744,7 +1740,7 @@ export default function OficinaPage() {
                           >
                             <span className="flex h-11 items-center justify-center">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={`/mrgo/pet/${p}.png`} alt="" draggable={false} style={{ height: 40, width: 'auto' }} />
+                              <img src={`/mrgo/pet/${p}.webp`} alt="" draggable={false} style={{ height: 40, width: 'auto' }} />
                             </span>
                             <span className="text-[10px] text-[#857a66]">{MR_GO_PETS[p].nombre}</span>
                           </button>

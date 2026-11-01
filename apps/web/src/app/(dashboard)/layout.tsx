@@ -1,6 +1,6 @@
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { Header } from '@/components/dashboard/Header';
-import { WebChat } from '@/components/chat/WebChat';
+import { LazyWebChat } from '@/components/chat/LazyWebChat';
 import { ToastProvider } from '@/components/common/Toast';
 import { RouteGuard } from '@/components/dashboard/RouteGuard';
 
@@ -19,7 +19,7 @@ export default function DashboardLayout({
             <RouteGuard>{children}</RouteGuard>
           </div>
         </main>
-        <WebChat />
+        <LazyWebChat />
       </div>
     </ToastProvider>
   );

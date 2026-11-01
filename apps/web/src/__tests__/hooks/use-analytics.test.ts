@@ -14,6 +14,9 @@ vi.mock('@/lib/api/index', () => ({
     getImprovements: vi.fn(),
     getCosts: vi.fn(),
     getMetrics: vi.fn(),
+    getTimeseries: vi.fn(),
+    getFunnel: vi.fn(),
+    getAttribution: vi.fn(),
   },
 }));
 
@@ -26,6 +29,9 @@ const mockSat = analyticsApi.getSatisfaction as ReturnType<typeof vi.fn>;
 const mockImp = analyticsApi.getImprovements as ReturnType<typeof vi.fn>;
 const mockCosts = analyticsApi.getCosts as ReturnType<typeof vi.fn>;
 const mockMetrics = analyticsApi.getMetrics as ReturnType<typeof vi.fn>;
+const mockTimeseries = analyticsApi.getTimeseries as ReturnType<typeof vi.fn>;
+const mockFunnel = analyticsApi.getFunnel as ReturnType<typeof vi.fn>;
+const mockAttribution = analyticsApi.getAttribution as ReturnType<typeof vi.fn>;
 
 function resolveAll() {
   mockKpi.mockResolvedValue({ total: 10 });
@@ -34,6 +40,9 @@ function resolveAll() {
   mockImp.mockResolvedValue([{ id: 'i1' }]);
   mockCosts.mockResolvedValue([{ provider: 'openai', cost: 3 }]);
   mockMetrics.mockResolvedValue([{ label: 'Latencia', value: '120ms' }]);
+  mockTimeseries.mockResolvedValue([]);
+  mockFunnel.mockResolvedValue([]);
+  mockAttribution.mockResolvedValue([]);
 }
 
 beforeEach(() => {
@@ -48,6 +57,9 @@ describe('hooks/use-analytics', () => {
     mockImp.mockReturnValue(new Promise(() => {}));
     mockCosts.mockReturnValue(new Promise(() => {}));
     mockMetrics.mockReturnValue(new Promise(() => {}));
+    mockTimeseries.mockReturnValue(new Promise(() => {}));
+    mockFunnel.mockReturnValue(new Promise(() => {}));
+    mockAttribution.mockReturnValue(new Promise(() => {}));
 
     const { result } = renderHook(() => useAnalytics());
     expect(result.current.isLoading).toBe(true);
@@ -75,6 +87,9 @@ describe('hooks/use-analytics', () => {
     mockImp.mockResolvedValue([]);
     mockCosts.mockResolvedValue([]);
     mockMetrics.mockResolvedValue([]);
+    mockTimeseries.mockResolvedValue([]);
+    mockFunnel.mockResolvedValue([]);
+    mockAttribution.mockResolvedValue([]);
 
     const { result } = renderHook(() => useAnalytics());
     await waitFor(() => expect(result.current.isLoading).toBe(false));

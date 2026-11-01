@@ -113,23 +113,40 @@ export class HttpClient {
     return res.json();
   }
 
+  // GET en vuelo por (token + ruta). Varios componentes que piden lo mismo a la vez
+  // (p. ej. Header y una página con useNotifications) comparten UN solo request. Se
+  // vacía en cuanto sale una escritura: un GET posterior a un POST/PUT/PATCH/DELETE
+  // nunca reutiliza una respuesta anterior a la escritura.
+  private inflight = new Map<string, Promise<unknown>>();
+
   get<T>(path: string) {
-    return this.request<T>(path);
+    const key = `${this.getToken() ?? ''}|${path}`;
+    const existing = this.inflight.get(key);
+    if (existing) return existing as Promise<T>;
+    const p = this.request<T>(path).finally(() => {
+      if (this.inflight.get(key) === p) this.inflight.delete(key);
+    });
+    this.inflight.set(key, p);
+    return p;
   }
 
   post<T>(path: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'POST', body: JSON.stringify(body), headers }, timeoutMs);
   }
 
   put<T>(path: string, body: unknown) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
   }
 
   patch<T>(path: string, body: unknown) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
   }
 
   delete<T>(path: string) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'DELETE' });
   }
 }
