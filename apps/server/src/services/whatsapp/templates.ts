@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../middleware/errorHandler';
+import { lockSingleton } from '../../lib/singletonLock';
 
 /**
  * Plantillas WhatsApp oficiales (HSM — Highly Structured Messages).
@@ -138,6 +139,7 @@ export async function mutateWaTemplates<T>(
   mutate: (templates: WaTemplate[]) => { templates: WaTemplate[]; result: T },
 ): Promise<T> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, WA_TEMPLATES_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: WA_TEMPLATES_TYPE },
       select: { id: true },

@@ -10,6 +10,7 @@
  * `config Json?`. Mismo patrón que la Voz de Marca y los permisos del equipo.
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const CONNECTION_TYPE = 'INTEGRATION_REQUESTS';
 const CONNECTION_NAME = 'Solicitudes de integración';
@@ -44,6 +45,7 @@ export async function toggleIntegrationRequest(
 ): Promise<string[]> {
   const clean = name.trim().slice(0, 100);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CONNECTION_TYPE },
       select: { id: true },

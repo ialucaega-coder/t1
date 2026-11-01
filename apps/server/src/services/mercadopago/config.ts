@@ -11,6 +11,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/crypto';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const MP_CONNECTION_TYPE = 'MERCADOPAGO';
 const MP_CONNECTION_NAME = 'MercadoPago';
@@ -84,6 +85,7 @@ export async function saveMpConfig(
   patch: { accessToken?: string; currency?: string; enabled?: boolean },
 ): Promise<MpStatus> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, MP_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MP_CONNECTION_TYPE },
       select: { id: true },

@@ -1,3 +1,4 @@
+import { lockSingleton } from '../../lib/singletonLock';
 /**
  * Permisos granulares por miembro del equipo.
  *
@@ -208,6 +209,7 @@ export async function saveMemberPermissions(
   const clean = sanitizeCapabilities(caps);
 
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, PERMISSIONS_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: PERMISSIONS_CONNECTION_TYPE },
       select: { id: true },

@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../lib/prisma', () => ({
   prisma: {
     $transaction: vi.fn(),
+    $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(),
     connection: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
   },

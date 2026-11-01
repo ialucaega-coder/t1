@@ -6,6 +6,7 @@
  * personalizar nombre, saludo, tono, idioma, voz y mensajes del asistente.
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 export interface VoiceSettings {
   /** Si está activo, el asistente atiende llamadas. */
@@ -93,6 +94,7 @@ export async function saveVoiceSettings(
   const defaults = defaultVoiceSettings(business?.name || 'nuestro negocio');
 
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CONNECTION_TYPE },
       select: { id: true },

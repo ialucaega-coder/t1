@@ -21,7 +21,7 @@ vi.mock('../../lib/prisma', () => {
       connection: conn,
       $queryRaw: (...a: unknown[]) => queryRaw(...a),
       $transaction: (cb: (tx: unknown) => unknown) =>
-        cb({ connection: conn, $queryRaw: (...a: unknown[]) => queryRaw(...a) }),
+        cb({ connection: conn, $queryRaw: (...a: unknown[]) => queryRaw(...a), $executeRaw: async () => 1 }),
     },
   };
 });

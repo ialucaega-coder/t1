@@ -11,6 +11,7 @@
  * el campo `config Json?`. Mismo patrón que la Voz de Marca (type='BRAND').
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const SYSTEM_PROMPT_CONNECTION_TYPE = 'SYSTEM_PROMPT';
 const SYSTEM_PROMPT_CONNECTION_NAME = 'Prompt de sistema';
@@ -45,6 +46,7 @@ export async function loadSystemPrompt(businessId: string): Promise<string> {
 export async function saveSystemPrompt(businessId: string, prompt: string): Promise<string> {
   const text = prompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, SYSTEM_PROMPT_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: SYSTEM_PROMPT_CONNECTION_TYPE },
       select: { id: true },

@@ -13,6 +13,7 @@
 import { prisma } from '../../lib/prisma';
 import { loadBrandVoice } from '../brand/config';
 import { loadFaqItems } from '../faq/config';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const ONBOARDING_CONNECTION_TYPE = 'ONBOARDING';
 
@@ -134,6 +135,7 @@ async function isDismissed(businessId: string): Promise<boolean> {
 /** Marca el checklist como oculto/visible para el negocio. */
 export async function setDismissed(businessId: string, dismissed: boolean): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, ONBOARDING_CONNECTION_TYPE);
     const conn = await tx.connection.findFirst({
       where: { businessId, type: ONBOARDING_CONNECTION_TYPE },
       select: { id: true },

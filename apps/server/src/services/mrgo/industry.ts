@@ -14,6 +14,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import { INDUSTRY_TEMPLATES, getIndustryTemplate } from '../../constants/industryTemplates';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const MRGO_INDUSTRY_TYPE = 'MRGO_INDUSTRY';
 const MRGO_INDUSTRY_NAME = 'Giro de Mr Go';
@@ -52,6 +53,7 @@ export async function loadIndustry(businessId: string): Promise<IndustryState> {
 export async function saveIndustry(businessId: string, input: unknown): Promise<IndustryState> {
   const clean = sanitizeIndustry(input);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, MRGO_INDUSTRY_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MRGO_INDUSTRY_TYPE },
       select: { id: true },

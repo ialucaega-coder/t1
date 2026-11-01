@@ -14,6 +14,7 @@
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma';
 import { sharedTryLock } from '../lib/sharedState';
+import { runPurge } from './maintenance/purge';
 import {
   generateDailyReport,
   generateReminders,
@@ -222,5 +223,12 @@ export function startScheduler(): void {
     runExclusive('post-sale', runPostSaleFollowUps).catch((err) => console.error('[scheduler] runPostSaleFollowUps:', err));
   });
 
-  console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00, post-venta 11:00)');
+  // Purga de OTP vencidos y claves de idempotencia viejas, a las 04:00 (poco tráfico).
+  cron.schedule('0 4 * * *', () => {
+    runExclusive('purge', async () => {
+      await runPurge();
+    }).catch((err) => console.error('[scheduler] runPurge:', err));
+  });
+
+  console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00, post-venta 11:00, purga 04:00)');
 }

@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../lib/prisma', () => ({
   prisma: {
     connection: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
+    $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),
   },
@@ -16,7 +17,7 @@ vi.mock('../../lib/prisma', () => ({
 
 import { prisma } from '../../lib/prisma';
 import { cache } from '../../lib/cache';
-import { isSessionRevoked, revokeUserSessions } from '../../services/auth/revocation';
+import { isSessionRevoked, revokeUserSessions, pruneExpired, jwtLifetimeMs } from '../../services/auth/revocation';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -77,5 +78,67 @@ describe('services/auth/revocation', () => {
     // La caché quedó refrescada: un token anterior al corte ya lee revocado sin ir a DB.
     const iatAntes = Math.floor((cutoff - 1000) / 1000);
     expect(await isSessionRevoked('biz_9', 'u1', iatAntes)).toBe(true);
+  });
+
+  it('revokeUserSessions toma el lock de creación ANTES de buscar la fila', async () => {
+    const order: string[] = [];
+    mock(prisma.$executeRaw).mockImplementation(async () => {
+      order.push('lock');
+      return 1;
+    });
+    mock(prisma.connection.findFirst).mockImplementation(async () => {
+      order.push('findFirst');
+      return { id: 'c1' };
+    });
+    mock(prisma.connection.findUnique).mockResolvedValue({ config: { validFrom: {} } });
+    mock(prisma.connection.update).mockResolvedValue({ id: 'c1' });
+    await revokeUserSessions('biz_lock', 'u1');
+    expect(order.slice(0, 2)).toEqual(['lock', 'findFirst']);
+  });
+
+  it('revokeUserSessions poda cortes más viejos que la vida del JWT y conserva los vigentes', async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(prisma.connection.findUnique).mockResolvedValue({
+      config: { validFrom: { viejo: Date.now() - 40 * DAY, reciente: Date.now() - 2 * DAY } },
+    });
+    mock(prisma.connection.update).mockResolvedValue({ id: 'c1' });
+    await revokeUserSessions('biz_prune', 'u1');
+    const saved = mock(prisma.connection.update).mock.calls[0][0] as {
+      data: { config: { validFrom: Record<string, number> } };
+    };
+    expect(Object.keys(saved.data.config.validFrom).sort()).toEqual(['reciente', 'u1']);
+  });
+});
+
+describe('services/auth/revocation — poda y vida del JWT', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  it('jwtLifetimeMs: default 14 d, entiende unidades y números, y ante lo desconocido no poda nunca', () => {
+    expect(jwtLifetimeMs(undefined)).toBe(14 * DAY);
+    expect(jwtLifetimeMs('7d')).toBe(7 * DAY);
+    expect(jwtLifetimeMs('12h')).toBe(12 * 3600_000);
+    expect(jwtLifetimeMs('3600')).toBe(3600_000);
+    expect(jwtLifetimeMs('30 days')).toBe(Infinity);
+  });
+
+  it('pruneExpired conserva el corte vigente y descarta el inerte', () => {
+    expect(pruneExpired({ a: now - 2 * DAY, b: now - 20 * DAY }, now)).toEqual({ a: now - 2 * DAY });
+  });
+
+  it('pruneExpired nunca poda al usuario que se está revocando', () => {
+    expect(pruneExpired({ a: now - 90 * DAY }, now, 'a')).toEqual({ a: now - 90 * DAY });
+  });
+
+  it('con una duración de JWT desconocida no se poda nada (no revive tokens revocados)', () => {
+    const prev = process.env.JWT_EXPIRES_IN;
+    process.env.JWT_EXPIRES_IN = '30 days';
+    try {
+      expect(pruneExpired({ a: now - 400 * DAY }, now)).toEqual({ a: now - 400 * DAY });
+    } finally {
+      if (prev === undefined) delete process.env.JWT_EXPIRES_IN;
+      else process.env.JWT_EXPIRES_IN = prev;
+    }
   });
 });

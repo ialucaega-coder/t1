@@ -14,6 +14,7 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(),
       update: vi.fn(),
     },
+    $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(),
   },
 }));

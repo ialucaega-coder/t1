@@ -1,3 +1,4 @@
+import { lockSingleton } from '../../lib/singletonLock';
 /**
  * Servicio de "Voz de Marca".
  *
@@ -72,6 +73,7 @@ export async function loadBrandVoice(businessId: string): Promise<BrandVoice> {
  */
 export async function saveBrandVoice(businessId: string, patch: Partial<BrandVoice>): Promise<BrandVoice> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, BRAND_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: BRAND_CONNECTION_TYPE },
       select: { id: true },

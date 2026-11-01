@@ -9,6 +9,7 @@
 import { randomBytes, timingSafeEqual } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/crypto';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const MC_CONNECTION_TYPE = 'MANYCHAT';
 const MC_CONNECTION_NAME = 'ManyChat';
@@ -92,6 +93,7 @@ export async function saveMcConfig(
   patch: { apiKey?: string; enabled?: boolean },
 ): Promise<McStatus> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, MC_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MC_CONNECTION_TYPE },
       select: { id: true },
@@ -176,6 +178,7 @@ export async function verifyMcWebhookToken(businessId: string, token: string | u
  */
 export async function regenerateMcWebhookToken(businessId: string): Promise<McStatus | null> {
   const ok = await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, MC_CONNECTION_TYPE);
     const conn = await tx.connection.findFirst({
       where: { businessId, type: MC_CONNECTION_TYPE },
       select: { id: true },

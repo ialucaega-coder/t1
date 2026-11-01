@@ -17,6 +17,7 @@ import jwt from 'jsonwebtoken';
 vi.mock('../../lib/prisma', () => ({
   prisma: {
     $transaction: vi.fn(),
+    $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(),
     connection: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
   },

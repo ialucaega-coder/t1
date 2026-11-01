@@ -19,6 +19,7 @@
  * concurrentes (lost-update).
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const MRGO_CONNECTION_TYPE = 'MRGO_AGENTS';
 const MRGO_CONNECTION_NAME = 'Agentes de Mr Go';
@@ -319,6 +320,7 @@ export async function loadAgents(businessId: string): Promise<AgentConfig[]> {
 export async function saveAgents(businessId: string, agents: unknown): Promise<AgentConfig[]> {
   const clean = sanitizeAgents(agents);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, MRGO_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: MRGO_CONNECTION_TYPE },
       select: { id: true },

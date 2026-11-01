@@ -10,6 +10,7 @@
  * (type='BRAND') y los permisos de equipo (type='TEAM_PERMISSIONS').
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const WHITELABEL_CONNECTION_TYPE = 'WHITELABEL_UI';
 const WHITELABEL_CONNECTION_NAME = 'Panel White Label';
@@ -88,6 +89,7 @@ export async function saveWhitelabelUi(
   patch: Partial<WhitelabelUi>,
 ): Promise<WhitelabelUi> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, WHITELABEL_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: WHITELABEL_CONNECTION_TYPE },
       select: { id: true },

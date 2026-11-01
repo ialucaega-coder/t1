@@ -1,3 +1,4 @@
+import { lockSingleton } from '../../lib/singletonLock';
 import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
@@ -91,6 +92,7 @@ async function mutateGallery<T>(
   mutate: (items: GalleryItem[]) => { items: GalleryItem[]; result: T }
 ): Promise<T> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, GALLERY_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: GALLERY_TYPE },
       select: { id: true },

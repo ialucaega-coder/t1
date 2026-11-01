@@ -1,3 +1,4 @@
+import { lockSingleton } from '../lib/singletonLock';
 /**
  * Rutas del Super Admin (panel del DUEÑO de la plataforma). Son cross-tenant:
  * operan sobre TODOS los negocios, no sobre el del token. El aislamiento por
@@ -251,6 +252,7 @@ router.put(
     // Lock de fila (SELECT ... FOR UPDATE) para no pisar un guardado concurrente,
     // mismo patrón que services/team/permissions.ts y services/auth/revocation.ts.
     await prisma.$transaction(async (tx) => {
+      await lockSingleton(tx, businessId, FEATURE_FLAGS_TYPE);
       let conn = await tx.connection.findFirst({
         where: { businessId, type: FEATURE_FLAGS_TYPE },
         select: { id: true },

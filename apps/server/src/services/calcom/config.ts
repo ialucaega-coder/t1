@@ -11,6 +11,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/crypto';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const CALCOM_CONNECTION_TYPE = 'CALCOM';
 const CALCOM_CONNECTION_NAME = 'Cal.com';
@@ -83,6 +84,7 @@ export async function saveCalcomConfig(
   patch: { apiKey?: string; eventTypeId?: number | null; enabled?: boolean },
 ): Promise<CalcomStatus> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, CALCOM_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CALCOM_CONNECTION_TYPE },
       select: { id: true },

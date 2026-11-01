@@ -29,6 +29,7 @@ vi.mock('../../lib/prisma', () => ({
     subscription: { upsert: vi.fn() },
     connection: { findFirst: vi.fn() },
     $transaction: vi.fn(),
+    $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(),
   },
 }));
@@ -297,6 +298,7 @@ describe('routes/platform (Super Admin)', () => {
           findFirst: vi.fn().mockResolvedValue({ id: 'conn_1' }),
           update: vi.fn().mockResolvedValue({}),
         },
+        $executeRaw: vi.fn(async () => 1),
         $queryRaw: vi.fn().mockResolvedValue([]),
       };
       mock(prisma.$transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));

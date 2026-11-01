@@ -11,12 +11,15 @@
  * `config Json?`. Mismo patrón que la Voz de Marca (BRAND) y la FAQ (FAQ_KB).
  *
  * Nota de escala: es un único JSON por negocio. Para volúmenes de beta/PyME
- * (cientos a pocos miles de clientes) es más que suficiente; si un negocio
- * creciera a decenas de miles de clientes etiquetados, esto migraría a tablas
- * propias (requiere descongelar el schema; ver project_localb_constraints).
+ * (cientos a pocos miles de clientes) es más que suficiente. Tope: MAX_CRM_CLIENTS
+ * clientes con etiquetas/notas (ver limits.ts; se poda a los clientes borrados
+ * antes de rechazar). Más allá de eso, esto migraría a tablas propias (requiere
+ * descongelar el schema; ver project_localb_constraints).
  */
 import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
+import { enforceClientMapLimit, MAX_CRM_CLIENTS } from './limits';
 
 const CRM_CONNECTION_TYPE = 'CLIENT_CRM';
 const CRM_CONNECTION_NAME = 'CRM de clientes';
@@ -132,6 +135,7 @@ export async function loadClientCrm(businessId: string): Promise<ClientCrm> {
 
 async function persist(businessId: string, mutate: (current: ClientCrm) => ClientCrm): Promise<ClientCrm> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, CRM_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CRM_CONNECTION_TYPE },
       select: { id: true },
@@ -158,7 +162,15 @@ async function persist(businessId: string, mutate: (current: ClientCrm) => Clien
     // miembros del equipo etiquetando a la vez). Mismo patrón que brand/faq.
     await tx.$queryRaw`SELECT id FROM "connections" WHERE id = ${conn.id} FOR UPDATE`;
     const fresh = await tx.connection.findUnique({ where: { id: conn.id }, select: { config: true } });
-    const next = mutate(sanitizeCrm(fresh?.config));
+    const current = sanitizeCrm(fresh?.config);
+    let next = mutate(current);
+    // Tope solo cuando el guardado suma clientes al mapa (poda huérfanos antes de rechazar).
+    if (Object.keys(next.byClient).length > Object.keys(current.byClient).length) {
+      next = {
+        ...next,
+        byClient: await enforceClientMapLimit(tx, businessId, next.byClient, MAX_CRM_CLIENTS, '', 'etiquetas o notas'),
+      };
+    }
     await tx.connection.update({
       where: { id: conn.id },
       data: { config: next as unknown as object, isActive: true },

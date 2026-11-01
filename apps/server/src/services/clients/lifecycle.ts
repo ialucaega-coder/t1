@@ -17,6 +17,8 @@
  * la etapa por defecto para mantener el JSON chico).
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
+import { enforceClientMapLimit, MAX_LIFECYCLE_CLIENTS } from './limits';
 
 const LIFECYCLE_CONNECTION_TYPE = 'CRM_LIFECYCLE';
 const LIFECYCLE_CONNECTION_NAME = 'Ciclo de vida de clientes';
@@ -98,6 +100,7 @@ export async function setClientStage(
   const clean = normalizeStage(stage);
 
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, LIFECYCLE_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: LIFECYCLE_CONNECTION_TYPE },
       select: { id: true },
@@ -125,15 +128,21 @@ export async function setClientStage(
     const fresh = await tx.connection.findUnique({ where: { id: conn.id }, select: { config: true } });
     const stages = sanitizeLifecycleMap(fresh?.config);
 
+    let next: LifecycleMap = stages;
     if (clean === DEFAULT_STAGE) {
       delete stages[clientId];
     } else {
+      const isNewEntry = stages[clientId] === undefined;
       stages[clientId] = clean;
+      // Tope solo al sumar una entrada nueva (poda huérfanos antes de rechazar).
+      if (isNewEntry) {
+        next = await enforceClientMapLimit(tx, businessId, stages, MAX_LIFECYCLE_CLIENTS, clientId, 'etapa en el embudo');
+      }
     }
 
     await tx.connection.update({
       where: { id: conn.id },
-      data: { config: { stages } as unknown as object, isActive: true },
+      data: { config: { stages: next } as unknown as object, isActive: true },
     });
   });
 

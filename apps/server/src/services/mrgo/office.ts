@@ -15,6 +15,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import { AGENT_KEYS } from './agents';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const OFFICE_CONNECTION_TYPE = 'MRGO_OFFICE';
 const OFFICE_CONNECTION_NAME = 'Oficina de Mr Go';
@@ -92,6 +93,7 @@ export async function loadOffice(businessId: string): Promise<OfficeState> {
 export async function saveOffice(businessId: string, office: unknown): Promise<OfficeState> {
   const clean = sanitizeOffice(office);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, OFFICE_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: OFFICE_CONNECTION_TYPE },
       select: { id: true },

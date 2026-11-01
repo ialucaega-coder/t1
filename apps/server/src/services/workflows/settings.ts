@@ -23,6 +23,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import type { ExecMode } from '../actions/executor';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const SETTINGS_CONNECTION_TYPE = 'AUTOMATION_SETTINGS';
 const SETTINGS_CONNECTION_NAME = 'Ajustes de automatización';
@@ -56,6 +57,7 @@ export async function getAutomationMode(businessId: string): Promise<ExecMode> {
  */
 export async function setAutomationLive(businessId: string, live: boolean): Promise<boolean> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, SETTINGS_CONNECTION_TYPE);
     const conn = await tx.connection.findFirst({
       where: { businessId, type: SETTINGS_CONNECTION_TYPE },
       select: { id: true },

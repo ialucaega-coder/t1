@@ -13,6 +13,7 @@
  */
 import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const FAQ_CONNECTION_TYPE = 'FAQ_KB';
 const FAQ_CONNECTION_NAME = 'Base de conocimiento';
@@ -83,6 +84,7 @@ export async function loadFaqItems(businessId: string): Promise<FaqItem[]> {
 export async function saveFaqItems(businessId: string, items: unknown): Promise<FaqItem[]> {
   const clean = sanitizeFaqItems(items);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, FAQ_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: FAQ_CONNECTION_TYPE },
       select: { id: true },

@@ -22,6 +22,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import { cache, cacheKey } from '../../lib/cache';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const REVOCATION_TYPE = 'SESSION_REVOCATION';
 const REVOCATION_NAME = 'Revocación de sesiones';
@@ -45,6 +46,38 @@ function normalize(config: unknown): ValidFromMap {
   const out: ValidFromMap = {};
   for (const [uid, ts] of Object.entries(raw)) {
     if (typeof ts === 'number' && ts > 0) out[uid] = ts;
+  }
+  return out;
+}
+
+/**
+ * Vida máxima de un JWT (mismo `JWT_EXPIRES_IN` que usa routes/auth.ts). Acepta
+ * segundos (número) o `<n><s|m|h|d|w|y>`. Ante un formato que no entendemos devuelve
+ * Infinity (= no podar nunca): preferible a podar de más y revivir un token revocado.
+ */
+export function jwtLifetimeMs(raw: string | undefined = process.env.JWT_EXPIRES_IN): number {
+  const DEFAULT = 14 * 24 * 60 * 60 * 1000;
+  if (!raw) return DEFAULT;
+  const m = /^(\d+)\s*([smhdwy]?)$/i.exec(raw.trim());
+  if (!m) return Infinity;
+  const unit = { '': 1000, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000, y: 31_536_000_000 }[
+    m[2].toLowerCase() as '' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'
+  ];
+  return Number(m[1]) * unit;
+}
+
+/**
+ * Descarta cortes que ya no pueden afectar a ningún token: todo token emitido
+ * antes de un corte vence a más tardar `corte + vida del JWT`, así que pasado ese
+ * plazo (más un día de margen) la entrada es inerte. Es poda exacta: no cambia qué
+ * tokens se consideran revocados. Sin esto el mapa crece con cada usuario que alguna
+ * vez cerró sesión. `keepUserId` (el que se está revocando ahora) nunca se poda.
+ */
+export function pruneExpired(map: ValidFromMap, now: number, keepUserId?: string): ValidFromMap {
+  const horizon = now - jwtLifetimeMs() - 24 * 60 * 60 * 1000;
+  const out: ValidFromMap = {};
+  for (const [uid, ts] of Object.entries(map)) {
+    if (ts >= horizon || uid === keepUserId) out[uid] = ts;
   }
   return out;
 }
@@ -106,6 +139,7 @@ export async function revokeUserSessions(
   cutoffMs: number = Date.now()
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, REVOCATION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: REVOCATION_TYPE },
       select: { id: true },
@@ -129,7 +163,7 @@ export async function revokeUserSessions(
     }
 
     const fresh = await tx.connection.findUnique({ where: { id: conn.id }, select: { config: true } });
-    const map = normalize(fresh?.config);
+    const map = pruneExpired(normalize(fresh?.config), Date.now(), userId);
     map[userId] = cutoffMs;
 
     await tx.connection.update({

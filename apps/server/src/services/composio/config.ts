@@ -9,6 +9,7 @@
  */
 import { prisma } from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/crypto';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const CMP_CONNECTION_TYPE = 'COMPOSIO';
 const CMP_CONNECTION_NAME = 'Composio';
@@ -71,6 +72,7 @@ export async function saveCmpConfig(
   patch: { apiKey?: string; enabled?: boolean },
 ): Promise<CmpStatus> {
   await prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, CMP_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: CMP_CONNECTION_TYPE },
       select: { id: true },

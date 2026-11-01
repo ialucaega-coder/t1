@@ -13,6 +13,7 @@
  * patrón (tx + SELECT ... FOR UPDATE) que el resto de los módulos de Mr Go.
  */
 import { prisma } from '../../lib/prisma';
+import { lockSingleton } from '../../lib/singletonLock';
 
 const MEMORY_CONNECTION_TYPE = 'MRGO_MEMORY';
 const MEMORY_CONNECTION_NAME = 'Memoria de Mr Go';
@@ -61,6 +62,7 @@ export async function loadMemory(businessId: string): Promise<MrGoMemory> {
 /** Persiste la memoria completa (atómico, FOR UPDATE). Devuelve lo que quedó. */
 export async function saveMemory(businessId: string, input: Partial<MrGoMemory>): Promise<MrGoMemory> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, MEMORY_CONNECTION_TYPE);
     const existing = await tx.connection.findFirst({
       where: { businessId, type: MEMORY_CONNECTION_TYPE },
       select: { id: true },

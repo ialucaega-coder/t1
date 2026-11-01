@@ -1,3 +1,4 @@
+import { lockSingleton } from '../../lib/singletonLock';
 /**
  * Workflows / automatización (reglas trigger → condición → acción).
  *
@@ -159,6 +160,7 @@ export async function loadWorkflows(businessId: string): Promise<WorkflowRule[]>
 export async function saveWorkflows(businessId: string, rules: unknown): Promise<WorkflowRule[]> {
   const clean = sanitizeRules(rules);
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, WORKFLOWS_CONNECTION_TYPE);
     let conn = await tx.connection.findFirst({
       where: { businessId, type: WORKFLOWS_CONNECTION_TYPE },
       select: { id: true },
@@ -213,6 +215,7 @@ async function mutateRules(
   mutator: (current: WorkflowRule[]) => WorkflowRule[],
 ): Promise<WorkflowRule[]> {
   return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, WORKFLOWS_CONNECTION_TYPE);
     const existing = await tx.connection.findFirst({
       where: { businessId, type: WORKFLOWS_CONNECTION_TYPE },
       select: { id: true },

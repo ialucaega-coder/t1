@@ -13,6 +13,7 @@ vi.mock('../../lib/prisma', () => ({
     service: { count: vi.fn() },
     teamMember: { count: vi.fn() },
     user: { count: vi.fn() },
+    $executeRaw: vi.fn(async () => 1),
     $transaction: vi.fn(),
   },
 }));
