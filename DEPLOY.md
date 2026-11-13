@@ -50,7 +50,7 @@ sección detallada más abajo.
    `DIRECT_URL`, `NEXTAUTH_SECRET`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY` (o el
    proveedor IA elegido), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`,
    `TWILIO_*`, `RESEND_API_KEY`, `SENTRY_DSN`, `TRUST_PROXY_HOPS=1`,
-   `FRONTEND_URLS`. Opcional: `REDIS_URL` (solo si corrés 2+ instancias). Ver §3.
+   `FRONTEND_URLS`. `REDIS_URL` obligatorio si corrés 2+ instancias. Ver §3.
 4. **Secrets del frontend** (Vercel): `NEXT_PUBLIC_API_URL` (apuntando al backend),
    `NEXTAUTH_SECRET` (mismo valor que el backend), `NEXT_PUBLIC_*` necesarios. Ver §2.
 5. **Deploy**: push a `main` dispara el CI → build + deploy de web (Vercel) y
@@ -184,29 +184,52 @@ Config de producción a no olvidar (además de los secrets):
   reservas públicas (requiere Twilio configurado).
 - **`SKIP_WEBHOOK_SIGNATURE_VALIDATION`** — dejar **sin setear** en producción.
   Los webhooks validan firma por defecto; esta variable solo la saltea en dev/test.
-- **`RUN_SCHEDULER`** — el scheduler de superpoderes (reportes/recordatorios
-  diarios) usa `node-cron` en memoria del proceso. Con **una sola instancia** no
-  hace falta tocar nada (corre por defecto). Si escalás horizontalmente a más de
-  una instancia, poné **`RUN_SCHEDULER=false` en todas menos una**, o cada
-  instancia disparará los jobs y duplicará las notificaciones diarias.
-- **`REDIS_URL`** — **opcional**, para escalado horizontal (ver abajo).
+- **`RUN_SCHEDULER`** — el scheduler de superpoderes (reportes, recordatorios,
+  no-shows, post-venta y purga nocturna) usa `node-cron` en cada proceso, pero cada
+  disparo toma un lock por (job, día) en el almacén compartido: con `REDIS_URL`
+  corre **una sola vez** aunque haya N instancias. Ya no hace falta apagarlo en las
+  demás; `RUN_SCHEDULER=false` sirve solo para dejar una instancia fuera de los jobs.
+  Sin Redis, con 2+ instancias cada una tiene su lock local y los jobs **se
+  duplicarían**: usá Redis.
+- **`REDIS_URL`** — opcional con una instancia; **obligatorio con 2+** (ver abajo).
 
 ### Escalado horizontal (múltiples instancias)
 
 Con **una sola instancia** no hace falta nada: todo funciona con los fallbacks
-en memoria. Al correr **2+ réplicas** detrás de un balanceador, seteá
-**`REDIS_URL`** (ej. Memorystore en GCP) en todas las instancias para que:
+en memoria y las colas corren inline. Al correr **2+ réplicas** detrás de un
+balanceador, **`REDIS_URL` es obligatorio** (ej. Memorystore en GCP) en todas las
+instancias. Con Redis:
 
-- **Rate limiting** sea distribuido — el conteo por IP se comparte entre réplicas
-  (`INCR`/`PEXPIRE` en Redis). Sin Redis, cada proceso cuenta por separado, así
-  que el límite efectivo se multiplica por la cantidad de instancias. Si Redis se
-  cae, el limitador degrada *fail-open* (permite) para no tumbar la API.
-- **Socket.IO** replique los eventos en tiempo real entre réplicas (adaptador
-  Redis). Sin esto, un `emit` solo llega a los clientes conectados a la misma
-  instancia que lo emitió; con varias réplicas, se perderían notificaciones.
+- **Rate limiting** distribuido: el conteo por IP y el límite por negocio en los
+  endpoints de IA (`tenantRateLimit`) se comparten entre réplicas. Si Redis cae,
+  degrada *fail-open* (permite) para no tumbar la API.
+- **Socket.IO** replica los eventos entre réplicas (adaptador Redis).
+- **Estado compartido** (`lib/sharedState`): reservas de Telegram, contadores de
+  abuso (chat público, OTP, ManyChat), locks de jobs y restauración de webhooks.
+- **Colas BullMQ** (`lib/queue`): los webhooks de WhatsApp y Meta, las
+  automatizaciones y los envíos de campañas se encolan y los procesa un worker, en
+  vez de correr dentro del request del webhook. Sin Redis corren inline.
 
-Checklist multi-instancia: `REDIS_URL` en todas + `RUN_SCHEDULER=false` en todas
-menos una + `TRUST_PROXY_HOPS=1`.
+Variables de escalado:
+
+| Variable | Dónde | Para qué |
+|---|---|---|
+| `REDIS_URL` | server | Obligatoria con 2+ instancias. |
+| `RUN_WORKERS=false` | server | Esa instancia **solo encola** (no procesa). Al menos UNA instancia con Redis debe tener workers (default `true`), o los webhooks encolados no se procesan. |
+| `QUEUES_DISABLED=true` | server | Fuerza el modo inline aunque haya Redis (debug). |
+| `TRUST_PROXY_HOPS=1` | server | Detrás de Cloud Run, para que el rate limit vea la IP real. |
+| `RUN_SCHEDULER=false` | server | Opcional: deja la instancia fuera de los jobs diarios. |
+| `LLM_TIMEOUT_MS` | server | Timeout por llamada al proveedor de IA (default 30000). |
+| `IDEMPOTENCY_TTL_DAYS` | server | Días que se conservan las claves de idempotencia antes de purgarlas (default 30). |
+| `NEXT_PUBLIC_SOCKET_TRANSPORTS=websocket` | web (build) | Sin *sticky sessions* en el balanceador el *long-polling* se rompe entre réplicas: forzá solo WebSocket (default `websocket,polling`). |
+| `connection_limit=5` en `DATABASE_URL` | server | Pool **por instancia**: `instancias × connection_limit` debe quedar bajo el máximo del pooler de Supabase. |
+
+Checklist multi-instancia: `REDIS_URL` en todas + al menos una instancia con
+workers + `TRUST_PROXY_HOPS=1` + `connection_limit` calculado +
+`NEXT_PUBLIC_SOCKET_TRANSPORTS=websocket` si no hay sticky sessions.
+
+Mantenimiento automático: a las 04:00 el scheduler purga los OTP vencidos y las
+claves de idempotencia viejas (una sola vez por día entre todas las instancias).
 
 ### Base de datos y migraciones
 
