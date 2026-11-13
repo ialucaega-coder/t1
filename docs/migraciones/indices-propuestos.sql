@@ -1,6 +1,9 @@
 -- =====================================================================
 -- BORRADOR de migración de índices (Ola de escalabilidad) — NO APLICADO
 -- =====================================================================
+-- IMPORTANTE: antes de esto aplicar docs/migraciones/indices-faltantes-schema.sql
+-- (27 índices que el schema ya declara y la base real no tiene; incluye connections
+-- (businessId,type), base de varias consultas de este borrador).
 -- Estado: propuesta para PR. El schema de Prisma está congelado: nada de esto
 -- se aplica sin aprobación del dueño. No se tocó prisma/.
 --
@@ -33,6 +36,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS businesses_whatsapp_number_idx
 -- ---------------------------------------------------------------------
 -- messages: hilo por conversación (cursor del inbox: orderBy createdAt desc, id desc).
 -- Si ya existe (conversationId, createdAt) este es redundante: revisar antes.
+-- (Ya cubierto por messages(conversationId, createdAt) de indices-faltantes-schema.sql; no hace falta este.)
 -- CREATE INDEX CONCURRENTLY IF NOT EXISTS messages_conversation_created_idx
 --   ON "messages" ("conversationId", "createdAt" DESC, "id" DESC);
 
