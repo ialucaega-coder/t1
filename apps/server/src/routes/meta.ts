@@ -21,6 +21,7 @@ import {
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { requireAuth } from '../middleware/auth';
 import { defineQueue, enqueue } from '../lib/queue';
+import { lockSingleton } from '../lib/singletonLock';
 
 // ────────────────────────────────────────────────────────────────
 // Rutas de Meta (Instagram Direct + Facebook Messenger).
@@ -246,24 +247,28 @@ router.post(
       connectedAt: new Date().toISOString(),
     };
 
-    const existing = await prisma.connection.findFirst({ where: { businessId, type }, orderBy: { id: 'asc' } });
-    if (existing) {
-      await prisma.connection.update({
-        where: { id: existing.id },
-        data: { config, isActive: true, name: `${label} — ${pageName || (igId ?? pageId)}` },
-      });
-    } else {
-      await prisma.connection.create({
-        data: {
-          name: `${label} — ${pageName || (igId ?? pageId)}`,
-          type,
-          icon: platform === 'instagram' ? 'Instagram' : 'MessageCircle',
-          config,
-          isActive: true,
-          businessId,
-        },
-      });
-    }
+    // Con lock por (negocio, type): dos "conectar" simultáneos no duplican la fila.
+    await prisma.$transaction(async (tx) => {
+      await lockSingleton(tx, businessId, type);
+      const existing = await tx.connection.findFirst({ where: { businessId, type }, orderBy: { id: 'asc' } });
+      if (existing) {
+        await tx.connection.update({
+          where: { id: existing.id },
+          data: { config, isActive: true, name: `${label} — ${pageName || (igId ?? pageId)}` },
+        });
+      } else {
+        await tx.connection.create({
+          data: {
+            name: `${label} — ${pageName || (igId ?? pageId)}`,
+            type,
+            icon: platform === 'instagram' ? 'Instagram' : 'MessageCircle',
+            config,
+            isActive: true,
+            businessId,
+          },
+        });
+      }
+    });
 
     res.json({ success: true, platform, botId: bot.id });
   }),

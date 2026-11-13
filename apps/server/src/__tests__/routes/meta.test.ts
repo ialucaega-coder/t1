@@ -15,6 +15,12 @@ vi.mock('../../lib/prisma', () => ({
     connection: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
     bot: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
     conversation: { findFirst: vi.fn() },
+    $executeRaw: vi.fn(async () => 1),
+    // $transaction ejecuta el callback con el mismo `prisma` mockeado como `tx`.
+    $transaction: vi.fn(async function (this: unknown, cb: (tx: unknown) => unknown) {
+      const { prisma } = await import('../../lib/prisma');
+      return cb(prisma);
+    }),
   },
 }));
 

@@ -74,7 +74,7 @@ Tamaños: S = horas, M = 1–2 días, L = varios días.
 
 **Estado:** 6.1, 6.2 y 6.3 hechos; 6.4 queda pendiente (requiere descongelar el schema).
 - 6.1: revocación de sesiones poda cortes más viejos que la vida del JWT (`JWT_EXPIRES_IN`; si el formato no se entiende, no poda). CRM (10.000 clientes) y lifecycle (20.000) tienen tope solo al **sumar** clientes: antes de rechazar con 409 podan clientes borrados; nunca recortan datos existentes.
-- 6.2: `lib/singletonLock.ts` toma un advisory lock por (negocio, type) al inicio de cada transacción que hace `findFirst`+`create` de una `Connection` singleton (24 sitios). Queda sin cubrir `routes/meta.ts` (alta de página/IG, no transaccional).
+- 6.2: `lib/singletonLock.ts` toma un advisory lock por (negocio, type) al inicio de cada transacción que hace `findFirst`+`create` de una `Connection` singleton (24 sitios). `routes/meta.ts` (alta de página/IG) también quedó cubierto.
 - 6.3: `services/maintenance/purge.ts`, cron 04:00 con lock por día: OTP vencidos hace más de 1 h y claves de idempotencia de más de 30 días (`IDEMPOTENCY_TTL_DAYS`). `Connection` no tiene `createdAt`; la antigüedad sale de la fecha embebida en el id cuid.
 
 ## Migraciones gateadas (requieren PR + migración, el schema sigue congelado hasta aprobarlo)
