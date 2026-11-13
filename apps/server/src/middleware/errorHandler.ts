@@ -100,6 +100,23 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
+  // Errores del body-parser (cuerpo demasiado grande, JSON mal formado, charset/encoding no
+  // soportado): son culpa del cliente, no del server. Antes caían como 500 + Sentry.
+  const bodyErr = err as { status?: unknown; type?: unknown } | null;
+  if (
+    err instanceof Error &&
+    typeof bodyErr?.type === 'string' &&
+    /^(entity|encoding|charset|request)\./.test(bodyErr.type) &&
+    typeof bodyErr.status === 'number' &&
+    bodyErr.status >= 400 &&
+    bodyErr.status < 500
+  ) {
+    res.status(bodyErr.status).json({
+      error: bodyErr.status === 413 ? 'Payload demasiado grande' : 'Solicitud inválida',
+    });
+    return;
+  }
+
   console.error('Unhandled error:', err);
   if (err instanceof Error) {
     Sentry.captureException(err);

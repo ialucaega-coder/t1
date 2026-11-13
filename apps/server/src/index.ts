@@ -78,6 +78,7 @@ import {
   csrfProtection,
   issueCsrfToken,
 } from './middleware/security';
+import { publicBodySizeGuard, jsonBodyParser } from './middleware/bodyLimits';
 import { auditDataMutations, auditRateLimitViolations } from './middleware/audit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { Sentry } from './lib/sentry';
@@ -221,14 +222,13 @@ app.use(validateRequestSize({ maxBodyBytes: 5 * 1024 * 1024 })); // 5 MB
 // This must be registered BEFORE express.json() parses the body.
 app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
 
+// Límite de cuerpo por ruta: 100 KB en las públicas (sin sesión), 5 MB en el resto.
+app.use(publicBodySizeGuard);
 app.use(
-  express.json({
-    limit: '5mb',
+  jsonBodyParser((req, _res, buf) => {
     // Guardamos el cuerpo crudo para validar la firma HMAC del webhook de Meta
     // (X-Hub-Signature-256 se calcula sobre los bytes exactos, no el JSON parseado).
-    verify: (req, _res, buf) => {
-      (req as typeof req & { rawBody?: Buffer }).rawBody = buf;
-    },
+    (req as typeof req & { rawBody?: Buffer }).rawBody = buf;
   }),
 );
 app.use(sanitizeRequest);
