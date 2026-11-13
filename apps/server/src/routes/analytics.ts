@@ -1,10 +1,17 @@
 import { Router } from 'express';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { cacheResponse } from '../middleware/cacheResponse';
 import { prisma } from '../lib/prisma';
 import { getFunnel, type LifecycleStage } from '../services/clients/lifecycle';
+import {
+  ANALYTICS_TZ,
+  arDayKeys,
+  arDayMonthLabel,
+  arDayStartUtc,
+  arWeekdayLabel,
+} from '../services/analytics/time';
 
 const router = Router();
 
@@ -13,53 +20,32 @@ const router = Router();
 const ANALYTICS_TTL_MS = 30_000;
 
 /**
- * Forma de la atribución Click-to-WhatsApp guardada en
- * `Conversation.metadata.attribution`. La DEFINIMOS localmente a propósito: el
- * backend de captura (que escribe este objeto) vive en otro archivo que se está
- * construyendo en paralelo; acá sólo LEEMOS la metadata (un `Prisma.JsonValue`)
- * de forma tolerante. Espejo del contrato de la feature CTWA.
+ * CTE `base` con la atribución Click-to-WhatsApp de cada conversación del negocio
+ * (`Conversation.metadata.attribution`, Json libre). Devuelve una fila por
+ * conversación con `source`, `source_id` y `headline` ya normalizados (NULL si el
+ * campo no es un string no vacío). El JSON se lee de forma tolerante: cualquier forma
+ * inesperada produce NULL en vez de un error.
  */
-interface ConversationAttribution {
-  source: string;
-  sourceType?: string;
-  sourceId?: string;
-  sourceUrl?: string;
-  headline?: string;
-  body?: string;
-  ctwaClid?: string;
-  mediaType?: string;
-  at?: string;
-}
-
-/**
- * Lee `metadata.attribution` tolerando null, no-objeto, arrays o formas
- * inesperadas (la metadata es Json libre). Devuelve `null` si no hay una
- * atribución válida (sin `source`). Recorta y descarta valores no-string.
- */
-function readAttribution(
-  metadata: Prisma.JsonValue | null | undefined
-): ConversationAttribution | null {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-  const attr = (metadata as Record<string, unknown>).attribution;
-  if (!attr || typeof attr !== 'object' || Array.isArray(attr)) return null;
-  const a = attr as Record<string, unknown>;
-  if (typeof a.source !== 'string' || !a.source.trim()) return null;
-  const str = (v: unknown): string | undefined => {
-    if (typeof v !== 'string') return undefined;
-    const trimmed = v.trim();
-    return trimmed ? trimmed : undefined;
-  };
-  return {
-    source: a.source.trim(),
-    sourceType: str(a.sourceType),
-    sourceId: str(a.sourceId),
-    sourceUrl: str(a.sourceUrl),
-    headline: str(a.headline),
-    body: str(a.body),
-    ctwaClid: str(a.ctwaClid),
-    mediaType: str(a.mediaType),
-    at: str(a.at),
-  };
+export function attributionBase(
+  businessId: string,
+  source: Prisma.Sql = Prisma.raw('"conversations"'),
+): Prisma.Sql {
+  // Un campo vale solo si metadata y metadata.attribution son objetos y el campo es
+  // un string no vacío tras recortar espacios (igual que la lectura tolerante previa).
+  // `->` sobre algo que no es objeto devuelve NULL (no error), así que el CASE alcanza.
+  const field = (name: 'source' | 'sourceId' | 'headline') =>
+    Prisma.sql`CASE WHEN jsonb_typeof(c."metadata"->'attribution') = 'object'
+                    AND jsonb_typeof(c."metadata"->'attribution'->${Prisma.raw(`'${name}'`)}) = 'string'
+               THEN NULLIF(regexp_replace(c."metadata"->'attribution'->>${Prisma.raw(`'${name}'`)}, '^\\s+|\\s+$', '', 'g'), '')
+               END`;
+  return Prisma.sql`
+    WITH base AS (
+      SELECT ${field('source')} AS source,
+             ${field('sourceId')} AS source_id,
+             ${field('headline')} AS headline
+      FROM ${source} c
+      WHERE c."businessId" = ${businessId}
+    )`;
 }
 
 /** Etiquetas en español para cada etapa del embudo (orden de LIFECYCLE_STAGES). */
@@ -149,43 +135,20 @@ router.get(
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const days = 7;
 
-    // Ventana de 7 días: desde el inicio del día más antiguo hasta ahora.
-    const oldestDayStart = new Date();
-    oldestDayStart.setDate(oldestDayStart.getDate() - (days - 1));
-    oldestDayStart.setHours(0, 0, 0, 0);
+    // Últimos 7 días calendario en hora de Argentina, agrupados EN LA DB: una
+    // consulta que devuelve a lo sumo 7 filas (antes se traían todas las
+    // conversaciones de la ventana a memoria).
+    const keys = arDayKeys(7);
+    const rows = await prisma.$queryRaw<{ day: string; n: number }[]>`
+      SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
+             COUNT(*)::int AS n
+      FROM "conversations"
+      WHERE "businessId" = ${businessId} AND "createdAt" >= ${arDayStartUtc(keys[0])}
+      GROUP BY 1`;
+    const counts = new Map(rows.map((r) => [r.day, Number(r.n)]));
 
-    // Una sola consulta (evita el N+1 de 1 count por día): traemos sólo el
-    // createdAt de las conversaciones de la ventana y las agrupamos por día
-    // en memoria, conservando las etiquetas y el día local de antes.
-    const conversations = await prisma.conversation.findMany({
-      where: { businessId, createdAt: { gte: oldestDayStart } },
-      select: { createdAt: true },
-    });
-
-    const counts = new Map<string, number>();
-    for (const { createdAt } of conversations) {
-      const dayStart = new Date(
-        createdAt.getFullYear(),
-        createdAt.getMonth(),
-        createdAt.getDate()
-      );
-      const key = dayStart.toISOString();
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-
-    const result = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      result.push({
-        day: dayStart.toLocaleDateString('es-AR', { weekday: 'short' }),
-        count: counts.get(dayStart.toISOString()) ?? 0,
-      });
-    }
-    res.json(result);
+    res.json(keys.map((k) => ({ day: arWeekdayLabel(k), count: counts.get(k) ?? 0 })));
   })
 );
 
@@ -417,54 +380,37 @@ router.get(
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const days = 14;
 
-    // Ventana [inicio del día más antiguo, ahora].
-    const oldestDayStart = new Date();
-    oldestDayStart.setDate(oldestDayStart.getDate() - (days - 1));
-    oldestDayStart.setHours(0, 0, 0, 0);
-
-    const [conversations, messages] = await Promise.all([
-      prisma.conversation.findMany({
-        where: { businessId, createdAt: { gte: oldestDayStart } },
-        select: { createdAt: true },
-      }),
-      prisma.message.findMany({
-        where: { conversation: { businessId }, createdAt: { gte: oldestDayStart } },
-        select: { createdAt: true },
-      }),
+    // 14 días calendario en hora de Argentina. Agrupado en la DB (una consulta por
+    // tabla, a lo sumo 14 filas cada una); mensajes se acota por negocio vía JOIN.
+    const keys = arDayKeys(14);
+    const since = arDayStartUtc(keys[0]);
+    const [convRows, msgRows] = await Promise.all([
+      prisma.$queryRaw<{ day: string; n: number }[]>`
+        SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
+               COUNT(*)::int AS n
+        FROM "conversations"
+        WHERE "businessId" = ${businessId} AND "createdAt" >= ${since}
+        GROUP BY 1`,
+      prisma.$queryRaw<{ day: string; n: number }[]>`
+        SELECT to_char((m."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
+               COUNT(*)::int AS n
+        FROM "messages" m
+        JOIN "conversations" c ON c."id" = m."conversationId"
+        WHERE c."businessId" = ${businessId} AND m."createdAt" >= ${since}
+        GROUP BY 1`,
     ]);
+    const convCounts = new Map(convRows.map((r) => [r.day, Number(r.n)]));
+    const msgCounts = new Map(msgRows.map((r) => [r.day, Number(r.n)]));
 
-    // Agrupamos por día local reutilizando la clave ISO del inicio del día.
-    const bucketKey = (d: Date) =>
-      new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
-
-    const convCounts = new Map<string, number>();
-    for (const { createdAt } of conversations) {
-      const key = bucketKey(createdAt);
-      convCounts.set(key, (convCounts.get(key) ?? 0) + 1);
-    }
-    const msgCounts = new Map<string, number>();
-    for (const { createdAt } of messages) {
-      const key = bucketKey(createdAt);
-      msgCounts.set(key, (msgCounts.get(key) ?? 0) + 1);
-    }
-
-    const result = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      const key = dayStart.toISOString();
-      result.push({
-        date: dayStart.toISOString().split('T')[0],
-        label: dayStart.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }),
-        conversations: convCounts.get(key) ?? 0,
-        messages: msgCounts.get(key) ?? 0,
-      });
-    }
-
-    res.json(result);
+    res.json(
+      keys.map((k) => ({
+        date: k,
+        label: arDayMonthLabel(k),
+        conversations: convCounts.get(k) ?? 0,
+        messages: msgCounts.get(k) ?? 0,
+      }))
+    );
   })
 );
 
@@ -521,45 +467,39 @@ router.get(
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
-    const conversations = await prisma.conversation.findMany({
-      where: { businessId },
-      select: { metadata: true },
+    // Agregado EN LA DB (antes se traía el metadata de TODAS las conversaciones del
+    // negocio a memoria). Mismas reglas que la lectura tolerante anterior: la
+    // atribución vale solo si metadata y metadata.attribution son objetos y
+    // `source` es un string no vacío; los demás campos cuentan solo si son string
+    // no vacío (se recortan espacios). Ver attributionBase().
+    const [totals, sources, ads] = await Promise.all([
+      prisma.$queryRaw<{ total: number; attributed: number }[]>`
+        ${attributionBase(businessId)}
+        SELECT COUNT(*)::int AS total, COUNT(source)::int AS attributed FROM base`,
+      prisma.$queryRaw<{ source: string; n: number }[]>`
+        ${attributionBase(businessId)}
+        SELECT source, COUNT(*)::int AS n FROM base WHERE source IS NOT NULL
+        GROUP BY source ORDER BY n DESC, source ASC`,
+      prisma.$queryRaw<{ source_id: string | null; headline: string | null; n: number }[]>`
+        ${attributionBase(businessId)}
+        SELECT MAX(source_id) AS source_id, MIN(headline) AS headline, COUNT(*)::int AS n
+        FROM base
+        WHERE source IS NOT NULL AND COALESCE(source_id, 'headline:' || headline) IS NOT NULL
+        GROUP BY COALESCE(source_id, 'headline:' || headline)
+        ORDER BY n DESC, COALESCE(source_id, 'headline:' || headline) ASC
+        LIMIT 10`,
+    ]);
+
+    res.json({
+      total: Number(totals[0]?.total ?? 0),
+      attributed: Number(totals[0]?.attributed ?? 0),
+      bySource: sources.map((r) => ({ source: r.source, count: Number(r.n) })),
+      byAd: ads.map((r) => ({
+        sourceId: r.source_id ?? '',
+        ...(r.headline ? { headline: r.headline } : {}),
+        count: Number(r.n),
+      })),
     });
-
-    const total = conversations.length;
-    let attributed = 0;
-    const bySourceMap = new Map<string, number>();
-    // Agrupa por anuncio. Clave: sourceId si existe; si no, el headline (para no
-    // perder los ads sin id). `sourceId` en la salida queda vacío en ese caso.
-    const byAdMap = new Map<string, { sourceId: string; headline?: string; count: number }>();
-
-    for (const { metadata } of conversations) {
-      const attr = readAttribution(metadata);
-      if (!attr) continue;
-      attributed++;
-      bySourceMap.set(attr.source, (bySourceMap.get(attr.source) ?? 0) + 1);
-
-      const key = attr.sourceId || (attr.headline ? `headline:${attr.headline}` : null);
-      if (key) {
-        const existing = byAdMap.get(key);
-        if (existing) {
-          existing.count++;
-          if (!existing.headline && attr.headline) existing.headline = attr.headline;
-        } else {
-          byAdMap.set(key, { sourceId: attr.sourceId ?? '', headline: attr.headline, count: 1 });
-        }
-      }
-    }
-
-    const bySource = Array.from(bySourceMap.entries())
-      .map(([source, count]) => ({ source, count }))
-      .sort((a, b) => b.count - a.count);
-
-    const byAd = Array.from(byAdMap.values())
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-
-    res.json({ total, attributed, bySource, byAd });
   })
 );
 

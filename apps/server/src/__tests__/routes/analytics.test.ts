@@ -4,7 +4,7 @@
  * que cada endpoint responde 200 sin romper y que las consultas están acotadas
  * por businessId (aislamiento multi-tenant).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import request from 'supertest';
 
@@ -78,80 +78,91 @@ describe('routes/analytics', () => {
     }
   });
 
-  it('/conversations usa una sola consulta (sin N+1) acotada por businessId', async () => {
-    mock(prisma.conversation.findMany).mockResolvedValue([]);
+  // Instante fijo: 2026-11-02 01:00 UTC = domingo 1/11 22:00 en Argentina. Un agrupado por
+  // el día del servidor (UTC) pondría este instante en el 2/11; el de Argentina, en el 1/11.
+  const FIXED_NOW = new Date('2026-11-02T01:00:00.000Z');
+  const sqlValues = (call: unknown[]) => call.slice(1);
 
-    const res = await request(app).get('/api/analytics/conversations');
+  describe('series por día (SQL, hora Argentina)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(FIXED_NOW);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    expect(res.status).toBe(200);
-    // Antes hacía 7 count() en un loop; ahora: un único findMany.
-    expect(mock(prisma.conversation.findMany).mock.calls.length).toBe(1);
-    expect(mock(prisma.conversation.count).mock.calls.length).toBe(0);
-    const [arg] = mock(prisma.conversation.findMany).mock.calls[0];
-    expect(arg.where.businessId).toBe('biz_1');
-    // Siempre devuelve una serie de 7 días.
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(7);
-  });
+    it('/conversations hace UNA consulta agregada acotada por businessId y devuelve 7 días', async () => {
+      mock(prisma.$queryRaw).mockResolvedValue([]);
 
-  it('/conversations agrupa por día las conversaciones de la ventana', async () => {
-    const today = new Date();
-    mock(prisma.conversation.findMany).mockResolvedValue([
-      { createdAt: today },
-      { createdAt: today },
-    ]);
+      const res = await request(app).get('/api/analytics/conversations');
 
-    const res = await request(app).get('/api/analytics/conversations');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(7);
+      expect(mock(prisma.$queryRaw).mock.calls.length).toBe(1);
+      // Ya no trae las conversaciones a memoria.
+      expect(mock(prisma.conversation.findMany).mock.calls.length).toBe(0);
+      const values = sqlValues(mock(prisma.$queryRaw).mock.calls[0]);
+      expect(values).toContain('biz_1');
+      expect(values).toContain('America/Argentina/Buenos_Aires');
+      // Ventana: inicio (00:00 AR = 03:00 UTC) del día más viejo, 26/10.
+      expect(values).toContainEqual(new Date('2026-10-26T03:00:00.000Z'));
+    });
 
-    expect(res.status).toBe(200);
-    const total = res.body.reduce((sum: number, d: { count: number }) => sum + d.count, 0);
-    expect(total).toBe(2);
-    // El último bucket (hoy) debe contener las 2 conversaciones.
-    expect(res.body[res.body.length - 1].count).toBe(2);
-  });
+    it('/conversations asigna cada fila al día de Argentina que devuelve la DB', async () => {
+      mock(prisma.$queryRaw).mockResolvedValue([
+        { day: '2026-11-01', n: 2 }, // "hoy" en Argentina aunque en UTC ya sea 2/11
+        { day: '2026-10-31', n: 1 },
+        { day: '2026-01-01', n: 9 }, // fuera de la ventana: se ignora
+      ]);
 
-  describe('GET /timeseries', () => {
-    it('devuelve una serie de 14 días acotada por businessId con una consulta por tabla', async () => {
-      mock(prisma.conversation.findMany).mockResolvedValue([]);
-      mock(prisma.message.findMany).mockResolvedValue([]);
+      const res = await request(app).get('/api/analytics/conversations');
+
+      expect(res.body[6].count).toBe(2);
+      expect(res.body[5].count).toBe(1);
+      const total = res.body.reduce((sum: number, d: { count: number }) => sum + d.count, 0);
+      expect(total).toBe(3);
+    });
+
+    it('/timeseries: una consulta por tabla (a lo sumo 14 filas c/u), acotadas por businessId', async () => {
+      mock(prisma.$queryRaw).mockResolvedValue([]);
 
       const res = await request(app).get('/api/analytics/timeseries');
 
       expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
       expect(res.body).toHaveLength(14);
       expect(res.body[0]).toHaveProperty('date');
       expect(res.body[0]).toHaveProperty('label');
-      expect(res.body[0]).toHaveProperty('conversations');
-      expect(res.body[0]).toHaveProperty('messages');
-      // Una sola consulta por tabla (sin N+1).
-      expect(mock(prisma.conversation.findMany).mock.calls.length).toBe(1);
-      expect(mock(prisma.message.findMany).mock.calls.length).toBe(1);
-      const [convArg] = mock(prisma.conversation.findMany).mock.calls[0];
-      expect(convArg.where.businessId).toBe('biz_1');
-      const [msgArg] = mock(prisma.message.findMany).mock.calls[0];
-      expect(msgArg.where.conversation.businessId).toBe('biz_1');
-      // Fechas estrictamente ascendentes (el día más viejo primero).
+      expect(mock(prisma.$queryRaw).mock.calls.length).toBe(2);
+      expect(mock(prisma.conversation.findMany).mock.calls.length).toBe(0);
+      expect(mock(prisma.message.findMany).mock.calls.length).toBe(0);
+      for (const call of mock(prisma.$queryRaw).mock.calls) {
+        expect(sqlValues(call)).toContain('biz_1');
+        expect(sqlValues(call)).toContainEqual(new Date('2026-10-19T03:00:00.000Z'));
+      }
       const dates = res.body.map((d: { date: string }) => d.date);
+      expect(dates[0]).toBe('2026-10-19');
+      expect(dates[13]).toBe('2026-11-01');
       expect([...dates].sort()).toEqual(dates);
+      expect(res.body[13].label).toBe('1/11'); // dd/mm de es-AR (mismas opciones que antes)
     });
 
-    it('agrupa por día las conversaciones y mensajes de la ventana', async () => {
-      const today = new Date();
-      mock(prisma.conversation.findMany).mockResolvedValue([{ createdAt: today }, { createdAt: today }]);
-      mock(prisma.message.findMany).mockResolvedValue([{ createdAt: today }, { createdAt: today }, { createdAt: today }]);
+    it('/timeseries combina conversaciones y mensajes por día', async () => {
+      mock(prisma.$queryRaw)
+        .mockResolvedValueOnce([{ day: '2026-11-01', n: 2 }]) // conversaciones
+        .mockResolvedValueOnce([
+          { day: '2026-11-01', n: 3 },
+          { day: '2026-10-30', n: 5 },
+        ]); // mensajes
 
       const res = await request(app).get('/api/analytics/timeseries');
 
-      expect(res.status).toBe(200);
-      const last = res.body[res.body.length - 1];
-      // El último bucket (hoy) acumula lo de hoy.
+      const last = res.body[13];
       expect(last.conversations).toBe(2);
       expect(last.messages).toBe(3);
-      const totalConv = res.body.reduce((s: number, d: { conversations: number }) => s + d.conversations, 0);
+      expect(res.body[11].messages).toBe(5);
       const totalMsg = res.body.reduce((s: number, d: { messages: number }) => s + d.messages, 0);
-      expect(totalConv).toBe(2);
-      expect(totalMsg).toBe(3);
+      expect(totalMsg).toBe(8);
     });
   });
 
@@ -212,16 +223,21 @@ describe('routes/analytics', () => {
   });
 
   describe('GET /attribution (embudo por origen CTWA)', () => {
-    // Helper: una conversación con (o sin) atribución en su metadata.
-    const conv = (attribution?: Record<string, unknown> | null) => ({ metadata: attribution ? { attribution } : null });
+    // El endpoint hace 3 consultas agregadas en paralelo, en este orden: totales,
+    // por origen y top de anuncios. La lectura tolerante del JSON vive en el SQL
+    // (attributionBase); acá se verifica el mapeo de la respuesta y el scope.
+    const mockAgg = (
+      totals: { total: number; attributed: number },
+      sources: { source: string; n: number }[],
+      ads: { source_id: string | null; headline: string | null; n: number }[],
+    ) =>
+      mock(prisma.$queryRaw)
+        .mockResolvedValueOnce([totals])
+        .mockResolvedValueOnce(sources)
+        .mockResolvedValueOnce(ads);
 
     it('sin conversaciones atribuidas devuelve attributed:0, bySource:[] y byAd:[]', async () => {
-      mock(prisma.conversation.findMany).mockResolvedValue([
-        conv(),
-        conv({ foo: 'bar' }), // metadata sin attribution
-        { metadata: null },
-        { metadata: 'no-objeto' }, // metadata no-objeto: debe tolerarse
-      ]);
+      mockAgg({ total: 4, attributed: 0 }, [], []);
 
       const res = await request(app).get('/api/analytics/attribution');
 
@@ -229,16 +245,17 @@ describe('routes/analytics', () => {
       expect(res.body).toEqual({ total: 4, attributed: 0, bySource: [], byAd: [] });
     });
 
-    it('agrega por origen y arma el top de anuncios ordenado por count desc', async () => {
-      mock(prisma.conversation.findMany).mockResolvedValue([
-        conv({ source: 'ctwa', sourceId: 'ad_1', headline: 'Promo verano' }),
-        conv({ source: 'ctwa', sourceId: 'ad_1', headline: 'Promo verano' }),
-        conv({ source: 'ctwa', sourceId: 'ad_1', headline: 'Promo verano' }),
-        conv({ source: 'ctwa', sourceId: 'ad_2', headline: 'Descuento otoño' }),
-        conv({ source: 'ctwa', sourceId: 'ad_2', headline: 'Descuento otoño' }),
-        conv({ source: 'ctwa', sourceId: 'ad_3' }), // sin headline
-        conv(), // sin atribución
-      ]);
+    it('mapea origen y top de anuncios (sin headline si no hay; sourceId vacío si solo hay titular)', async () => {
+      mockAgg(
+        { total: 7, attributed: 6 },
+        [{ source: 'ctwa', n: 6 }],
+        [
+          { source_id: 'ad_1', headline: 'Promo verano', n: 3 },
+          { source_id: 'ad_2', headline: 'Descuento otoño', n: 2 },
+          { source_id: 'ad_3', headline: null, n: 1 },
+          { source_id: null, headline: 'Solo titular', n: 1 },
+        ],
+      );
 
       const res = await request(app).get('/api/analytics/attribution');
 
@@ -246,20 +263,24 @@ describe('routes/analytics', () => {
       expect(res.body.total).toBe(7);
       expect(res.body.attributed).toBe(6);
       expect(res.body.bySource).toEqual([{ source: 'ctwa', count: 6 }]);
-      // byAd ordenado por volumen: ad_1 (3) > ad_2 (2) > ad_3 (1).
       expect(res.body.byAd).toEqual([
         { sourceId: 'ad_1', headline: 'Promo verano', count: 3 },
         { sourceId: 'ad_2', headline: 'Descuento otoño', count: 2 },
         { sourceId: 'ad_3', count: 1 },
+        { sourceId: '', headline: 'Solo titular', count: 1 },
       ]);
+      expect(typeof res.body.total).toBe('number');
     });
 
-    it('la consulta está acotada por businessId', async () => {
-      mock(prisma.conversation.findMany).mockResolvedValue([]);
+    it('las tres consultas están acotadas por businessId y ya no traen metadata a memoria', async () => {
+      mockAgg({ total: 0, attributed: 0 }, [], []);
       await request(app).get('/api/analytics/attribution');
-      const calls = mock(prisma.conversation.findMany).mock.calls as unknown as unknown[][];
-      const [arg] = calls[0] as [{ where: { businessId: string } }];
-      expect(arg.where.businessId).toBe('biz_1');
+      expect(mock(prisma.$queryRaw).mock.calls.length).toBe(3);
+      expect(mock(prisma.conversation.findMany).mock.calls.length).toBe(0);
+      for (const call of mock(prisma.$queryRaw).mock.calls) {
+        // El businessId viaja dentro del fragmento SQL anidado (attributionBase).
+        expect(JSON.stringify(sqlValues(call))).toContain('biz_1');
+      }
     });
   });
 
