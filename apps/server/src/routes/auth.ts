@@ -5,11 +5,17 @@ import { authRateLimit } from '../middleware/rateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
-import { registerSchema, loginSchema, twoFactorCodeSchema, passwordSchema, RegisterInput, LoginInput } from '../validators/auth';
+import { registerSchema, loginSchema, twoFactorCodeSchema, secondFactorCodeSchema, passwordSchema, RegisterInput, LoginInput } from '../validators/auth';
 import { requireAuth } from '../middleware/auth';
 import { getAuthSecret } from '../lib/secrets';
 import { revokeUserSessions } from '../services/auth/revocation';
 import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
+import {
+  generateRecoveryCodes,
+  countRecoveryCodes,
+  clearRecoveryCodes,
+  verifySecondFactor,
+} from '../services/auth/twoFactorRecovery';
 import { hashPassword, verifyPassword, equalizeVerifyTiming } from '../lib/password';
 
 const updateMeSchema = z.object({
@@ -171,14 +177,32 @@ router.post(
         res.json({ twoFactorRequired: true });
         return;
       }
-      if (!verifyTwoFactorToken(user.twoFactorSecret, data.twoFactorCode)) {
+      const secondFactor = await verifySecondFactor({
+        businessId: user.businessId,
+        userId: user.id,
+        encryptedSecret: user.twoFactorSecret,
+        code: data.twoFactorCode,
+      });
+      if (!secondFactor) {
+        // Un código 2FA incorrecto cuenta para el bloqueo igual que una contraseña
+        // incorrecta; si no, quien ya conoce la clave podría probar los 10^6
+        // códigos posibles sin consecuencias.
+        const failedLogins = user.failedLogins + 1;
+        const update: { failedLogins: number; lockedUntil?: Date } = { failedLogins };
+        if (failedLogins >= MAX_FAILED_LOGINS) {
+          update.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+        }
+        await prisma.user.update({ where: { id: user.id }, data: update });
         auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
           userId: user.id,
           businessId: user.businessId,
-          metadata: { reason: 'invalid_2fa_code' },
+          metadata: { reason: 'invalid_2fa_code', failedLogins, locked: failedLogins >= MAX_FAILED_LOGINS },
         });
         res.status(401).json({ error: 'Invalid 2FA code' });
         return;
+      }
+      if (secondFactor === 'recovery') {
+        auditAuthEvent('AUTH_2FA_RECOVERY_USED', req, { userId: user.id, businessId: user.businessId });
       }
     }
 
@@ -344,7 +368,10 @@ router.get(
       select: { twoFactorEnabled: true },
     });
     if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-    res.json({ enabled: user.twoFactorEnabled });
+    const recoveryCodesRemaining = user.twoFactorEnabled
+      ? await countRecoveryCodes(req.auth!.businessId, req.auth!.userId)
+      : 0;
+    res.json({ enabled: user.twoFactorEnabled, recoveryCodesRemaining });
   })
 );
 
@@ -393,7 +420,9 @@ router.post(
 
     await prisma.user.update({ where: { id: req.auth!.userId }, data: { twoFactorEnabled: true } });
     auditAuthEvent('AUTH_2FA_ENABLED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
-    res.json({ enabled: true });
+    // Los códigos de recuperación se muestran UNA sola vez, junto con la activación.
+    const recoveryCodes = await generateRecoveryCodes(req.auth!.businessId, req.auth!.userId);
+    res.json({ enabled: true, recoveryCodes });
   })
 );
 
@@ -401,7 +430,7 @@ router.post(
 router.post(
   '/2fa/disable',
   requireAuth,
-  validate(twoFactorCodeSchema),
+  validate(secondFactorCodeSchema),
   asyncHandler(async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { id: req.auth!.userId },
@@ -411,7 +440,13 @@ router.post(
       res.status(400).json({ error: '2FA no está activo' });
       return;
     }
-    if (!verifyTwoFactorToken(user.twoFactorSecret, req.body.code)) {
+    const valid = await verifySecondFactor({
+      businessId: req.auth!.businessId,
+      userId: req.auth!.userId,
+      encryptedSecret: user.twoFactorSecret,
+      code: req.body.code,
+    });
+    if (!valid) {
       res.status(400).json({ error: 'Código inválido' });
       return;
     }
@@ -420,8 +455,42 @@ router.post(
       where: { id: req.auth!.userId },
       data: { twoFactorEnabled: false, twoFactorSecret: null },
     });
+    await clearRecoveryCodes(req.auth!.businessId, req.auth!.userId);
     auditAuthEvent('AUTH_2FA_DISABLED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
     res.json({ enabled: false });
+  })
+);
+
+/**
+ * Emite un juego NUEVO de códigos de recuperación (invalida los anteriores).
+ * Pide el segundo factor vigente para que una sesión robada no pueda rearmarlos.
+ */
+router.post(
+  '/2fa/recovery-codes',
+  requireAuth,
+  validate(secondFactorCodeSchema),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorSecret: true, twoFactorEnabled: true },
+    });
+    if (!user?.twoFactorEnabled || !user.twoFactorSecret) {
+      res.status(400).json({ error: '2FA no está activo' });
+      return;
+    }
+    const valid = await verifySecondFactor({
+      businessId: req.auth!.businessId,
+      userId: req.auth!.userId,
+      encryptedSecret: user.twoFactorSecret,
+      code: req.body.code,
+    });
+    if (!valid) {
+      res.status(400).json({ error: 'Código inválido' });
+      return;
+    }
+    const recoveryCodes = await generateRecoveryCodes(req.auth!.businessId, req.auth!.userId);
+    auditAuthEvent('AUTH_2FA_RECOVERY_REGENERATED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
+    res.json({ recoveryCodes });
   })
 );
 

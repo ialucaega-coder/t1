@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState, useCallback } from 'react';
-import { Save, Palette, Globe, Clock, Plus, Trash2, UserCog, Lock, CheckCircle, ShieldCheck } from 'lucide-react';
+import { Save, Palette, Globe, Clock, Plus, Trash2, UserCog, Lock, CheckCircle, ShieldCheck, KeyRound } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
 import { useAuth } from '@/lib/auth-context';
 import { THEME_OPTIONS } from '@/constants/settings';
@@ -11,9 +11,14 @@ import * as schedulesApi from '@/lib/api/schedules';
 import * as authApi from '@/lib/api/auth';
 import { useToast } from '@/components/common/Toast';
 import { MotorDeIA } from '@/app/(dashboard)/ia/MotorDeIA';
+import { RecoveryCodesPanel } from '@/components/auth/RecoveryCodesPanel';
 import type { Schedule } from '@/types';
 
 const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+// Segundo factor aceptado al desactivar o rearmar el 2FA: código de 6 dígitos de
+// la app o código de recuperación (10 caracteres, con o sin guion).
+const isSecondFactorCode = (v: string) => /^(\d{6}|[A-Za-z0-9]{5}-?[A-Za-z0-9]{5})$/.test(v.trim());
 
 export default function ConfiguracionPage() {
   const { settings, isLoading, error, refetch, updateSettings } = useSettings();
@@ -34,6 +39,11 @@ export default function ConfiguracionPage() {
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [twoFactorBusy, setTwoFactorBusy] = useState(false);
   const [disabling, setDisabling] = useState(false);
+  // Códigos de recuperación: los que se muestran UNA vez (recién emitidos), cuántos
+  // quedan sin usar y si está abierto el form para pedir un juego nuevo.
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [recoveryRemaining, setRecoveryRemaining] = useState<number | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -85,7 +95,11 @@ export default function ConfiguracionPage() {
   useEffect(() => {
     let active = true;
     authApi.getTwoFactorStatus()
-      .then((res) => { if (active) setTwoFactorEnabled(res.enabled); })
+      .then((res) => {
+        if (!active) return;
+        setTwoFactorEnabled(res.enabled);
+        setRecoveryRemaining(res.enabled ? res.recoveryCodesRemaining ?? 0 : null);
+      })
       .catch(() => { /* ignore: queda como desactivado */ })
       .finally(() => { if (active) setTwoFactorLoading(false); });
     return () => { active = false; };
@@ -111,10 +125,12 @@ export default function ConfiguracionPage() {
     if (twoFactorCode.length !== 6) return;
     setTwoFactorBusy(true);
     try {
-      await authApi.verifyTwoFactor(twoFactorCode);
+      const res = await authApi.verifyTwoFactor(twoFactorCode);
       setTwoFactorEnabled(true);
       setTwoFactorSetup(null);
       setTwoFactorCode('');
+      setRecoveryCodes(res.recoveryCodes);
+      setRecoveryRemaining(res.recoveryCodes.length);
       toast({ type: 'success', message: 'Autenticación en dos pasos activada' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Código inválido';
@@ -130,16 +146,37 @@ export default function ConfiguracionPage() {
     setTwoFactorCode('');
   }
 
-  // Desactiva el 2FA pidiendo un código válido.
+  // Desactiva el 2FA pidiendo un código válido (de la app o de recuperación).
   async function handleDisableTwoFactor() {
-    if (twoFactorCode.length !== 6) return;
+    if (!isSecondFactorCode(twoFactorCode)) return;
     setTwoFactorBusy(true);
     try {
       await authApi.disableTwoFactor(twoFactorCode);
       setTwoFactorEnabled(false);
       setDisabling(false);
       setTwoFactorCode('');
+      setRecoveryCodes(null);
+      setRecoveryRemaining(null);
       toast({ type: 'success', message: 'Autenticación en dos pasos desactivada' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Código inválido';
+      toast({ type: 'error', message: msg });
+    } finally {
+      setTwoFactorBusy(false);
+    }
+  }
+
+  // Pide un juego nuevo de códigos de recuperación (los anteriores dejan de servir).
+  async function handleRegenerateRecoveryCodes() {
+    if (!isSecondFactorCode(twoFactorCode)) return;
+    setTwoFactorBusy(true);
+    try {
+      const res = await authApi.regenerateRecoveryCodes(twoFactorCode);
+      setRecoveryCodes(res.recoveryCodes);
+      setRecoveryRemaining(res.recoveryCodes.length);
+      setRegenerating(false);
+      setTwoFactorCode('');
+      toast({ type: 'success', message: 'Códigos de recuperación nuevos generados' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Código inválido';
       toast({ type: 'error', message: msg });
@@ -274,36 +311,56 @@ export default function ConfiguracionPage() {
               <CheckCircle className="h-3.5 w-3.5" />
               La autenticación en dos pasos está activa en tu cuenta.
             </div>
-            {!disabling ? (
-              <button type="button" onClick={() => { setDisabling(true); setTwoFactorCode(''); }}
-                className="btn-secondary text-xs">
-                <Lock className="h-3.5 w-3.5" /> Desactivar 2FA
-              </button>
+            {recoveryCodes ? (
+              <RecoveryCodesPanel codes={recoveryCodes} onDone={() => setRecoveryCodes(null)} />
+            ) : (
+              <p className={`text-xs ${recoveryRemaining !== null && recoveryRemaining <= 2 ? 'text-amber-400' : 'text-slate-400'}`}>
+                Códigos de recuperación sin usar: <strong>{recoveryRemaining ?? 0}</strong>
+                {recoveryRemaining !== null && recoveryRemaining <= 2 && ' — generá un juego nuevo para no quedarte sin acceso.'}
+              </p>
+            )}
+            {!disabling && !regenerating ? (
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => { setRegenerating(true); setTwoFactorCode(''); }}
+                  className="btn-secondary text-xs">
+                  <KeyRound className="h-3.5 w-3.5" /> Generar códigos nuevos
+                </button>
+                <button type="button" onClick={() => { setDisabling(true); setTwoFactorCode(''); }}
+                  className="btn-secondary text-xs">
+                  <Lock className="h-3.5 w-3.5" /> Desactivar 2FA
+                </button>
+              </div>
             ) : (
               <div className="space-y-3 rounded-lg border border-slate-700/50 bg-slate-800/30 p-4">
-                <p className="text-xs text-slate-400">
-                  Ingresá un código de 6 dígitos de tu app para confirmar la desactivación.
-                </p>
+                <label htmlFor="two-factor-confirm-code" className="block text-xs text-slate-400">
+                  {disabling
+                    ? 'Para confirmar la desactivación ingresá el código de 6 dígitos de tu app o un código de recuperación.'
+                    : 'Para generar códigos nuevos ingresá el código de 6 dígitos de tu app o un código de recuperación. Los anteriores dejarán de servir.'}
+                </label>
                 <input
+                  id="two-factor-confirm-code"
                   type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={6}
+                  autoComplete="one-time-code"
+                  maxLength={11}
                   value={twoFactorCode}
-                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className="input max-w-[180px] text-center tracking-[0.4em] font-mono"
+                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/[^A-Za-z0-9-]/g, '').slice(0, 11))}
+                  className="input max-w-[220px] text-center tracking-[0.2em] font-mono"
                   placeholder="000000"
                   autoFocus
                 />
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => { setDisabling(false); setTwoFactorCode(''); }}
+                  <button type="button"
+                    onClick={() => { setDisabling(false); setRegenerating(false); setTwoFactorCode(''); }}
                     className="btn-secondary text-xs">
                     Cancelar
                   </button>
-                  <button type="button" onClick={handleDisableTwoFactor}
-                    disabled={twoFactorBusy || twoFactorCode.length !== 6}
+                  <button type="button"
+                    onClick={disabling ? handleDisableTwoFactor : handleRegenerateRecoveryCodes}
+                    disabled={twoFactorBusy || !isSecondFactorCode(twoFactorCode)}
                     className="btn-primary text-xs disabled:opacity-40">
-                    {twoFactorBusy ? 'Desactivando...' : 'Confirmar desactivación'}
+                    {twoFactorBusy
+                      ? 'Procesando...'
+                      : disabling ? 'Confirmar desactivación' : 'Generar códigos nuevos'}
                   </button>
                 </div>
               </div>

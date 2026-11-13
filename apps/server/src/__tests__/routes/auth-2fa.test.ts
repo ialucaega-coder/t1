@@ -1,7 +1,9 @@
 /**
  * Pruebas de integración de los endpoints de 2FA (`src/routes/auth.ts`):
- * setup/verify/disable/status y el chequeo de segundo factor en el login.
- * Prisma se mockea; otplib y el cifrado son reales. Auth por JWT real.
+ * setup/verify/disable/status, los códigos de recuperación y el chequeo de
+ * segundo factor en el login. Prisma se mockea (con un store en memoria para la
+ * tabla Connection, donde viven los códigos); otplib y el cifrado son reales.
+ * Auth por JWT real.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
@@ -10,9 +12,43 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { authenticator } from 'otplib';
 
-vi.mock('../../lib/prisma', () => ({
-  prisma: { user: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() } },
-}));
+interface ConnRow {
+  id: string;
+  businessId: string;
+  type: string;
+  config: unknown;
+}
+
+// Store en memoria de `Connection`: lo usan los códigos de recuperación (y la
+// revocación de sesiones de requireAuth, que ahí simplemente no encuentra fila).
+const db = vi.hoisted(() => ({ rows: [] as ConnRow[], seq: 0 }));
+
+vi.mock('../../lib/prisma', () => {
+  const connection = {
+    findFirst: vi.fn(async ({ where }: { where: { businessId: string; type: string } }) =>
+      db.rows.find((r) => r.businessId === where.businessId && r.type === where.type) ?? null),
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
+      db.rows.find((r) => r.id === where.id) ?? null),
+    create: vi.fn(async ({ data }: { data: Omit<ConnRow, 'id'> }) => {
+      const row = { id: `c${++db.seq}`, ...data };
+      db.rows.push(row);
+      return row;
+    }),
+    update: vi.fn(async ({ where, data }: { where: { id: string }; data: { config: unknown } }) => {
+      const row = db.rows.find((r) => r.id === where.id);
+      if (row) row.config = data.config;
+      return row;
+    }),
+  };
+  const prisma = {
+    user: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    connection,
+    $executeRaw: vi.fn(async () => 0),
+    $queryRaw: vi.fn(async () => []),
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
+  };
+  return { prisma };
+});
 
 import { prisma } from '../../lib/prisma';
 import { authRouter } from '../../routes/auth';
@@ -33,8 +69,20 @@ function buildApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.rows.length = 0;
+  db.seq = 0;
   mock(prisma.user.update).mockResolvedValue({});
 });
+
+const RECOVERY_FORMAT = /^[2-9A-HJKMNP-TV-Z]{5}-[2-9A-HJKMNP-TV-Z]{5}$/;
+
+/** Activa el 2FA por la ruta real y devuelve los códigos de recuperación en claro. */
+async function enable2fa(app: express.Express, secret: string): Promise<string[]> {
+  mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: encrypt(secret), twoFactorEnabled: false });
+  const res = await request(app).post('/api/auth/2fa/verify').set(auth).send({ code: authenticator.generate(secret) });
+  expect(res.status).toBe(200);
+  return res.body.recoveryCodes as string[];
+}
 
 describe('routes/auth · 2FA', () => {
   const app = buildApp();
@@ -79,6 +127,18 @@ describe('routes/auth · 2FA', () => {
       expect(mock(prisma.user.update).mock.calls[0][0].data).toEqual({ twoFactorEnabled: true });
     });
 
+    it('al activar emite 10 códigos de recuperación y guarda solo sus hashes', async () => {
+      const codes = await enable2fa(app, authenticator.generateSecret());
+
+      expect(codes).toHaveLength(10);
+      expect(new Set(codes).size).toBe(10);
+      codes.forEach((c) => expect(c).toMatch(RECOVERY_FORMAT));
+
+      const stored = JSON.stringify(db.rows[0].config);
+      codes.forEach((c) => expect(stored).not.toContain(c.replace('-', '')));
+      expect((db.rows[0].config as { codes: Record<string, string[]> }).codes.u1).toHaveLength(10);
+    });
+
     it('rechaza un código inválido (400)', async () => {
       const secret = authenticator.generateSecret();
       mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: encrypt(secret), twoFactorEnabled: false });
@@ -110,6 +170,54 @@ describe('routes/auth · 2FA', () => {
     it('rechaza (400) si 2FA no está activo', async () => {
       mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: null, twoFactorEnabled: false });
       const res = await request(app).post('/api/auth/2fa/disable').set(auth).send({ code: '123456' });
+      expect(res.status).toBe(400);
+    });
+
+    it('permite desactivar con un código de recuperación (perdió el celular) y borra los códigos', async () => {
+      const secret = authenticator.generateSecret();
+      const codes = await enable2fa(app, secret);
+      mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: encrypt(secret), twoFactorEnabled: true });
+
+      const res = await request(app).post('/api/auth/2fa/disable').set(auth).send({ code: codes[0] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(false);
+      expect((db.rows[0].config as { codes: Record<string, string[]> }).codes.u1).toBeUndefined();
+    });
+  });
+
+  describe('GET /2fa/status y POST /2fa/recovery-codes', () => {
+    it('informa cuántos códigos de recuperación quedan', async () => {
+      const secret = authenticator.generateSecret();
+      const codes = await enable2fa(app, secret);
+      mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: encrypt(secret), twoFactorEnabled: true });
+
+      const res = await request(app).get('/api/auth/2fa/status').set(auth);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ enabled: true, recoveryCodesRemaining: codes.length });
+    });
+
+    it('regenerar exige un segundo factor válido y deja inservibles los códigos viejos', async () => {
+      const secret = authenticator.generateSecret();
+      const oldCodes = await enable2fa(app, secret);
+      mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: encrypt(secret), twoFactorEnabled: true });
+
+      const bad = await request(app).post('/api/auth/2fa/recovery-codes').set(auth).send({ code: '000000' });
+      expect(bad.status).toBe(400);
+
+      const ok = await request(app).post('/api/auth/2fa/recovery-codes').set(auth).send({ code: authenticator.generate(secret) });
+      expect(ok.status).toBe(200);
+      expect(ok.body.recoveryCodes).toHaveLength(10);
+      expect(ok.body.recoveryCodes).not.toContain(oldCodes[0]);
+
+      // Un código del juego anterior ya no sirve como segundo factor.
+      const old = await request(app).post('/api/auth/2fa/recovery-codes').set(auth).send({ code: oldCodes[1] });
+      expect(old.status).toBe(400);
+    });
+
+    it('regenerar exige 2FA activo', async () => {
+      mock(prisma.user.findUnique).mockResolvedValue({ twoFactorSecret: null, twoFactorEnabled: false });
+      const res = await request(app).post('/api/auth/2fa/recovery-codes').set(auth).send({ code: '123456' });
       expect(res.status).toBe(400);
     });
   });
@@ -154,6 +262,55 @@ describe('routes/auth · 2FA', () => {
         .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: authenticator.generate(secret) });
       expect(res.status).toBe(200);
       expect(res.body.token).toBeTruthy();
+    });
+
+    it('un código 2FA incorrecto suma un intento fallido', async () => {
+      await request(app).post('/api/auth/login')
+        .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: '000000' });
+      const data = mock(prisma.user.update).mock.calls[0][0].data;
+      expect(data.failedLogins).toBe(1);
+      expect(data.lockedUntil).toBeUndefined();
+    });
+
+    it('el 5º código 2FA incorrecto bloquea la cuenta 15 minutos', async () => {
+      mock(prisma.user.findUnique).mockResolvedValue({ ...baseUser, failedLogins: 4 });
+      const res = await request(app).post('/api/auth/login')
+        .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: '000000' });
+      expect(res.status).toBe(401);
+      const data = mock(prisma.user.update).mock.calls[0][0].data;
+      expect(data.failedLogins).toBe(5);
+      expect(data.lockedUntil).toBeInstanceOf(Date);
+    });
+
+    it('un código de recuperación válido permite entrar y se gasta (un solo uso)', async () => {
+      const codes = await enable2fa(app, secret);
+      mock(prisma.user.findUnique).mockResolvedValue({ ...baseUser });
+
+      const first = await request(app).post('/api/auth/login')
+        .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: codes[0] });
+      expect(first.status).toBe(200);
+      expect(first.body.token).toBeTruthy();
+
+      const again = await request(app).post('/api/auth/login')
+        .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: codes[0] });
+      expect(again.status).toBe(401);
+      expect((db.rows[0].config as { codes: Record<string, string[]> }).codes.u1).toHaveLength(9);
+    });
+
+    it('acepta el código de recuperación en minúsculas y sin guion', async () => {
+      const codes = await enable2fa(app, secret);
+      mock(prisma.user.findUnique).mockResolvedValue({ ...baseUser });
+      const res = await request(app).post('/api/auth/login')
+        .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: codes[3].replace('-', '').toLowerCase() });
+      expect(res.status).toBe(200);
+    });
+
+    it('un código de recuperación de OTRO usuario no sirve', async () => {
+      const codes = await enable2fa(app, secret);
+      mock(prisma.user.findUnique).mockResolvedValue({ ...baseUser, id: 'u2' });
+      const res = await request(app).post('/api/auth/login')
+        .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: codes[0] });
+      expect(res.status).toBe(401);
     });
   });
 });

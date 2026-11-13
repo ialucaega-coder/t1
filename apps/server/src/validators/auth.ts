@@ -52,5 +52,17 @@ export const twoFactorCodeSchema = z.object({
   code: z.string().trim().regex(/^\d{6}$/, 'El código debe tener 6 dígitos'),
 });
 
+/**
+ * Segundo factor en /2fa/disable y /2fa/recovery-codes: un código TOTP de 6
+ * dígitos O un código de recuperación (10 caracteres, con o sin guion). Así quien
+ * perdió el celular puede igual desactivar o rearmar su 2FA.
+ */
+export const secondFactorCodeSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .regex(/^(\d{6}|[A-Za-z0-9]{5}-?[A-Za-z0-9]{5})$/, 'Ingresá el código de 6 dígitos o un código de recuperación'),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;

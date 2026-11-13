@@ -17,6 +17,11 @@ export default function LoginPage() {
   // Segundo paso: la cuenta tiene 2FA activo y hay que pedir el código.
   const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  // Si perdió el celular, entra con un código de recuperación (un solo uso).
+  const [useRecovery, setUseRecovery] = useState(false);
+  const codeReady = useRecovery
+    ? /^[A-Za-z0-9]{5}-?[A-Za-z0-9]{5}$/.test(twoFactorCode.trim())
+    : twoFactorCode.length === 6;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,35 +105,68 @@ export default function LoginPage() {
             <div className="rounded-lg border border-brand-500/20 bg-brand-500/5 p-3 flex items-start gap-2">
               <ShieldCheck className="h-4 w-4 text-brand-400 mt-0.5 shrink-0" />
               <p className="text-xs text-slate-400">
-                Ingresá el código de 6 dígitos de tu app de autenticación.
+                {useRecovery
+                  ? 'Ingresá uno de tus códigos de recuperación. Cada uno sirve una sola vez.'
+                  : 'Ingresá el código de 6 dígitos de tu app de autenticación.'}
               </p>
             </div>
 
             <div>
-              <label className="text-xs text-slate-500 mb-1 block">Código de verificación</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={6}
-                value={twoFactorCode}
-                onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                className="input text-center tracking-[0.5em] font-mono text-lg"
-                placeholder="000000"
-                required
-                autoFocus
-                autoComplete="one-time-code"
-              />
+              <label htmlFor="login-2fa-code" className="text-xs text-slate-500 mb-1 block">
+                {useRecovery ? 'Código de recuperación' : 'Código de verificación'}
+              </label>
+              {useRecovery ? (
+                <input
+                  id="login-2fa-code"
+                  type="text"
+                  maxLength={11}
+                  value={twoFactorCode}
+                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/[^A-Za-z0-9-]/g, '').slice(0, 11))}
+                  className="input text-center tracking-[0.2em] font-mono text-lg uppercase"
+                  placeholder="XXXXX-XXXXX"
+                  required
+                  autoFocus
+                  autoComplete="off"
+                />
+              ) : (
+                <input
+                  id="login-2fa-code"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={twoFactorCode}
+                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="input text-center tracking-[0.5em] font-mono text-lg"
+                  placeholder="000000"
+                  required
+                  autoFocus
+                  autoComplete="one-time-code"
+                />
+              )}
             </div>
 
-            <button type="submit" disabled={loading || twoFactorCode.length !== 6} className="btn-primary w-full">
+            <button type="submit" disabled={loading || !codeReady} className="btn-primary w-full">
               {loading ? 'Verificando...' : 'Verificar código'}
             </button>
 
             <button
               type="button"
               onClick={() => {
+                setUseRecovery((v) => !v);
+                setTwoFactorCode('');
+                setError('');
+              }}
+              className="text-xs text-brand-400 hover:text-brand-300 w-full text-center"
+            >
+              {useRecovery ? 'Usar el código de mi app' : 'Perdí mi celular: usar un código de recuperación'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setTwoFactorRequired(false);
+                setUseRecovery(false);
                 setTwoFactorCode('');
                 setError('');
               }}

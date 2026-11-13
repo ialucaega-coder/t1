@@ -50,9 +50,10 @@ export async function logout() {
 
 // --- Autenticación en dos pasos (2FA / TOTP) ---
 
-// Devuelve si la cuenta tiene el 2FA activado.
+// Devuelve si la cuenta tiene el 2FA activado y cuántos códigos de recuperación
+// sin usar le quedan.
 export function getTwoFactorStatus() {
-  return httpClient.get<{ enabled: boolean }>('/auth/2fa/status');
+  return httpClient.get<{ enabled: boolean; recoveryCodesRemaining?: number }>('/auth/2fa/status');
 }
 
 // Inicia el alta: devuelve el QR (data URL listo para <img>) y el otpauth URI
@@ -62,11 +63,19 @@ export function setupTwoFactor() {
 }
 
 // Verifica el código de 6 dígitos y activa el 2FA. Lanza (400) si es inválido.
+// Devuelve los códigos de recuperación EN CLARO: es la única vez que se ven.
 export function verifyTwoFactor(code: string) {
-  return httpClient.post<{ enabled: boolean }>('/auth/2fa/verify', { code });
+  return httpClient.post<{ enabled: boolean; recoveryCodes: string[] }>('/auth/2fa/verify', { code });
 }
 
-// Desactiva el 2FA pidiendo un código válido. Lanza (400) si es inválido.
+// Desactiva el 2FA pidiendo un código válido (6 dígitos o código de
+// recuperación). Lanza (400) si es inválido.
 export function disableTwoFactor(code: string) {
   return httpClient.post<{ enabled: boolean }>('/auth/2fa/disable', { code });
+}
+
+// Emite un juego nuevo de códigos de recuperación (invalida los anteriores).
+// Pide un segundo factor vigente (6 dígitos o código de recuperación).
+export function regenerateRecoveryCodes(code: string) {
+  return httpClient.post<{ recoveryCodes: string[] }>('/auth/2fa/recovery-codes', { code });
 }
