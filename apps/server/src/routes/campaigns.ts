@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
@@ -46,6 +47,9 @@ router.get(
   })
 );
 
+/** Tope de la vista previa de destinatarios (la UI solo usa `total`). */
+const RECIPIENTS_PREVIEW_LIMIT = 50;
+
 router.get(
   '/recipients',
   requireAuth,
@@ -53,30 +57,28 @@ router.get(
     const businessId = req.auth!.businessId;
     const channel = req.query.channel as string | undefined;
 
-    const bookings = await prisma.booking.findMany({
-      where: { businessId },
-      select: { clientId: true },
-      distinct: ['clientId'],
-    });
-    const clientIds = bookings.map((b) => b.clientId);
+    // Clientes del negocio con al menos una reserva y el dato de contacto que exige el
+    // canal. El total se cuenta en la DB; solo se devuelve una vista previa acotada
+    // (antes se traían TODOS los clientes a memoria y se filtraban en JS).
+    const channelFilter: Prisma.UserWhereInput =
+      !channel || channel === 'email'
+        ? { NOT: { email: '' } }
+        : channel === 'whatsapp' || channel === 'sms'
+          ? { phone: { not: null }, NOT: { phone: '' } }
+          : {};
+    const where: Prisma.UserWhereInput = { bookingsAsClient: { some: { businessId } }, ...channelFilter };
 
-    if (clientIds.length === 0) {
-      return res.json({ total: 0, recipients: [] });
-    }
+    const [total, recipients] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        select: { id: true, name: true, email: true, phone: true },
+        orderBy: { name: 'asc' },
+        take: RECIPIENTS_PREVIEW_LIMIT,
+      }),
+    ]);
 
-    const users = await prisma.user.findMany({
-      where: { id: { in: clientIds } },
-      select: { id: true, name: true, email: true, phone: true },
-      orderBy: { name: 'asc' },
-    });
-
-    const recipients = users.filter((u) => {
-      if (!channel || channel === 'email') return !!u.email;
-      if (channel === 'whatsapp' || channel === 'sms') return !!u.phone;
-      return true;
-    });
-
-    res.json({ total: recipients.length, recipients });
+    res.json({ total, recipients });
   })
 );
 

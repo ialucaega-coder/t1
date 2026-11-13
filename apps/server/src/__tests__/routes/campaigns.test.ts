@@ -24,7 +24,7 @@ vi.mock('../../lib/prisma', () => ({
       findFirst: vi.fn(),
     },
     booking: { findMany: vi.fn() },
-    user: { findMany: vi.fn() },
+    user: { findMany: vi.fn(), count: vi.fn() },
     business: { findUnique: vi.fn() },
   },
 }));
@@ -102,8 +102,9 @@ describe('routes/campaigns', () => {
   });
 
   describe('GET /api/campaigns/recipients', () => {
-    it('devuelve 0 destinatarios si no hay reservas', async () => {
-      mock(prisma.booking.findMany).mockResolvedValue([]);
+    it('devuelve 0 destinatarios si no hay clientes con reservas', async () => {
+      mock(prisma.user.count).mockResolvedValue(0);
+      mock(prisma.user.findMany).mockResolvedValue([]);
 
       const res = await request(app)
         .get('/api/campaigns/recipients')
@@ -111,15 +112,11 @@ describe('routes/campaigns', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ total: 0, recipients: [] });
-      expect(prisma.user.findMany).not.toHaveBeenCalled();
     });
 
-    it('filtra destinatarios por canal email (requieren email)', async () => {
-      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
-      mock(prisma.user.findMany).mockResolvedValue([
-        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null },
-        { id: 'u2', name: 'Beto', email: null, phone: '123' },
-      ]);
+    it('canal email (default): filtra en la DB por email y por clientes del negocio, con vista previa acotada', async () => {
+      mock(prisma.user.count).mockResolvedValue(120);
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null }]);
 
       const res = await request(app)
         .get('/api/campaigns/recipients')
@@ -127,16 +124,19 @@ describe('routes/campaigns', () => {
         .set('Authorization', `Bearer ${adminToken}`);
 
       expect(res.status).toBe(200);
-      expect(res.body.total).toBe(1);
+      expect(res.body.total).toBe(120);
       expect(res.body.recipients[0].id).toBe('u1');
+      const [arg] = mock(prisma.user.findMany).mock.calls[0];
+      expect(arg.where.bookingsAsClient).toEqual({ some: { businessId: 'biz_1' } });
+      expect(arg.where.NOT).toEqual({ email: '' });
+      expect(arg.take).toBe(50);
+      // El conteo usa el mismo filtro (sin traer filas).
+      expect(mock(prisma.user.count).mock.calls[0][0].where).toEqual(arg.where);
     });
 
-    it('filtra destinatarios por canal whatsapp (requieren phone)', async () => {
-      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
-      mock(prisma.user.findMany).mockResolvedValue([
-        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null },
-        { id: 'u2', name: 'Beto', email: null, phone: '123' },
-      ]);
+    it('canal whatsapp: exige teléfono', async () => {
+      mock(prisma.user.count).mockResolvedValue(1);
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'u2', name: 'Beto', email: null, phone: '123' }]);
 
       const res = await request(app)
         .get('/api/campaigns/recipients')
@@ -145,6 +145,9 @@ describe('routes/campaigns', () => {
 
       expect(res.body.total).toBe(1);
       expect(res.body.recipients[0].id).toBe('u2');
+      const [arg] = mock(prisma.user.findMany).mock.calls[0];
+      expect(arg.where.phone).toEqual({ not: null });
+      expect(arg.where.email).toBeUndefined();
     });
   });
 
