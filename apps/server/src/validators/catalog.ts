@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchSchema } from './patch';
 
 export const updateCatalogItemSchema = z.object({
   subtitle: z.string().min(1).max(120).optional(),
@@ -7,7 +8,7 @@ export const updateCatalogItemSchema = z.object({
   isActive: z.boolean().optional(),
   // Parámetros configurables del superpoder. El backend los normaliza contra el
   // spec (constants/superpowerParams.ts); acá solo aceptamos el objeto crudo.
-  params: z.record(z.union([z.string(), z.number()])).optional(),
+  params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 });
 
 export const createPromptSchema = z.object({
@@ -17,7 +18,7 @@ export const createPromptSchema = z.object({
   isActive: z.boolean().default(true),
 });
 
-export const updatePromptSchema = createPromptSchema.partial();
+export const updatePromptSchema = patchSchema(createPromptSchema);
 
 export type UpdateCatalogItemInput = z.infer<typeof updateCatalogItemSchema>;
 export type CreatePromptInput = z.infer<typeof createPromptSchema>;

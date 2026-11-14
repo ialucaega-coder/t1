@@ -11,7 +11,7 @@ const createBotSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
   channel: z.enum(['TELEGRAM', 'WHATSAPP', 'WEB']).default('TELEGRAM'),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateBotSchema = z.object({
@@ -19,7 +19,7 @@ const updateBotSchema = z.object({
   description: z.string().max(500).optional(),
   channel: z.enum(['TELEGRAM', 'WHATSAPP', 'WEB']).optional(),
   status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED']).optional(),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
   token: z.string().max(500).optional(),
   webhookUrl: z.string().url().max(500).optional(),
 });

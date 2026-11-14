@@ -54,7 +54,7 @@ const updateSchema = z
 // (acciones externas incluidas); por defecto hace dry-run (simula las externas).
 const runSchema = z.object({
   trigger: triggerEnum,
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
   execute: z.boolean().optional(),
 });
 

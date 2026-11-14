@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchSchema } from './patch';
 
 /** Creación de un producto. */
 export const createProductSchema = z.object({
@@ -11,7 +12,7 @@ export const createProductSchema = z.object({
 });
 
 /** Actualización parcial de un producto. */
-export const updateProductSchema = createProductSchema.partial();
+export const updateProductSchema = patchSchema(createProductSchema);
 
 export type CreateProductInput = z.infer<typeof createProductSchema>;
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;

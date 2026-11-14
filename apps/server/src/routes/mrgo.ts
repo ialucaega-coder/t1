@@ -110,7 +110,7 @@ const runSchema = z.object({
 // la única acción que se EJECUTA al reanudar es la confirmada (validada aparte).
 const stepSchema = z.object({
   tool: z.string().max(60),
-  params: z.record(z.unknown()).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
   thought: z.string().max(500).optional(),
   result: z.object({
     action: z.string().max(60).optional(),
@@ -118,13 +118,13 @@ const stepSchema = z.object({
     ok: z.boolean().optional(),
     status: z.string().max(20),
     detail: z.string().max(2000),
-    data: z.record(z.unknown()).optional(),
+    data: z.record(z.string(), z.unknown()).optional(),
   }),
 });
 
 const confirmSchema = z.object({
   tool: z.string().trim().min(1).max(60),
-  params: z.record(z.unknown()).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
   thought: z.string().trim().max(500).optional(),
   // Si viene `resume`, tras ejecutar la acción confirmada se REANUDA la cadena
   // (puede volver a pausar). Sin `resume`, se ejecuta sólo esa acción (legacy).

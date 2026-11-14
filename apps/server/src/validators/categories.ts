@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchSchema } from './patch';
 
 /** Creación de una categoría. */
 export const createCategorySchema = z.object({
@@ -8,7 +9,7 @@ export const createCategorySchema = z.object({
 });
 
 /** Actualización parcial de una categoría. */
-export const updateCategorySchema = createCategorySchema.partial();
+export const updateCategorySchema = patchSchema(createCategorySchema);
 
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;

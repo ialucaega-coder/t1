@@ -89,7 +89,7 @@ describe('middleware/errorHandler - errorHandler', () => {
 
   it('responde 400 con detalles ante un ZodError', () => {
     const issues: ZodIssue[] = [
-      { code: 'invalid_type', expected: 'string', received: 'number', path: ['email'], message: 'Esperado string' },
+      { code: 'invalid_type', expected: 'string', path: ['email'], message: 'Esperado string' },
     ];
     const err = new ZodError(issues);
     const res = createMockRes();

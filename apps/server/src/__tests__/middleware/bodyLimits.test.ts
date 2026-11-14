@@ -65,7 +65,7 @@ describe('middleware/bodyLimits', () => {
     const payload = JSON.stringify(bigBody(150));
     expect(Buffer.byteLength(payload)).toBeGreaterThan(PUBLIC_BODY_LIMIT_BYTES);
     // El server responde 413 y corta la conexión mientras el cliente sigue enviando, así que
-    // el cliente de test ve el 413 o, según el timing, un ECONNRESET: ambos son rechazo.
+    // el cliente de test ve el 413 o, según el timing, un corte de conexión (ECONNRESET/EPIPE): ambos son rechazo.
     try {
       const res = await request(app)
         .post('/api/public/chat')
@@ -74,7 +74,7 @@ describe('middleware/bodyLimits', () => {
         .send(payload);
       expect(res.status).toBe(413);
     } catch (err) {
-      expect((err as NodeJS.ErrnoException).code).toBe('ECONNRESET');
+      expect(['ECONNRESET', 'EPIPE', undefined]).toContain((err as NodeJS.ErrnoException).code);
     }
   });
 

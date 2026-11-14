@@ -83,7 +83,7 @@ const planSchema = z.object({
 });
 
 const featuresSchema = z.object({
-  flags: z.record(z.boolean()),
+  flags: z.record(z.string(), z.boolean()),
 });
 
 const router = Router();

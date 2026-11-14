@@ -401,7 +401,7 @@ router.post('/book/:slug', asyncHandler(async (req, res) => {
     if (!parsed.success) {
       res.status(400).json({
         error: 'Datos de reserva inválidos',
-        details: parsed.error.errors.map((e) => ({ field: e.path.join('.'), message: e.message })),
+        details: parsed.error.issues.map((e) => ({ field: e.path.join('.'), message: e.message })),
       });
       return;
     }

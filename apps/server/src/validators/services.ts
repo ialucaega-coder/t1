@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchSchema } from './patch';
 
 /** Creación de un servicio. */
 export const createServiceSchema = z.object({
@@ -11,7 +12,7 @@ export const createServiceSchema = z.object({
 });
 
 /** Actualización parcial de un servicio. */
-export const updateServiceSchema = createServiceSchema.partial();
+export const updateServiceSchema = patchSchema(createServiceSchema);
 
 export type CreateServiceInput = z.infer<typeof createServiceSchema>;
 export type UpdateServiceInput = z.infer<typeof updateServiceSchema>;
