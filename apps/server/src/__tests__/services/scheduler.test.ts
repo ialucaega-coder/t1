@@ -31,6 +31,7 @@ vi.mock('../../services/superpowers/report', () => ({
 
 import cron from 'node-cron';
 import { prisma } from '../../lib/prisma';
+import { cache } from '../../lib/cache';
 import {
   generateDailyReport,
   generateReminders,
@@ -51,6 +52,8 @@ function skillRowNoConfig(businessId: string) {
 describe('services/scheduler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // El reparto dedupe por (tipo, negocio, día) en el almacén compartido: limpiarlo entre tests.
+    cache.clear();
     mock(prisma.user.findFirst).mockResolvedValue({ id: 'admin_1' });
     mock(prisma.notification.create).mockResolvedValue({ id: 'n1' });
   });

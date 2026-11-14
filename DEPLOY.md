@@ -228,6 +228,12 @@ Checklist multi-instancia: `REDIS_URL` en todas + al menos una instancia con
 workers + `TRUST_PROXY_HOPS=1` + `connection_limit` calculado +
 `NEXT_PUBLIC_SOCKET_TRANSPORTS=websocket` si no hay sticky sessions.
 
+Jobs diarios por negocio (reportes, recordatorios, no-shows, post-venta): el cron solo
+reparte y encola UN trabajo por negocio en la cola `scheduler-business`; los workers de
+todas las instancias los procesan en paralelo (concurrencia 5 por instancia), con 3
+reintentos y sin duplicar (jobId por tipo+negocio+día). Por eso, con Redis, al menos una
+instancia debe correr workers (`RUN_WORKERS` sin apagar). Sin Redis corren inline y en orden.
+
 Mantenimiento automático: a las 04:00 el scheduler purga los OTP vencidos y las
 claves de idempotencia viejas (una sola vez por día entre todas las instancias).
 

@@ -8,12 +8,13 @@
  *     mañana y los deja como notificación para el ADMIN (listos para enviar).
  *
  * Se arranca desde index.ts (startScheduler). No corre en entorno de test.
- * Cada negocio se procesa en su propio try/catch para que un error no frene
- * al resto — pensado para escalar a muchos negocios.
+ * Cada negocio es un trabajo independiente de la cola `scheduler-business`: un
+ * error en uno se reintenta solo y no frena al resto (ver más abajo).
  */
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma';
 import { sharedTryLock } from '../lib/sharedState';
+import { defineQueue, enqueue, queuesEnabled } from '../lib/queue';
 import { runPurge } from './maintenance/purge';
 import {
   generateDailyReport,
@@ -55,116 +56,136 @@ async function adminUserId(businessId: string): Promise<string | null> {
   return admin?.id ?? null;
 }
 
-/** Corre los reportes diarios de todos los negocios con el superpoder activo. */
-export async function runDailyReports(): Promise<void> {
-  const businessIds = await businessesWithSuperpower(REPORT_SUPERPOWER);
+/**
+ * Jobs por negocio. Cada job diario se divide en dos pasos:
+ *  1. REPARTO (cron, una sola instancia por el lock del día): lista los negocios con
+ *     el superpoder activo y encola UN trabajo por negocio.
+ *  2. PROCESO (worker de la cola `scheduler-business`): arma el contenido y crea la
+ *     notificación de ESE negocio.
+ * Con Redis, los negocios se reparten entre los workers de todas las instancias, un
+ * fallo de un negocio se reintenta solo (3 intentos) y no frena a los demás. Sin
+ * Redis `enqueue` ejecuta inline y en orden, igual que antes.
+ */
+type SchedulerKind = 'report' | 'reminders' | 'noshow' | 'postsale';
+
+interface SchedulerJob {
+  kind: SchedulerKind;
+  businessId: string;
+}
+
+const SCHEDULER_QUEUE = 'scheduler-business';
+const SCHEDULER_ATTEMPTS = 3;
+
+/** Contenido y notificación de cada tipo de job, para UN negocio. Lanza ante un error. */
+const businessHandlers: Record<SchedulerKind, (businessId: string, userId: string) => Promise<void>> = {
+  async report(businessId, userId) {
+    const report = await generateDailyReport(businessId);
+    await prisma.notification.create({
+      data: {
+        businessId,
+        userId,
+        type: 'GENERAL',
+        channel: 'PUSH',
+        title: `Reporte diario — ${report.date}`,
+        body: report.text,
+      },
+    });
+  },
+  async reminders(businessId, userId) {
+    const reminders = await generateReminders(businessId);
+    if (reminders.length === 0) return;
+    const body = [
+      `Tenés ${reminders.length} turno(s) para mañana. Recordatorios listos para enviar:`,
+      ...reminders.map((r) => `• ${r.time} — ${r.clientName} (${r.service})`),
+    ].join('\n');
+    await prisma.notification.create({
+      data: {
+        businessId,
+        userId,
+        type: 'BOOKING_REMINDER',
+        channel: 'PUSH',
+        title: `Recordatorios de mañana (${reminders.length})`,
+        body,
+      },
+    });
+  },
+  async noshow(businessId, userId) {
+    const items = await generateNoShowRecovery(businessId);
+    if (items.length === 0) return;
+    const body = [
+      `${items.length} turno(s) marcados como no-show hoy. Mensajes de recuperación listos:`,
+      ...items.map((i) => `• ${i.clientName} (${i.service})`),
+    ].join('\n');
+    await prisma.notification.create({
+      data: {
+        businessId,
+        userId,
+        type: 'GENERAL',
+        channel: 'PUSH',
+        title: `Recuperá ${items.length} no-show(s) de hoy`,
+        body,
+      },
+    });
+  },
+  async postsale(businessId, userId) {
+    const items = await generatePostSaleFollowUps(businessId);
+    if (items.length === 0) return;
+    const body = [
+      `${items.length} cliente(s) completaron su turno ayer. Mensajes de seguimiento listos para enviar:`,
+      ...items.map((i) => `• ${i.clientName} (${i.service})`),
+    ].join('\n');
+    await prisma.notification.create({
+      data: {
+        businessId,
+        userId,
+        type: 'GENERAL',
+        channel: 'PUSH',
+        title: `Seguimiento post-venta: ${items.length} cliente(s)`,
+        body,
+      },
+    });
+  },
+};
+
+/** Trabajo de la cola: procesa un negocio. Un error se propaga (BullMQ reintenta). */
+export async function processSchedulerJob({ kind, businessId }: SchedulerJob): Promise<void> {
+  const userId = await adminUserId(businessId);
+  if (!userId) return;
+  await businessHandlers[kind](businessId, userId);
+}
+
+defineQueue<SchedulerJob>(SCHEDULER_QUEUE, processSchedulerJob, { concurrency: 5 });
+
+/**
+ * Encola un trabajo por negocio. El jobId lleva el día para dedupe: un mismo (tipo,
+ * negocio, día) no se procesa dos veces aunque el reparto se dispare de nuevo.
+ */
+async function fanOut(kind: SchedulerKind, superpower: string): Promise<void> {
+  const businessIds = await businessesWithSuperpower(superpower);
+  const day = new Date().toISOString().slice(0, 10);
+  // Con Redis, reintentos entre workers; inline (sin Redis) un solo intento para no
+  // frenar el recorrido secuencial con esperas por backoff.
+  const attempts = queuesEnabled() ? SCHEDULER_ATTEMPTS : 1;
   for (const businessId of businessIds) {
-    try {
-      const userId = await adminUserId(businessId);
-      if (!userId) continue;
-      const report = await generateDailyReport(businessId);
-      await prisma.notification.create({
-        data: {
-          businessId,
-          userId,
-          type: 'GENERAL',
-          channel: 'PUSH',
-          title: `Reporte diario — ${report.date}`,
-          body: report.text,
-        },
-      });
-    } catch (err) {
-      console.error(`[scheduler] Error en reporte diario de ${businessId}:`, err);
-    }
+    await enqueue<SchedulerJob>(
+      SCHEDULER_QUEUE,
+      { kind, businessId },
+      { jobId: `sched_${kind}_${day}_${businessId}`, attempts },
+    );
   }
 }
 
-/** Corre los recordatorios de mañana de todos los negocios con el superpoder activo. */
-export async function runReminders(): Promise<void> {
-  const businessIds = await businessesWithSuperpower(REMINDER_SUPERPOWER);
-  for (const businessId of businessIds) {
-    try {
-      const userId = await adminUserId(businessId);
-      if (!userId) continue;
-      const reminders = await generateReminders(businessId);
-      if (reminders.length === 0) continue;
-      const body = [
-        `Tenés ${reminders.length} turno(s) para mañana. Recordatorios listos para enviar:`,
-        ...reminders.map((r) => `• ${r.time} — ${r.clientName} (${r.service})`),
-      ].join('\n');
-      await prisma.notification.create({
-        data: {
-          businessId,
-          userId,
-          type: 'BOOKING_REMINDER',
-          channel: 'PUSH',
-          title: `Recordatorios de mañana (${reminders.length})`,
-          body,
-        },
-      });
-    } catch (err) {
-      console.error(`[scheduler] Error en recordatorios de ${businessId}:`, err);
-    }
-  }
-}
+/** Reportes diarios de todos los negocios con el superpoder activo. */
+export const runDailyReports = (): Promise<void> => fanOut('report', REPORT_SUPERPOWER);
+
+/** Recordatorios de mañana de todos los negocios con el superpoder activo. */
+export const runReminders = (): Promise<void> => fanOut('reminders', REMINDER_SUPERPOWER);
 
 /** Recupera los no-shows del día de cada negocio con el superpoder activo. */
-export async function runNoShowRecovery(): Promise<void> {
-  const businessIds = await businessesWithSuperpower(NOSHOW_SUPERPOWER);
-  for (const businessId of businessIds) {
-    try {
-      const userId = await adminUserId(businessId);
-      if (!userId) continue;
-      const items = await generateNoShowRecovery(businessId);
-      if (items.length === 0) continue;
-      const body = [
-        `${items.length} turno(s) marcados como no-show hoy. Mensajes de recuperación listos:`,
-        ...items.map((i) => `• ${i.clientName} (${i.service})`),
-      ].join('\n');
-      await prisma.notification.create({
-        data: {
-          businessId,
-          userId,
-          type: 'GENERAL',
-          channel: 'PUSH',
-          title: `Recuperá ${items.length} no-show(s) de hoy`,
-          body,
-        },
-      });
-    } catch (err) {
-      console.error(`[scheduler] Error en recuperación de no-shows de ${businessId}:`, err);
-    }
-  }
-}
+export const runNoShowRecovery = (): Promise<void> => fanOut('noshow', NOSHOW_SUPERPOWER);
 
-/** Seguimiento post-venta de los turnos completados ayer, por negocio con el superpoder activo. */
-export async function runPostSaleFollowUps(): Promise<void> {
-  const businessIds = await businessesWithSuperpower(POSTSALE_SUPERPOWER);
-  for (const businessId of businessIds) {
-    try {
-      const userId = await adminUserId(businessId);
-      if (!userId) continue;
-      const items = await generatePostSaleFollowUps(businessId);
-      if (items.length === 0) continue;
-      const body = [
-        `${items.length} cliente(s) completaron su turno ayer. Mensajes de seguimiento listos para enviar:`,
-        ...items.map((i) => `• ${i.clientName} (${i.service})`),
-      ].join('\n');
-      await prisma.notification.create({
-        data: {
-          businessId,
-          userId,
-          type: 'GENERAL',
-          channel: 'PUSH',
-          title: `Seguimiento post-venta: ${items.length} cliente(s)`,
-          body,
-        },
-      });
-    } catch (err) {
-      console.error(`[scheduler] Error en seguimiento post-venta de ${businessId}:`, err);
-    }
-  }
-}
+/** Seguimiento post-venta de los turnos completados ayer. */
+export const runPostSaleFollowUps = (): Promise<void> => fanOut('postsale', POSTSALE_SUPERPOWER);
 
 let started = false;
 

@@ -51,7 +51,7 @@ Tamaños: S = horas, M = 1–2 días, L = varios días.
 | 4.2 | `dispatchEvent` y notificaciones `void sendXxx` a cola con reintentos | `workflows/index.ts`, `bookings.ts`, `orders.ts` | M |
 | 4.3 | Campañas: estados `sending/sent`, lotes con checkpoint por destinatario | `campaigns/send.ts` | M |
 | 4.4 | Límite de concurrencia y cuota por tenant en endpoints de IA (incluido `/mrgo/*`) | `routes/mrgo.ts:173-279`, `ai.ts`, `catalogFeatures.ts` | M |
-| 4.5 | Scheduler: un job por tenant en cola, concurrencia 5–10 | `services/scheduler.ts` | M |
+| 4.5 | Scheduler: un job por tenant en cola, concurrencia 5 (HECHO: cola `scheduler-business`, jobId por tipo+negocio+día, 3 reintentos con Redis) | `services/scheduler.ts` | M |
 
 ## Ola 5 — Frontend
 | # | Qué | Dónde | Tam. |
@@ -84,7 +84,7 @@ Tamaños: S = horas, M = 1–2 días, L = varios días.
 | 1 Bugs y correctitud | Hecha | `b93daee` |
 | 2 Lecturas en el camino caliente | Hecha, con diferidos (2.1 loader cacheado de `Connection`) | `1fcba71` |
 | 3 Multi-instancia (Redis) | Hecha, con diferido (3.5 cuota/revocación compartidas) | `14f96c8` |
-| 4 Colas BullMQ | Hecha, con diferidos (4.5 scheduler por negocio; webhooks ManyChat/voz/Telegram siguen síncronos) | `fc17a3e` |
+| 4 Colas BullMQ | Hecha; 4.5 (scheduler por negocio en cola) hecha después; webhooks ManyChat/voz/Telegram siguen síncronos | `fc17a3e` |
 | 5 Frontend | Hecha (5.3 notificaciones por socket no se hizo, ver nota en la ola) | `37e6a9d` |
 | 6 Límites del JSON por negocio | 6.1–6.3 hechas; 6.4 requiere descongelar el schema | `24dcaf5` |
 
