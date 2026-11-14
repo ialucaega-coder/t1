@@ -1,5 +1,5 @@
 -- =====================================================================
--- BORRADOR de migración de índices (Ola de escalabilidad) — NO APLICADO
+-- Migración de índices (Ola de escalabilidad) — APLICADA el 2026-11-14 (secciones 1 y 3; la 4 sigue a validar)
 -- =====================================================================
 -- IMPORTANTE: antes de esto aplicar docs/migraciones/indices-faltantes-schema.sql
 -- (27 índices que el schema ya declara y la base real no tiene; incluye connections
