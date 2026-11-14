@@ -77,7 +77,28 @@ Tamaños: S = horas, M = 1–2 días, L = varios días.
 - 6.2: `lib/singletonLock.ts` toma un advisory lock por (negocio, type) al inicio de cada transacción que hace `findFirst`+`create` de una `Connection` singleton (24 sitios). `routes/meta.ts` (alta de página/IG) también quedó cubierto.
 - 6.3: `services/maintenance/purge.ts`, cron 04:00 con lock por día: OTP vencidos hace más de 1 h y claves de idempotencia de más de 30 días (`IDEMPOTENCY_TTL_DAYS`). `Connection` no tiene `createdAt`; la antigüedad sale de la fecha embebida en el id cuid.
 
+## Estado general (actualizado 2026-11-13)
+
+| Ola | Estado | Commit |
+|---|---|---|
+| 1 Bugs y correctitud | Hecha | `b93daee` |
+| 2 Lecturas en el camino caliente | Hecha, con diferidos (2.1 loader cacheado de `Connection`) | `1fcba71` |
+| 3 Multi-instancia (Redis) | Hecha, con diferido (3.5 cuota/revocación compartidas) | `14f96c8` |
+| 4 Colas BullMQ | Hecha, con diferidos (4.5 scheduler por negocio; webhooks ManyChat/voz/Telegram siguen síncronos) | `fc17a3e` |
+| 5 Frontend | Hecha (5.3 notificaciones por socket no se hizo, ver nota en la ola) | `37e6a9d` |
+| 6 Límites del JSON por negocio | 6.1–6.3 hechas; 6.4 requiere descongelar el schema | `24dcaf5` |
+
+Trabajo posterior a las olas:
+- Analytics agregado en SQL y por día de Argentina (`/conversations`, `/timeseries`, `/attribution`): `c33f70c`.
+- `GET /campaigns/recipients`: conteo en la DB y vista previa de 50: `8f660ca`.
+- Lock de creación en `routes/meta.ts`: `3dc91b1`.
+- DEPLOY.md y `.env.example` con el escalado multi-instancia: `6206693`.
+- Seguridad: `npm audit fix` (next 16.4.6, dompurify, body-parser, follow-redirects): `a1d9354`; límite de cuerpo de 100 KB en rutas públicas (mitiga el aviso de zod): `93db187`. Siguen abiertos zod 3→4 y node-cron/uuid (saltos mayores).
+
+**Hallazgo de la base real (2026-11-13):** 27 de los 52 índices que declara el schema no existen en Supabase (incluidos 3 UNIQUE). El SQL para alinearlos está en `docs/migraciones/indices-faltantes-schema.sql`; el borrador de índices nuevos, en `docs/migraciones/indices-propuestos.sql`. Ninguno está aplicado: lo corre el dueño.
+
 ## Migraciones gateadas (requieren PR + migración, el schema sigue congelado hasta aprobarlo)
+Borradores listos en `docs/migraciones/` (ver arriba). Los índices de expresión sobre JSON siguen pendientes de validar con `EXPLAIN` sobre datos realistas.
 - Índices `businesses(phone)` y `businesses(whatsappNumber)` (alta): hoy es un seq scan por cada mensaje de WhatsApp o voz.
 - Índices de expresión en `connections`: `config->>'pageId'`, `config->>'igId'`, `config->>'key'` (idempotencia), `config->>'phone'` (OTP).
 - UNIQUE parcial `(businessId, type)` para tipos singleton: cierra la carrera de duplicados.
