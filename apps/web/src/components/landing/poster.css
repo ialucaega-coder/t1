@@ -1,0 +1,375 @@
+/* Landing "Ejército de Robots": cartel de propaganda en rojo / negro / crema.
+   Todo va bajo .poster para no contaminar el resto de la app.
+
+   Tema: los tokens son SEMÁNTICOS y se invierten entre claro y oscuro.
+     --p-ink   = fondo de la página        --p-paper = texto principal
+     --p-coal  = fondo de bandas alternas  --p-card  = fondo de tarjetas
+     --p-on-red = texto sobre rojo (siempre crema)
+   .poster-dark fuerza el set oscuro en una zona (menú, hero, pie) en ambos temas. */
+
+.poster,
+.poster-dark {
+  --p-red: #c4121c;
+  --p-red-deep: #8e0d14;
+  --p-ink: #0b0b0c;
+  --p-coal: #151516;
+  --p-card: #151516;
+  --p-paper: #efe6d2;
+  --p-mute: #a79f8f;
+  --p-line: #34302b;
+  --p-hover: rgba(255, 255, 255, 0.1);
+  --p-on-red: #efe6d2;
+  --p-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.07 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  color-scheme: dark;
+}
+
+/* Tema claro: papel crema de cartel impreso */
+.poster[data-poster-theme='light'] {
+  --p-red: #c4121c;
+  --p-ink: #efe6d2;
+  --p-coal: #e2d5b6;
+  --p-card: #faf4e4;
+  --p-paper: #17130f;
+  --p-mute: #5b5346;
+  --p-line: #b9a77f;
+  --p-hover: rgba(23, 19, 15, 0.09);
+  --p-on-red: #f6efdc;
+  --p-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.3  0 0 0 0 0.2  0 0 0 0 0.1  0 0 0 0.09 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  color-scheme: light;
+}
+
+.poster {
+  background-color: var(--p-ink);
+  background-image: var(--p-grain);
+  color: var(--p-paper);
+  font-family: var(--font-poster-body), 'Arial Narrow', sans-serif;
+  scroll-behavior: smooth;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+.poster-dark {
+  background-color: var(--p-ink);
+  color: var(--p-paper);
+}
+
+.poster-display {
+  font-family: var(--font-poster-display), Impact, 'Arial Narrow', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+/* ---- Fondos con atmósfera ---- */
+/* Banda alterna: papel un tono más oscuro (o carbón) + grano propio */
+.poster-band {
+  background-color: var(--p-coal);
+  background-image: var(--p-grain);
+}
+/* Puntos de semitono (impresión offset) que se desvanecen hacia abajo */
+.poster-halftone {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--p-coal);
+}
+.poster-halftone::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(color-mix(in srgb, var(--p-red) 26%, transparent) 1.5px, transparent 2px),
+    var(--p-grain);
+  background-size: 15px 15px, 160px 160px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 50%, rgba(0, 0, 0, 0.3) 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 50%, rgba(0, 0, 0, 0.3) 100%);
+}
+/* Rayos suaves desde abajo al centro */
+.poster-rays-soft {
+  background-image:
+    repeating-conic-gradient(from 0deg at 50% 130%, color-mix(in srgb, var(--p-red) 14%, transparent) 0 6deg, transparent 6deg 12deg),
+    var(--p-grain);
+}
+/* Rayos rojos y negros del cartel original: rellenan el área del título del hero */
+.poster-rays-hero {
+  background-color: #0b0b0c;
+  background-image:
+    radial-gradient(75% 95% at 50% 24%, transparent 0%, rgba(11, 11, 12, 0.5) 65%, #0b0b0c 100%),
+    repeating-conic-gradient(from 0deg at 50% 24%, #7d0c13 0 7deg, #0b0b0c 7deg 15deg);
+}
+/* Locales del cartel original (restaurante, barbería, farmacia, gimnasio) en las esquinas */
+.poster-stores {
+  position: relative;
+  isolation: isolate;
+}
+.poster-stores::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url('/landing/stores-left.webp'), url('/landing/stores-right.webp');
+  background-repeat: no-repeat, no-repeat;
+  background-position: left top, right top;
+  background-size: 320px auto, 320px auto;
+  opacity: 0.42;
+  -webkit-mask-image: linear-gradient(to right, #000 0, transparent 320px, transparent calc(100% - 320px), #000 100%),
+    linear-gradient(to bottom, #000 0, transparent 330px);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, #000 0, transparent 320px, transparent calc(100% - 320px), #000 100%),
+    linear-gradient(to bottom, #000 0, transparent 330px);
+  mask-composite: intersect;
+}
+.poster[data-poster-theme='light'] .poster-stores::before {
+  opacity: 0.4;
+  filter: sepia(0.35) contrast(0.95);
+}
+@media (max-width: 767px) {
+  .poster-stores::before {
+    display: none;
+  }
+}
+
+/* Banda de la demo: el arte de los locales (tu imagen original) de fondo, oscurecido */
+.poster-demo-bg {
+  background-image:
+    linear-gradient(rgba(11, 11, 12, 0.7), rgba(11, 11, 12, 0.84)),
+    url('/landing/hero-art.webp');
+  background-size: cover, cover;
+  background-position: center, center top;
+}
+
+/* Franja de advertencia: separa secciones */
+.poster-hazard {
+  height: 12px;
+  background: repeating-linear-gradient(-45deg, var(--p-red) 0 14px, #0b0b0c 14px 28px);
+}
+
+/* Cintas rojas inclinadas */
+.poster-banner {
+  display: inline-block;
+  background: var(--p-red);
+  color: var(--p-on-red);
+  padding: 0.3em 1.4em 0.3em 1.1em;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 0.8em) 100%, 0 100%);
+}
+.poster-banner--flip {
+  clip-path: polygon(0.8em 0, 100% 0, 100% 100%, 0 100%);
+  padding: 0.3em 1.1em 0.3em 1.4em;
+}
+
+/* Placa crema del título */
+.poster-plate {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+  background: var(--p-paper);
+  color: var(--p-ink);
+  transform: skew(-6deg) rotate(-1.5deg);
+  clip-path: polygon(0 0, 100% 5%, 98% 100%, 2% 95%);
+  padding: 0.25em 0.9em;
+}
+.poster-plate > span {
+  display: block;
+  transform: skew(6deg);
+}
+
+/* Etiqueta oscura fija (sobre rojo) */
+.poster-chip-dark {
+  background: #0b0b0c;
+  color: #efe6d2;
+}
+
+/* Botones */
+.poster-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.6rem;
+  font-family: var(--font-poster-display), Impact, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 1.05rem;
+  border: 2px solid var(--p-red);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.poster-btn:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 4px 4px 0 var(--p-paper);
+}
+.poster-btn:active {
+  transform: translate(1px, 1px);
+  box-shadow: none;
+}
+.poster-btn--red {
+  background: var(--p-red);
+  color: var(--p-on-red);
+}
+.poster-btn--ghost {
+  background: transparent;
+  color: var(--p-paper);
+  border-color: var(--p-paper);
+}
+.poster-frame--red .poster-btn--ghost {
+  color: var(--p-on-red);
+  border-color: var(--p-on-red);
+}
+.poster-frame--red .poster-btn--ghost:hover {
+  box-shadow: 4px 4px 0 #0b0b0c;
+}
+
+/* Foco visible en todo lo interactivo */
+.poster a:focus-visible,
+.poster button:focus-visible,
+.poster summary:focus-visible,
+.poster [role='tab']:focus-visible {
+  outline: 3px solid var(--p-paper);
+  outline-offset: 3px;
+}
+.poster-frame--red :focus-visible {
+  outline-color: var(--p-on-red);
+}
+
+/* Todo lo clickeable se siente clickeable */
+.poster a,
+.poster button,
+.poster summary,
+.poster [role='tab'],
+.poster [role='switch'] {
+  cursor: pointer;
+}
+
+/* Marco con esquinas cortadas */
+.poster-frame {
+  border: 2px solid var(--p-paper);
+  background: var(--p-card);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+.poster-frame--red {
+  border-color: var(--p-red);
+  background: linear-gradient(160deg, var(--p-red) 0%, var(--p-red-deep) 100%);
+  color: var(--p-on-red);
+}
+
+/* Tarjetas interactivas (robots por rubro) */
+.poster-card {
+  position: relative;
+  transition: transform 0.18s ease, filter 0.18s ease;
+  text-align: left;
+  width: 100%;
+}
+.poster-card:hover {
+  transform: translateY(-4px);
+  filter: brightness(1.06);
+}
+.poster-card[aria-pressed='true'] {
+  border-color: var(--p-red);
+  box-shadow: 0 0 0 3px var(--p-red);
+}
+
+/* Fundido del arte del hero */
+.poster-hero-fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 100%),
+    linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to bottom, #000 78%, transparent 100%),
+    linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%);
+  mask-composite: intersect;
+}
+
+/* Aparición al scrollear (solo si el JS la activa; sin JS todo queda visible) */
+.reveal-pending {
+  opacity: 0;
+  transform: translateY(18px);
+}
+.reveal-pending.reveal-in {
+  opacity: 1;
+  transform: none;
+  transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* Toggle mensual / anual */
+.poster-toggle[aria-checked='true'] {
+  background: var(--p-red);
+  border-color: var(--p-red);
+}
+.poster-toggle[aria-checked='true'] .poster-toggle-dot {
+  transform: translateX(1.5rem);
+}
+
+/* Efectos */
+@keyframes poster-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.poster-marquee-track { animation: poster-marquee 38s linear infinite; }
+.poster-marquee:hover .poster-marquee-track,
+.poster-marquee:focus-within .poster-marquee-track { animation-play-state: paused; }
+
+@keyframes poster-swap { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.poster-swap { animation: poster-swap 0.3s ease both; }
+
+@keyframes poster-slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+.poster-slide-up { animation: poster-slide-up 0.3s ease both; }
+
+@keyframes poster-slam { from { opacity: 0; transform: translateY(20px) scale(1.04); } to { opacity: 1; transform: none; } }
+.poster-slam { animation: poster-slam 0.6s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+
+.poster-hero-art { transition: transform 0.25s ease-out; will-change: transform; }
+
+/* Brillo que sigue al mouse dentro de las tarjetas */
+.poster-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.2), transparent 70%);
+}
+.poster-card:hover::after { opacity: 1; }
+
+/* Barra de progreso de lectura */
+.poster-progress { transform-origin: left; transform: scaleX(var(--progress, 0)); }
+
+/* Sliders de la calculadora */
+.poster-range { -webkit-appearance: none; appearance: none; height: 10px; background: linear-gradient(to right, var(--p-red) var(--fill, 50%), var(--p-line) var(--fill, 50%)); outline-offset: 6px; cursor: pointer; }
+.poster-range::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; background: var(--p-paper); border: 3px solid var(--p-red); transform: rotate(45deg); }
+.poster-range::-moz-range-thumb { width: 18px; height: 18px; background: var(--p-paper); border: 3px solid var(--p-red); border-radius: 0; transform: rotate(45deg); }
+.poster-range:focus-visible { outline: 3px solid var(--p-paper); }
+
+/* FAQ */
+.poster-faq summary { list-style: none; }
+.poster-faq summary::-webkit-details-marker { display: none; }
+
+/* Interruptor de tema: muestra el ícono del tema al que se cambia */
+.poster-theme-sun { display: none; }
+.poster[data-poster-theme='dark'] .poster-theme-sun { display: inline; }
+.poster[data-poster-theme='dark'] .poster-theme-moon { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .poster {
+    scroll-behavior: auto;
+    transition: none;
+  }
+  .reveal-pending {
+    opacity: 1;
+    transform: none;
+  }
+  .poster-btn,
+  .poster-card,
+  .poster-toggle-dot,
+  .poster-hero-art {
+    transition: none !important;
+  }
+  .poster-marquee-track,
+  .poster-swap,
+  .poster-slide-up,
+  .poster-slam {
+    animation: none !important;
+  }
+  .poster-marquee { overflow-x: auto; }
+  .poster-btn:hover,
+  .poster-card:hover {
+    transform: none;
+  }
+}

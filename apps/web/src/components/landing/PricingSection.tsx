@@ -6,7 +6,8 @@ import { Check } from 'lucide-react';
 
 interface PlanData {
   name: string;
-  price: number;
+  monthly: number;
+  yearly: number;
   description: string;
   features: string[];
   cta: string;
@@ -26,39 +27,12 @@ interface ApiPlan {
   features: string[];
 }
 
+// Planes por defecto (iguales al diseño); se reemplazan por los de la API si responde.
 const FALLBACK_PLANS: PlanData[] = [
-  {
-    name: 'Gratis',
-    price: 0,
-    description: 'Para probar sin compromiso',
-    features: ['1 bot', '500 mensajes/mes', '100 contactos', 'Web Chat', 'Soporte por email'],
-    cta: 'Empezar gratis',
-    popular: false,
-  },
-  {
-    name: 'Starter',
-    price: 29,
-    description: 'Para negocios que arrancan',
-    features: ['3 bots', '5,000 mensajes/mes', '1,000 contactos', 'WhatsApp + Telegram', '5 superpoderes', 'Reportes básicos'],
-    cta: 'Elegir Starter',
-    popular: false,
-  },
-  {
-    name: 'Pro',
-    price: 79,
-    description: 'Para negocios en crecimiento',
-    features: ['10 bots', '25,000 mensajes/mes', '10,000 contactos', 'Todos los canales', 'Todos los superpoderes', 'API + Webhooks', 'White-label', 'Soporte prioritario'],
-    cta: 'Elegir Pro',
-    popular: true,
-  },
-  {
-    name: 'Enterprise',
-    price: 199,
-    description: 'Para agencias y equipos grandes',
-    features: ['Bots ilimitados', 'Mensajes ilimitados', 'Contactos ilimitados', 'Modo Agencia', 'Soporte dedicado', 'SLA 99.9%', 'Onboarding personalizado'],
-    cta: 'Contactar ventas',
-    popular: false,
-  },
+  { name: 'Gratis', monthly: 0, yearly: 0, description: 'Para probar sin compromiso', features: ['1 bot', '500 mensajes/mes', '100 contactos', 'Catálogo básico'], cta: 'Empezar gratis', popular: false },
+  { name: 'Starter', monthly: 29, yearly: 290, description: 'Para negocios que arrancan', features: ['3 bots', '5.000 mensajes/mes', '1.000 contactos', 'Reportes básicos'], cta: 'Elegir Starter', popular: false },
+  { name: 'Pro', monthly: 79, yearly: 790, description: 'Para negocios en crecimiento', features: ['10 bots', '25.000 mensajes/mes', '10.000 contactos', 'IA avanzada', 'API access'], cta: 'Elegir Pro', popular: true },
+  { name: 'Enterprise', monthly: 199, yearly: 1990, description: 'Para agencias y equipos grandes', features: ['Bots ilimitados', 'Mensajes ilimitados', 'Contactos ilimitados', 'SLA 99,9%', 'Onboarding dedicado'], cta: 'Contactar ventas', popular: false },
 ];
 
 const TIER_META: Record<string, { description: string; cta: string; popular: boolean }> = {
@@ -68,107 +42,94 @@ const TIER_META: Record<string, { description: string; cta: string; popular: boo
   ENTERPRISE: { description: 'Para agencias y equipos grandes', cta: 'Contactar ventas', popular: false },
 };
 
-function formatNumber(n: number): string {
-  return n.toLocaleString('es-AR');
-}
+const fmt = (n: number) => n.toLocaleString('es-AR');
 
 function mapApiPlan(plan: ApiPlan): PlanData {
   const meta = TIER_META[plan.tier] || { description: '', cta: `Elegir ${plan.name}`, popular: false };
-  const price = Number(plan.priceMonthly);
-
-  // Build feature list from plan limits + extra features
-  const features: string[] = [];
-
-  if (plan.tier === 'ENTERPRISE') {
-    features.push('Bots ilimitados', 'Mensajes ilimitados', 'Contactos ilimitados');
-  } else {
-    features.push(
-      `${formatNumber(plan.maxBots)} bot${plan.maxBots > 1 ? 's' : ''}`,
-      `${formatNumber(plan.maxMessages)} mensajes/mes`,
-      `${formatNumber(plan.maxContacts)} contactos`,
-    );
-  }
-
-  // Append any extra features from the DB
+  const features: string[] =
+    plan.tier === 'ENTERPRISE'
+      ? ['Bots ilimitados', 'Mensajes ilimitados', 'Contactos ilimitados']
+      : [`${fmt(plan.maxBots)} bot${plan.maxBots > 1 ? 's' : ''}`, `${fmt(plan.maxMessages)} mensajes/mes`, `${fmt(plan.maxContacts)} contactos`];
   features.push(...plan.features);
-
-  return {
-    name: plan.name,
-    price,
-    description: meta.description,
-    features,
-    cta: meta.cta,
-    popular: meta.popular,
-  };
+  const monthly = Number(plan.priceMonthly);
+  const yearly = Number(plan.priceYearly);
+  return { name: plan.name, monthly, yearly: yearly > 0 ? yearly : monthly * 10, ...meta, features };
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 export default function PricingSection() {
   const [plans, setPlans] = useState<PlanData[]>(FALLBACK_PLANS);
+  const [yearly, setYearly] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-
-    async function fetchPlans() {
+    (async () => {
       try {
         const res = await fetch(`${API_URL}/plans/public`);
         if (!res.ok) return;
         const data: ApiPlan[] = await res.json();
-        if (!cancelled && data.length > 0) {
-          setPlans(data.map(mapApiPlan));
-        }
+        if (!cancelled && data.length > 0) setPlans(data.map(mapApiPlan));
       } catch {
-        // Silently fall back to hardcoded plans
+        // Sin API: quedan los planes por defecto.
       }
-    }
-
-    fetchPlans();
-    return () => { cancelled = true; };
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
-    <div className="mt-16 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-      {plans.map((plan) => (
-        <div
-          key={plan.name}
-          className={`relative rounded-2xl border p-6 flex flex-col transition-transform hover:-translate-y-1 ${
-            plan.popular
-              ? 'border-brand-400/50 bg-brand-400/5 shadow-lg shadow-brand-400/10'
-              : 'border-slate-700/50 bg-surface'
-          }`}
+    <div>
+      <div className="mb-6 flex items-center justify-center gap-3 text-xl font-semibold">
+        <span className={yearly ? 'text-[var(--p-mute)]' : ''}>Mensual</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={yearly}
+          aria-label="Cobro anual (2 meses gratis)"
+          onClick={() => setYearly((v) => !v)}
+          className="poster-toggle relative h-8 w-14 border-2 border-[var(--p-paper)] bg-[var(--p-coal)] transition-colors"
         >
-          {plan.popular && (
-            <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-400 px-3 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
-              Popular
-            </span>
-          )}
-          <h3 className="text-lg font-bold text-white">{plan.name}</h3>
-          <p className="text-xs text-slate-500 mt-1">{plan.description}</p>
-          <div className="mt-4 mb-6">
-            <span className="text-4xl font-bold text-white">${plan.price}</span>
-            <span className="text-sm text-slate-500">/mes</span>
-          </div>
-          <ul className="space-y-2.5 flex-1 mb-6">
-            {plan.features.map((feature, i) => (
-              <li key={`${feature}-${i}`} className="flex items-start gap-2 text-sm text-slate-300">
-                <Check className="h-4 w-4 text-brand-400 shrink-0 mt-0.5" />
-                {feature}
-              </li>
-            ))}
-          </ul>
-          <Link
-            href="/register"
-            className={`w-full text-center rounded-lg py-2.5 text-sm font-medium transition-colors ${
-              plan.popular
-                ? 'bg-brand-400 text-white hover:bg-brand-500'
-                : 'border border-slate-700 text-slate-300 hover:bg-surface-100 hover:text-white'
-            }`}
-          >
-            {plan.cta}
-          </Link>
-        </div>
-      ))}
+          <span className="poster-toggle-dot absolute left-1 top-1 h-5 w-5 bg-[var(--p-paper)] transition-transform" />
+        </button>
+        <span className={yearly ? '' : 'text-[var(--p-mute)]'}>
+          Anual <span className="bg-[var(--p-red)] px-1.5 text-sm text-[var(--p-on-red)]">2 meses gratis</span>
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {plans.map((plan) => {
+          const price = yearly ? Math.round(plan.yearly / 12) : plan.monthly;
+          return (
+            <div key={plan.name} className={`poster-frame ${plan.popular ? 'poster-frame--red' : ''} relative flex flex-col p-5`}>
+              {plan.popular && (
+                <span className="poster-display poster-chip-dark absolute right-4 top-3 px-2 py-0.5 text-sm tracking-wider">★ Popular</span>
+              )}
+              <h3 className="poster-display text-3xl">{plan.name}</h3>
+              <p className="mt-1 text-lg text-[var(--p-paper)]/70">{plan.description}</p>
+              <div className="mb-1 mt-3">
+                <span className="poster-display text-5xl">${price}</span>
+                <span className="text-lg font-semibold"> /mes</span>
+              </div>
+              <p className="mb-4 h-5 text-sm text-[var(--p-paper)]/70">
+                {yearly && plan.yearly > 0 ? `Facturado $${fmt(plan.yearly)} al año` : ' '}
+              </p>
+              <ul className="mb-5 flex-1 space-y-1.5">
+                {plan.features.map((f, i) => (
+                  <li key={`${f}-${i}`} className="flex items-start gap-2 text-xl leading-tight">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              <Link href="/register" className="poster-btn poster-btn--ghost w-full !text-base">
+                {plan.cta}
+              </Link>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
