@@ -84,7 +84,7 @@ Tamaños: S = horas, M = 1–2 días, L = varios días.
 | 1 Bugs y correctitud | Hecha | `b93daee` |
 | 2 Lecturas en el camino caliente | Hecha, con diferidos (2.1 loader cacheado de `Connection`) | `1fcba71` |
 | 3 Multi-instancia (Redis) | Hecha, con diferido (3.5 cuota/revocación compartidas) | `14f96c8` |
-| 4 Colas BullMQ | Hecha; 4.5 (scheduler por negocio en cola) hecha después; webhooks ManyChat/voz/Telegram siguen síncronos | `fc17a3e` |
+| 4 Colas BullMQ | Hecha; 4.5 (scheduler por negocio en cola) hecha después; Telegram pasó a cola (`telegram-update`); ManyChat y voz siguen síncronos por diseño (la respuesta va en el mismo request) | `fc17a3e` |
 | 5 Frontend | Hecha (5.3 notificaciones por socket no se hizo, ver nota en la ola) | `37e6a9d` |
 | 6 Límites del JSON por negocio | 6.1–6.3 hechas; 6.4 requiere descongelar el schema | `24dcaf5` |
 

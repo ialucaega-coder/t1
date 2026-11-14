@@ -5,6 +5,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { encrypt, safeDecrypt } from '../lib/crypto';
 import { createBot, stopBot, setWebhook, handleUpdate, getBotInfo } from '../services/telegram/bot';
+import { defineQueue, enqueue } from '../lib/queue';
 
 /** Comparación en tiempo constante de dos strings (evita timing attacks). */
 function timingSafeEqualStr(a: string, b: string): boolean {
@@ -28,6 +29,48 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 // ────────────────────────────────────────────────────────────────
 
 const router = Router();
+
+// ────────────────────────────────────────────────────────────────
+// Cola de updates. El procesamiento (LLM + respuesta por la API del bot) corre en un
+// worker: el webhook responde 200 enseguida (Telegram reintenta el update si tarda) y
+// el trabajo se reparte entre instancias. El token del bot NO viaja por la cola: el
+// worker relee la conexión y lo descifra.
+// ────────────────────────────────────────────────────────────────
+const TELEGRAM_UPDATE_QUEUE = 'telegram-update';
+
+interface TelegramUpdateJob {
+  businessId: string;
+  update: unknown;
+}
+
+type TelegramConfig = { botToken?: string; botTokenEnc?: string; webhookSecret?: string } | null;
+
+/** Token del bot (descifrado si está cifrado en reposo), o undefined si no se puede leer. */
+function readBotToken(config: TelegramConfig): string | undefined {
+  try {
+    return config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function processTelegramUpdate({ businessId, update }: TelegramUpdateJob): Promise<void> {
+  try {
+    const connection = await prisma.connection.findFirst({
+      where: { businessId, type: 'TELEGRAM', isActive: true },
+      orderBy: { id: 'asc' },
+    });
+    if (!connection) return; // se desconectó mientras el update esperaba en la cola
+    // Con varias instancias, la que procesa puede no tener el bot en memoria y lo arma
+    // al vuelo con este token.
+    await handleUpdate(businessId, update as never, readBotToken(connection.config as TelegramConfig));
+  } catch (error) {
+    // No se reintenta: repetir un update podría contestarle dos veces al cliente.
+    console.error(`Error procesando update de Telegram para ${businessId}:`, error);
+  }
+}
+
+defineQueue<TelegramUpdateJob>(TELEGRAM_UPDATE_QUEUE, processTelegramUpdate, { concurrency: 10 });
 
 /**
  * POST /api/telegram/webhook/:businessId
@@ -77,20 +120,14 @@ router.post(
       return;
     }
 
-    // Token del bot (ya descifrado): con varias instancias, la que recibe el
-    // update puede no tener el bot en memoria y lo arma al vuelo con este token.
-    let botToken: string | undefined;
-    try {
-      botToken = config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
-    } catch {
-      botToken = undefined;
-    }
-
-    try {
-      await handleUpdate(businessId, req.body, botToken);
-    } catch (error) {
-      console.error(`Error procesando update de Telegram para ${businessId}:`, error);
-    }
+    // Encolamos el update (jobId por update_id: Telegram reenvía el mismo update si no
+    // recibe 200 a tiempo, y así no se procesa dos veces). Nunca lanza; sin Redis corre inline.
+    const updateId = (req.body as { update_id?: unknown } | undefined)?.update_id;
+    await enqueue<TelegramUpdateJob>(
+      TELEGRAM_UPDATE_QUEUE,
+      { businessId, update: req.body },
+      typeof updateId === 'number' ? { jobId: `tg_${businessId}_${updateId}` } : {},
+    );
 
     // Siempre responder 200 a Telegram
     res.status(200).json({ ok: true });
