@@ -12,7 +12,9 @@ import { processMessage } from '../services/chatbot';
 import { listAvailableProviders, getDefaultAIProvider } from '../services/ai';
 import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../services/ai/engine';
 import { loadSystemPrompt, saveSystemPrompt, MAX_SYSTEM_PROMPT_LENGTH } from '../services/ai/system-prompt';
-import { getUsageSummary } from '../services/ai/usage';
+import { getUsageSummary, currentMonthWindow, getSpendByBusinessSince } from '../services/ai/usage';
+import { getSpendStatus, setSpendCap, levelFor, MAX_CAP_USD } from '../services/ai/spendCap';
+import { requirePlatformAdmin } from '../middleware/platformAdmin';
 import { getMessageQuota } from '../services/billing/quota';
 import type { ProviderFamily } from '../services/ai/catalog';
 import { cache, cacheKey } from '../lib/cache';
@@ -239,6 +241,72 @@ router.get('/usage', requireAuth, asyncHandler(async (req, res) => {
 router.get('/quota', requireAuth, asyncHandler(async (req, res) => {
   const quota = await getMessageQuota(req.auth!.businessId);
   res.json(quota);
+}));
+
+const spendCapSchema = z.object({
+  // null quita el tope. USD por mes; máximo razonable para evitar typos.
+  capUsd: z.number().positive().max(MAX_CAP_USD).nullable(),
+});
+
+/**
+ * GET /api/ai/spend-cap
+ * Tope mensual de gasto de IA del negocio y cuánto lleva gastado este mes.
+ */
+router.get('/spend-cap', requireAuth, asyncHandler(async (req, res) => {
+  res.json(await getSpendStatus(req.auth!.businessId));
+}));
+
+/**
+ * PUT /api/ai/spend-cap
+ * Fija (o quita con `capUsd: null`) el tope mensual de gasto de IA. Solo ADMIN.
+ */
+router.put('/spend-cap', requireAuth, requireRole('ADMIN'), validate(spendCapSchema), asyncHandler(async (req, res) => {
+  const { capUsd } = req.body as z.infer<typeof spendCapSchema>;
+  await setSpendCap(req.auth!.businessId, capUsd);
+  res.json(await getSpendStatus(req.auth!.businessId));
+}));
+
+/**
+ * GET /api/ai/spend-overview
+ * Super Admin: gasto de IA del mes por negocio (con tope y nivel). Cruza todos
+ * los negocios, por eso va detrás de `requirePlatformAdmin`.
+ */
+router.get('/spend-overview', requireAuth, requirePlatformAdmin, asyncHandler(async (_req, res) => {
+  const { month, since } = currentMonthWindow();
+  const [spendMap, caps] = await Promise.all([
+    getSpendByBusinessSince(since),
+    prisma.connection.findMany({
+      where: { type: 'AI_SPEND_CAP', isActive: true },
+      select: { businessId: true, config: true },
+    }),
+  ]);
+  const capMap = new Map<string, number>();
+  for (const c of caps) {
+    const v = (c.config as { capUsd?: unknown } | null)?.capUsd;
+    if (typeof v === 'number' && v > 0) capMap.set(c.businessId, v);
+  }
+  const ids = [...new Set([...spendMap.keys(), ...capMap.keys()])];
+  const businesses = ids.length
+    ? await prisma.business.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
+    : [];
+  const names = new Map(businesses.map((b) => [b.id, b.name]));
+  const round = (n: number) => Math.round(n * 10000) / 10000;
+  const rows = ids
+    .map((id) => {
+      const spentUsd = round(spendMap.get(id) ?? 0);
+      const capUsd = capMap.get(id) ?? null;
+      return {
+        businessId: id,
+        name: names.get(id) ?? id,
+        spentUsd,
+        capUsd,
+        ratio: capUsd ? spentUsd / capUsd : 0,
+        level: levelFor(spentUsd, capUsd),
+      };
+    })
+    .sort((a, b) => b.spentUsd - a.spentUsd)
+    .slice(0, 200);
+  res.json({ month, totalUsd: round(rows.reduce((s, r) => s + r.spentUsd, 0)), businesses: rows });
 }));
 
 export { router as aiRouter };

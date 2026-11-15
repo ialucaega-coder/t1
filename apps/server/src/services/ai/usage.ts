@@ -55,6 +55,71 @@ export function estimateCostUsd(model: string, inputTokens: number, outputTokens
   return (inputTokens / 1_000_000) * p.in + (outputTokens / 1_000_000) * p.out;
 }
 
+/**
+ * Ventana del mes calendario en hora de Argentina (UTC-3 fijo, igual que analytics).
+ * `month` es 'YYYY-MM' y `since` el instante UTC en que arrancó el mes allá.
+ */
+export function currentMonthWindow(now: Date = new Date()): { month: string; since: Date } {
+  const ar = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+  const y = ar.getUTCFullYear();
+  const m = ar.getUTCMonth();
+  return { month: `${y}-${String(m + 1).padStart(2, '0')}`, since: new Date(Date.UTC(y, m, 1, 3)) };
+}
+
+interface SpendRow {
+  businessId?: string;
+  model: string;
+  input_tokens: bigint | number | string | { toString(): string };
+  output_tokens: bigint | number | string | { toString(): string };
+}
+
+/** Gasto estimado (USD) del negocio desde `since`. Solo cuenta respuestas del bot con usage. */
+export async function getSpendSince(businessId: string, since: Date): Promise<number> {
+  const rows = await prisma.$queryRaw<SpendRow[]>`
+    SELECT
+      COALESCE(m.metadata->'usage'->>'model', 'desconocido') AS model,
+      COALESCE(SUM(CASE WHEN jsonb_typeof(m.metadata->'usage'->'inputTokens') = 'number'
+                        THEN (m.metadata->'usage'->>'inputTokens')::bigint ELSE 0 END), 0) AS input_tokens,
+      COALESCE(SUM(CASE WHEN jsonb_typeof(m.metadata->'usage'->'outputTokens') = 'number'
+                        THEN (m.metadata->'usage'->>'outputTokens')::bigint ELSE 0 END), 0) AS output_tokens
+    FROM messages m
+    JOIN conversations c ON c.id = m."conversationId"
+    WHERE c."businessId" = ${businessId}
+      AND m.role = 'BOT'
+      AND m.metadata -> 'usage' IS NOT NULL
+      AND m."createdAt" >= ${since}
+    GROUP BY model
+  `;
+  let total = 0;
+  for (const r of rows) total += estimateCostUsd(r.model, Number(r.input_tokens), Number(r.output_tokens));
+  return total;
+}
+
+/** Gasto estimado (USD) por negocio desde `since` (para el panel del Super Admin). */
+export async function getSpendByBusinessSince(since: Date): Promise<Map<string, number>> {
+  const rows = await prisma.$queryRaw<SpendRow[]>`
+    SELECT
+      c."businessId" AS "businessId",
+      COALESCE(m.metadata->'usage'->>'model', 'desconocido') AS model,
+      COALESCE(SUM(CASE WHEN jsonb_typeof(m.metadata->'usage'->'inputTokens') = 'number'
+                        THEN (m.metadata->'usage'->>'inputTokens')::bigint ELSE 0 END), 0) AS input_tokens,
+      COALESCE(SUM(CASE WHEN jsonb_typeof(m.metadata->'usage'->'outputTokens') = 'number'
+                        THEN (m.metadata->'usage'->>'outputTokens')::bigint ELSE 0 END), 0) AS output_tokens
+    FROM messages m
+    JOIN conversations c ON c.id = m."conversationId"
+    WHERE m.role = 'BOT'
+      AND m.metadata -> 'usage' IS NOT NULL
+      AND m."createdAt" >= ${since}
+    GROUP BY c."businessId", model
+  `;
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.businessId) continue;
+    out.set(r.businessId, (out.get(r.businessId) ?? 0) + estimateCostUsd(r.model, Number(r.input_tokens), Number(r.output_tokens)));
+  }
+  return out;
+}
+
 export interface UsageByModel {
   model: string;
   inputTokens: number;

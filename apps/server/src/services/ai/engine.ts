@@ -18,6 +18,7 @@ import { AI_ENGINES, DEFAULT_ENGINE_ID, getEngineById, type AIEngine, type Provi
 import { prisma } from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { encrypt, safeDecrypt } from '../../lib/crypto';
+import { enforceSpendCap } from './spendCap';
 
 const CONNECTION_TYPE = 'AI_ENGINE';
 
@@ -159,6 +160,9 @@ function resolveKey(engine: AIEngine, cfg: EngineConfig): string | null {
  * plataforma para no dejar al bot sin responder.
  */
 export async function getAIProviderForBusiness(businessId: string): Promise<AIProvider> {
+  // Tope mensual de gasto: lanza SpendCapError al 100 % (los callers ya degradan
+  // ante un error de proveedor). Sin tope configurado no hace nada.
+  await enforceSpendCap(businessId);
   const cfg = await loadEngineConfig(businessId);
   const engine = getEngineById(cfg.activeEngineId);
   if (!engine) return safeDefaultProvider();
