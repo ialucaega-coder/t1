@@ -25,6 +25,16 @@ import { executeAction, type ActionResult, type ExecMode } from '../actions/exec
 import { getAutomationMode } from './settings';
 import { matchesCondition } from './conditions';
 import { defineQueue, enqueue } from '../../lib/queue';
+import { AppError } from '../../middleware/errorHandler';
+import {
+  paramFieldsFor,
+  validateRuleParams,
+  sanitizeParams,
+  buildActionParams,
+  buildTemplateContext,
+  needsClientName,
+  type ParamFieldMeta,
+} from './params';
 
 const WORKFLOWS_CONNECTION_TYPE = 'WORKFLOWS';
 const WORKFLOWS_CONNECTION_NAME = 'Automatizaciones';
@@ -40,6 +50,8 @@ export interface CatalogItem {
   key: string;
   label: string;
   description: string;
+  /** Campos configurables de la acción (solo acciones); la UI arma el formulario con esto. */
+  params?: ParamFieldMeta[];
 }
 
 /**
@@ -63,7 +75,7 @@ export const ACTION_CATALOG: CatalogItem[] = [
   { key: 'enviar_whatsapp', label: 'Enviar WhatsApp', description: 'Manda un mensaje automático por WhatsApp' },
   { key: 'mover_lifecycle', label: 'Mover etapa', description: 'Cambia la etapa del cliente en el embudo (CRM)' },
   { key: 'notificar', label: 'Notificar al equipo', description: 'Genera una novedad/aviso para el equipo' },
-];
+].map((a) => ({ ...a, params: paramFieldsFor(a.key) }));
 
 /** Claves válidas de triggers y acciones, para validar entradas. */
 export const TRIGGER_KEYS: readonly string[] = TRIGGER_CATALOG.map((t) => t.key);
@@ -84,6 +96,12 @@ export interface WorkflowRule {
   /** Condición simple opcional (texto libre, ej: "monto > 1000"). v1 no la evalúa. */
   condicion?: string;
   accion: string;
+  /**
+   * Parámetros de la acción (texto del mensaje, etapa, etc.), validados por acción
+   * (ver ./params). Opcional: las reglas viejas no lo tienen y siguen funcionando
+   * con los datos del evento.
+   */
+  params?: Record<string, string>;
 }
 
 /** Verifica si un trigger está en el catálogo. */
@@ -119,6 +137,7 @@ export function sanitizeRules(raw: unknown): WorkflowRule[] {
     if (!nombre) continue; // el nombre es obligatorio
     const condicion = clampText(e.condicion, MAX_CONDITION_LEN);
     const id = typeof e.id === 'string' && e.id.trim() ? e.id.trim().slice(0, 64) : randomUUID();
+    const params = sanitizeParams(e.accion, e.params);
     out.push({
       id,
       nombre,
@@ -126,6 +145,7 @@ export function sanitizeRules(raw: unknown): WorkflowRule[] {
       trigger: e.trigger,
       ...(condicion ? { condicion } : {}),
       accion: e.accion,
+      ...(params ? { params } : {}),
     });
     if (out.length >= MAX_WORKFLOW_RULES) break;
   }
@@ -197,6 +217,8 @@ export interface CreateRuleInput {
   accion: string;
   condicion?: string;
   activo?: boolean;
+  /** Parámetros de la acción; se validan (estricto) contra la acción elegida. */
+  params?: Record<string, string>;
 }
 
 /** Campos editables de una regla (patch parcial). */
@@ -249,6 +271,13 @@ async function mutateRules(
   });
 }
 
+/** Valida los params de una regla; lanza AppError 400 con el primer problema. */
+function checkParams(accion: string, params: unknown): Record<string, string> | undefined {
+  const res = validateRuleParams(accion, params);
+  if (!res.ok) throw new AppError(400, res.issues.map((i) => i.message).join('; '));
+  return res.params;
+}
+
 /**
  * Crea una regla nueva. El merge (append + tope) corre DENTRO de la transacción
  * sobre la lista fresca, así no pisa creaciones concurrentes. Devuelve la regla
@@ -259,8 +288,10 @@ export async function createWorkflow(
   input: CreateRuleInput,
 ): Promise<WorkflowRule | null> {
   const id = randomUUID();
+  // Params: validación estricta contra la acción (400 con el detalle si no pasan).
+  const checked = checkParams(input.accion, input.params);
   // Validamos la regla candidata aislada antes de tocar la base.
-  const [sane] = sanitizeRules([{ ...input, id }]);
+  const [sane] = sanitizeRules([{ ...input, params: checked, id }]);
   if (!sane) return null;
 
   let created = false;
@@ -287,7 +318,17 @@ export async function updateWorkflow(
   const saved = await mutateRules(businessId, (current) => {
     const idx = current.findIndex((r) => r.id === id);
     if (idx === -1) return current;
-    const [merged] = sanitizeRules([{ ...current[idx], ...patch, id }]);
+    const base = current[idx];
+    const accionChanged = patch.accion !== undefined && patch.accion !== base.accion;
+    // Los params dependen de la acción: si cambia la acción sin mandar params, los
+    // viejos ya no aplican. Solo se validan (estricto) si el patch toca acción o
+    // params: así togglear `activo` de una regla vieja sin params nunca falla.
+    let params = base.params;
+    if (patch.params !== undefined || accionChanged) {
+      const accion = patch.accion ?? base.accion;
+      params = checkParams(accion, patch.params ?? (accionChanged ? undefined : base.params));
+    }
+    const [merged] = sanitizeRules([{ ...base, ...patch, params, id }]);
     if (!merged) return current;
     existed = true;
     const next = [...current];
@@ -379,6 +420,33 @@ export async function runWorkflows(
   return runRules(businessId, await evaluateWorkflows(businessId, event), event, mode);
 }
 
+/**
+ * Params que recibe el executor para una regla: payload del evento + params de la
+ * regla (con {{variables}} ya renderizadas). Precedencia: donde el payload trae el
+ * dato, gana el payload (ver ./params). Sin params en la regla = solo el payload
+ * (compat con reglas viejas). El nombre del cliente para {{nombre}} se busca solo
+ * si la regla lo usa, y siempre scoped por negocio.
+ */
+async function resolveParams(
+  businessId: string,
+  rule: WorkflowRule,
+  event: WorkflowEvent,
+): Promise<Record<string, unknown>> {
+  const payload = event.payload ?? {};
+  if (!rule.params) return buildActionParams(rule.accion, undefined, payload);
+  let clientName: string | null = null;
+  const clientId = payload.clientId;
+  if (typeof clientId === 'string' && clientId && needsClientName(rule.accion, rule.params)) {
+    try {
+      const client = await prisma.user.findFirst({ where: { id: clientId, businessId }, select: { name: true } });
+      clientName = client?.name ?? null;
+    } catch {
+      clientName = null; // sin nombre: se usa el reemplazo de la plantilla
+    }
+  }
+  return buildActionParams(rule.accion, rule.params, payload, buildTemplateContext(payload, clientName));
+}
+
 /** Ejecuta, en serie, las reglas ya seleccionadas para un evento. */
 async function runRules(
   businessId: string,
@@ -391,7 +459,7 @@ async function runRules(
     const result = await executeAction({
       businessId,
       action: rule.accion,
-      params: event.payload ?? {},
+      params: await resolveParams(businessId, rule, event),
       mode,
     });
     results.push({ ruleId: rule.id, nombre: rule.nombre, accion: rule.accion, result });

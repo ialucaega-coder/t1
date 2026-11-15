@@ -1,10 +1,33 @@
 import { httpClient } from './http-client';
 
+/** Un campo configurable de una acción (el backend dice qué pedir; la UI arma el formulario). */
+export interface ParamField {
+  key: string;
+  label: string;
+  type: 'text' | 'textarea' | 'select';
+  required: boolean;
+  maxLength?: number;
+  placeholder?: string;
+  help?: string;
+  /** El campo admite {{variables}}. */
+  template?: boolean;
+  options?: { value: string; label: string }[];
+}
+
+/** Una variable disponible en los textos ({{nombre}}, etc.). */
+export interface TemplateVariable {
+  key: string;
+  label: string;
+  example: string;
+}
+
 /** Un ítem de catálogo (trigger o acción) para los dropdowns. */
 export interface CatalogItem {
   key: string;
   label: string;
   description: string;
+  /** Campos configurables (solo acciones). */
+  params?: ParamField[];
 }
 
 /** Una regla de automatización. */
@@ -15,12 +38,15 @@ export interface WorkflowRule {
   trigger: string;
   condicion?: string;
   accion: string;
+  /** Parámetros de la acción (ej: texto del WhatsApp). Las reglas viejas no lo tienen. */
+  params?: Record<string, string>;
 }
 
 export interface WorkflowsResponse {
   rules: WorkflowRule[];
   triggers: CatalogItem[];
   actions: CatalogItem[];
+  variables?: TemplateVariable[];
 }
 
 export interface CreateRuleInput {
@@ -29,6 +55,7 @@ export interface CreateRuleInput {
   accion: string;
   condicion?: string;
   activo?: boolean;
+  params?: Record<string, string>;
 }
 
 export type UpdateRuleInput = Partial<CreateRuleInput>;

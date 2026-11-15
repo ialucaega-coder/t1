@@ -12,9 +12,17 @@ import {
   Filter,
   Play,
   AlertTriangle,
+  Pencil,
 } from 'lucide-react';
 import * as workflowsApi from '@/lib/api/workflows';
-import type { WorkflowRule, CatalogItem, RunWorkflowResponse, ActionResult } from '@/lib/api/workflows';
+import type {
+  WorkflowRule,
+  CatalogItem,
+  RunWorkflowResponse,
+  ActionResult,
+  TemplateVariable,
+} from '@/lib/api/workflows';
+import { validateParams, cleanParams } from '@/lib/workflows-params';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -26,9 +34,14 @@ interface RuleForm {
   trigger: string;
   condicion: string;
   accion: string;
+  /** Valores de los campos de la acción elegida (clave del campo → texto). */
+  params: Record<string, string>;
 }
 
-const emptyForm: RuleForm = { nombre: '', trigger: '', condicion: '', accion: '' };
+const emptyForm: RuleForm = { nombre: '', trigger: '', condicion: '', accion: '', params: {} };
+
+const inputCls =
+  'w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none';
 
 /** Diccionario key→label a partir del catálogo (para pintar las tarjetas). */
 function labelMap(items: CatalogItem[]): Record<string, string> {
@@ -57,10 +70,14 @@ export default function WorkflowsPage() {
   const [rules, setRules] = useState<WorkflowRule[]>([]);
   const [triggers, setTriggers] = useState<CatalogItem[]>([]);
   const [actions, setActions] = useState<CatalogItem[]>([]);
+  const [variables, setVariables] = useState<TemplateVariable[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  // id de la regla que se está editando (null = regla nueva)
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<RuleForm>(emptyForm);
+  const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -73,6 +90,9 @@ export default function WorkflowsPage() {
   // Ajuste: automatizaciones automáticas en vivo (del pipeline)
   const [automationLive, setAutomationLive] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  // Confirmaciones explícitas antes de habilitar acciones reales
+  const [confirmLive, setConfirmLive] = useState(false);
+  const [confirmLiveTest, setConfirmLiveTest] = useState(false);
   const { toast } = useToast();
 
   const refetch = useCallback(async () => {
@@ -86,6 +106,7 @@ export default function WorkflowsPage() {
       setRules(data.rules);
       setTriggers(data.triggers);
       setActions(data.actions);
+      setVariables(data.variables ?? []);
       setAutomationLive(settings.live);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al cargar las automatizaciones');
@@ -101,7 +122,15 @@ export default function WorkflowsPage() {
   const triggerLabels = labelMap(triggers);
   const actionLabels = labelMap(actions);
 
+  // Campos configurables de la acción elegida en el formulario
+  const actionFields = actions.find((a) => a.key === form.accion)?.params ?? [];
+  const paramErrors = validateParams(actionFields, form.params, variables);
+  const formInvalid =
+    !form.nombre.trim() || !form.trigger || !form.accion || Object.keys(paramErrors).length > 0;
+
   function openCreate() {
+    setEditingId(null);
+    setSubmitted(false);
     setForm({
       ...emptyForm,
       trigger: triggers[0]?.key ?? '',
@@ -110,21 +139,64 @@ export default function WorkflowsPage() {
     setShowModal(true);
   }
 
+  function openEdit(rule: WorkflowRule) {
+    setEditingId(rule.id);
+    setSubmitted(false);
+    setForm({
+      nombre: rule.nombre,
+      trigger: rule.trigger,
+      condicion: rule.condicion ?? '',
+      accion: rule.accion,
+      params: { ...(rule.params ?? {}) },
+    });
+    setShowModal(true);
+  }
+
+  function closeModal() {
+    setShowModal(false);
+    setEditingId(null);
+  }
+
+  function setParam(key: string, value: string) {
+    setForm((f) => ({ ...f, params: { ...f.params, [key]: value } }));
+  }
+
   async function handleSave() {
-    if (!form.nombre.trim() || !form.trigger || !form.accion) return;
+    setSubmitted(true);
+    if (formInvalid) return;
     setSaving(true);
+    const params = cleanParams(actionFields, form.params);
     try {
-      const rule = await workflowsApi.create({
-        nombre: form.nombre.trim(),
-        trigger: form.trigger,
-        accion: form.accion,
-        condicion: form.condicion.trim() || undefined,
+      if (editingId) {
+        const updated = await workflowsApi.update(editingId, {
+          nombre: form.nombre.trim(),
+          trigger: form.trigger,
+          accion: form.accion,
+          // string vacío = borrar la condición
+          condicion: form.condicion.trim(),
+          params,
+        });
+        setRules((prev) => prev.map((r) => (r.id === editingId ? updated : r)));
+        toast({ type: 'success', message: 'Automatización actualizada' });
+      } else {
+        const rule = await workflowsApi.create({
+          nombre: form.nombre.trim(),
+          trigger: form.trigger,
+          accion: form.accion,
+          condicion: form.condicion.trim() || undefined,
+          params,
+        });
+        setRules((prev) => [...prev, rule]);
+        toast({ type: 'success', message: 'Automatización creada correctamente' });
+      }
+      closeModal();
+    } catch (err) {
+      const detail =
+        err instanceof Error && err.message && err.message !== 'Validation failed' ? `: ${err.message}` : '';
+      toast({
+        type: 'error',
+        message: `${editingId ? 'Error al guardar los cambios' : 'Error al crear la automatización'}${detail}`,
       });
-      setRules((prev) => [...prev, rule]);
-      toast({ type: 'success', message: 'Automatización creada correctamente' });
-      setShowModal(false);
-    } catch {
-      toast({ type: 'error', message: 'Error al crear la automatización' });
     } finally {
       setSaving(false);
     }
@@ -156,8 +228,18 @@ export default function WorkflowsPage() {
     }
   }
 
-  async function handleToggleAutomation() {
-    const next = !automationLive;
+  // Activar EN VIVO manda mensajes reales a los clientes: pide confirmación
+  // explícita. Volver a simulación es seguro y se aplica directo.
+  function handleToggleAutomation() {
+    if (automationLive) {
+      void applyAutomationMode(false);
+    } else {
+      setConfirmLive(true);
+    }
+  }
+
+  async function applyAutomationMode(next: boolean) {
+    setConfirmLive(false);
     setSavingSettings(true);
     try {
       const res = await workflowsApi.setSettings(next);
@@ -175,7 +257,17 @@ export default function WorkflowsPage() {
     }
   }
 
+  // Probar en vivo también manda mensajes reales: misma confirmación.
+  function handleRunClick() {
+    if (testLive) {
+      setConfirmLiveTest(true);
+    } else {
+      void handleRun();
+    }
+  }
+
   async function handleRun() {
+    setConfirmLiveTest(false);
     const trigger = testTrigger || triggers[0]?.key;
     if (!trigger) return;
     setTesting(true);
@@ -301,6 +393,12 @@ export default function WorkflowsPage() {
                     {actionLabels[r.accion] || r.accion}
                   </span>
                 </div>
+                {r.params?.texto && (
+                  <p className="mt-2 text-xs text-slate-400 line-clamp-2 whitespace-pre-line">
+                    <span className="text-slate-500">Texto: </span>
+                    {r.params.texto}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-3 shrink-0">
                 {/* Toggle activo/pausada */}
@@ -317,6 +415,13 @@ export default function WorkflowsPage() {
                       r.activo ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
+                </button>
+                <button
+                  onClick={() => openEdit(r)}
+                  aria-label="Editar regla"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-sky-500/10 transition-colors"
+                >
+                  <Pencil className="h-4 w-4" />
                 </button>
                 <button
                   onClick={() => setRuleToDelete({ id: r.id, nombre: r.nombre })}
@@ -364,7 +469,7 @@ export default function WorkflowsPage() {
             </select>
           </div>
           <button
-            onClick={handleRun}
+            onClick={handleRunClick}
             disabled={testing || triggers.length === 0}
             className="flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600 transition-colors disabled:opacity-50"
           >
@@ -443,14 +548,22 @@ export default function WorkflowsPage() {
         )}
       </div>
 
-      {/* Modal crear */}
+      {/* Modal crear / editar */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-800 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 px-4 py-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={editingId ? 'Editar automatización' : 'Nueva automatización'}
+            className="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-800 p-6 my-auto"
+          >
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-semibold text-white">Nueva automatización</h2>
+              <h2 className="text-lg font-semibold text-white">
+                {editingId ? 'Editar automatización' : 'Nueva automatización'}
+              </h2>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={closeModal}
+                aria-label="Cerrar"
                 className="p-1 rounded text-slate-400 hover:text-white"
               >
                 <X className="h-5 w-5" />
@@ -459,23 +572,28 @@ export default function WorkflowsPage() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Nombre</label>
+                <label htmlFor="rule-nombre" className="block text-sm font-medium text-slate-300 mb-1">
+                  Nombre
+                </label>
                 <input
+                  id="rule-nombre"
                   type="text"
                   value={form.nombre}
+                  maxLength={120}
                   onChange={(e) => setForm({ ...form, nombre: e.target.value })}
                   placeholder="Ej: Saludar a cada lead nuevo"
-                  className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                  className={inputCls}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
+                <label htmlFor="rule-trigger" className="block text-sm font-medium text-slate-300 mb-1">
                   Cuando pase (disparador)
                 </label>
                 <select
+                  id="rule-trigger"
                   value={form.trigger}
                   onChange={(e) => setForm({ ...form, trigger: e.target.value })}
-                  className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+                  className={inputCls}
                 >
                   {triggers.map((t) => (
                     <option key={t.key} value={t.key}>
@@ -485,15 +603,17 @@ export default function WorkflowsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
+                <label htmlFor="rule-condicion" className="block text-sm font-medium text-slate-300 mb-1">
                   Condición <span className="text-slate-500">(opcional)</span>
                 </label>
                 <input
+                  id="rule-condicion"
                   type="text"
                   value={form.condicion}
+                  maxLength={500}
                   onChange={(e) => setForm({ ...form, condicion: e.target.value })}
                   placeholder="Ej: monto > 1000"
-                  className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                  className={inputCls}
                 />
                 <p className="text-[11px] text-slate-500 mt-1">
                   Formato <span className="text-slate-400">campo operador valor</span> (ej:{' '}
@@ -503,13 +623,15 @@ export default function WorkflowsPage() {
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
+                <label htmlFor="rule-accion" className="block text-sm font-medium text-slate-300 mb-1">
                   Hacé (acción)
                 </label>
                 <select
+                  id="rule-accion"
                   value={form.accion}
-                  onChange={(e) => setForm({ ...form, accion: e.target.value })}
-                  className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+                  // Los parámetros dependen de la acción: al cambiarla se reinician.
+                  onChange={(e) => setForm({ ...form, accion: e.target.value, params: {} })}
+                  className={inputCls}
                 >
                   {actions.map((a) => (
                     <option key={a.key} value={a.key}>
@@ -518,11 +640,85 @@ export default function WorkflowsPage() {
                   ))}
                 </select>
               </div>
+
+              {/* Campos propios de la acción elegida */}
+              {actionFields.map((f) => {
+                const id = `rule-param-${f.key}`;
+                const err = submitted ? paramErrors[f.key] : undefined;
+                const value = form.params[f.key] ?? '';
+                return (
+                  <div key={f.key}>
+                    <label htmlFor={id} className="block text-sm font-medium text-slate-300 mb-1">
+                      {f.label}
+                      {!f.required && <span className="text-slate-500"> (opcional)</span>}
+                    </label>
+                    {f.type === 'select' ? (
+                      <select
+                        id={id}
+                        value={value}
+                        onChange={(e) => setParam(f.key, e.target.value)}
+                        aria-invalid={err ? true : undefined}
+                        className={inputCls}
+                      >
+                        <option value="">Elegí una opción…</option>
+                        {f.options?.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : f.type === 'textarea' ? (
+                      <textarea
+                        id={id}
+                        rows={4}
+                        value={value}
+                        maxLength={f.maxLength}
+                        onChange={(e) => setParam(f.key, e.target.value)}
+                        placeholder={f.placeholder}
+                        aria-invalid={err ? true : undefined}
+                        className={inputCls}
+                      />
+                    ) : (
+                      <input
+                        id={id}
+                        type="text"
+                        value={value}
+                        maxLength={f.maxLength}
+                        onChange={(e) => setParam(f.key, e.target.value)}
+                        placeholder={f.placeholder}
+                        aria-invalid={err ? true : undefined}
+                        className={inputCls}
+                      />
+                    )}
+                    {err && (
+                      <p role="alert" className="text-[11px] text-red-400 mt-1">
+                        {err}
+                      </p>
+                    )}
+                    {f.help && <p className="text-[11px] text-slate-500 mt-1">{f.help}</p>}
+                    {f.template && variables.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {variables.map((v) => (
+                          <button
+                            key={v.key}
+                            type="button"
+                            title={`${v.label} (ej: ${v.example})`}
+                            onClick={() => setParam(f.key, `${value}{{${v.key}}}`)}
+                            className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px] text-slate-300 hover:bg-slate-600"
+                          >
+                            {`{{${v.key}}}`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
               <button
-                onClick={() => setShowModal(false)}
+                onClick={closeModal}
                 className="px-4 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-700 transition-colors"
               >
                 Cancelar
@@ -533,12 +729,33 @@ export default function WorkflowsPage() {
                 className="flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600 transition-colors disabled:opacity-50"
               >
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Crear
+                {editingId ? 'Guardar cambios' : 'Crear'}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmLive}
+        onClose={() => setConfirmLive(false)}
+        onConfirm={() => void applyAutomationMode(true)}
+        title="¿Activar la ejecución EN VIVO?"
+        message="Desde ahora, cada vez que pase un evento (reserva, lead, mensaje, pago), tus reglas van a ejecutar acciones reales: se envían WhatsApp a tus clientes y no se pueden deshacer. Podés volver a simulación cuando quieras."
+        confirmLabel="Sí, activar en vivo"
+        variant="warning"
+        loading={savingSettings}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmLiveTest}
+        onClose={() => setConfirmLiveTest(false)}
+        onConfirm={() => void handleRun()}
+        title="¿Probar en vivo?"
+        message="Se van a ejecutar de verdad las reglas activas de este disparador: los mensajes se envían a los clientes."
+        confirmLabel="Sí, ejecutar"
+        variant="warning"
+      />
 
       <ConfirmDialog
         isOpen={ruleToDelete !== null}

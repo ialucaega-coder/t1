@@ -58,13 +58,21 @@ vi.mock('../../services/workflows/settings', () => ({
   setAutomationLive: vi.fn(async (_biz: string, live: boolean) => live),
 }));
 
+// Rol del usuario autenticado en cada test (por defecto ADMIN).
+const authState = vi.hoisted(() => ({ role: 'ADMIN' as 'ADMIN' | 'PROFESSIONAL' }));
+
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role: authState.role };
     next();
   },
-  // Factory passthrough: en estos tests el auth siempre es ADMIN.
-  requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireRole: (...roles: string[]) => (req: Request, res: Response, next: NextFunction) => {
+    if (!roles.includes(req.auth!.role)) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    next();
+  },
 }));
 
 import {
@@ -93,6 +101,7 @@ describe('routes/workflows', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.role = 'ADMIN';
   });
 
   describe('GET /api/workflows', () => {
@@ -105,6 +114,14 @@ describe('routes/workflows', () => {
       expect(res.body.actions).toBeInstanceOf(Array);
       expect(loadWorkflows).toHaveBeenCalledWith('biz_1');
     });
+
+    it('incluye las {{variables}} disponibles para los textos', async () => {
+      const res = await request(app).get('/api/workflows');
+
+      expect(res.body.variables.map((v: { key: string }) => v.key)).toEqual(
+        expect.arrayContaining(['nombre', 'monto']),
+      );
+    });
   });
 
   describe('POST /api/workflows', () => {
@@ -113,6 +130,7 @@ describe('routes/workflows', () => {
       trigger: 'lead_nuevo',
       accion: 'enviar_whatsapp',
       condicion: 'canal = whatsapp',
+      params: { texto: 'Hola {{nombre|amigo}}, gracias por escribirnos.' },
     };
 
     it('crea una regla (201) inyectando el businessId del auth', async () => {
@@ -121,8 +139,50 @@ describe('routes/workflows', () => {
       expect(res.status).toBe(201);
       expect(createWorkflow).toHaveBeenCalledWith(
         'biz_1',
-        expect.objectContaining({ nombre: 'Saludar leads', trigger: 'lead_nuevo', accion: 'enviar_whatsapp' })
+        expect.objectContaining({
+          nombre: 'Saludar leads',
+          trigger: 'lead_nuevo',
+          accion: 'enviar_whatsapp',
+          params: { texto: 'Hola {{nombre|amigo}}, gracias por escribirnos.' },
+        })
       );
+    });
+
+    it('devuelve 400 si a la acción le faltan sus parámetros obligatorios', async () => {
+      const res = await request(app)
+        .post('/api/workflows')
+        .send({ nombre: 'Sin texto', trigger: 'lead_nuevo', accion: 'enviar_whatsapp' });
+
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body.details)).toMatch(/Mensaje es obligatorio/);
+      expect(createWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si el texto usa una variable que no existe', async () => {
+      const res = await request(app)
+        .post('/api/workflows')
+        .send({ ...validPayload, params: { texto: 'Hola {{apellido}}' } });
+
+      expect(res.status).toBe(400);
+      expect(createWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si el parámetro no pertenece a la acción', async () => {
+      const res = await request(app)
+        .post('/api/workflows')
+        .send({ nombre: 'x', trigger: 'lead_nuevo', accion: 'asignar_agente', params: { texto: 'hola' } });
+
+      expect(res.status).toBe(400);
+      expect(createWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (403) a un usuario que no es ADMIN: el texto sale hacia los clientes', async () => {
+      authState.role = 'PROFESSIONAL';
+
+      const res = await request(app).post('/api/workflows').send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(createWorkflow).not.toHaveBeenCalled();
     });
 
     it('devuelve 400 cuando falta el nombre (validación Zod)', async () => {
@@ -168,6 +228,43 @@ describe('routes/workflows', () => {
       expect(res.status).toBe(200);
       expect(res.body.activo).toBe(false);
       expect(updateWorkflow).toHaveBeenCalledWith('biz_1', 'r1', { activo: false });
+    });
+
+    it('edita nombre, acción y parámetros juntos (validando los params contra la acción)', async () => {
+      const body = {
+        nombre: 'Aviso',
+        accion: 'mover_lifecycle',
+        params: { etapa: 'HOT' },
+      };
+      const res = await request(app).patch('/api/workflows/r1').send(body);
+
+      expect(res.status).toBe(200);
+      expect(updateWorkflow).toHaveBeenCalledWith('biz_1', 'r1', body);
+    });
+
+    it('devuelve 400 si acción y parámetros del patch no son compatibles', async () => {
+      const res = await request(app)
+        .patch('/api/workflows/r1')
+        .send({ accion: 'mover_lifecycle', params: { etapa: 'VIP' } });
+
+      expect(res.status).toBe(400);
+      expect(updateWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('solo-params: se delega al servicio (conoce la acción guardada)', async () => {
+      const res = await request(app).patch('/api/workflows/r1').send({ params: { texto: 'Nuevo' } });
+
+      expect(res.status).toBe(200);
+      expect(updateWorkflow).toHaveBeenCalledWith('biz_1', 'r1', { params: { texto: 'Nuevo' } });
+    });
+
+    it('rechaza (403) editar a un usuario que no es ADMIN', async () => {
+      authState.role = 'PROFESSIONAL';
+
+      const res = await request(app).patch('/api/workflows/r1').send({ activo: false });
+
+      expect(res.status).toBe(403);
+      expect(updateWorkflow).not.toHaveBeenCalled();
     });
 
     it('devuelve 404 si la regla no pertenece al negocio', async () => {

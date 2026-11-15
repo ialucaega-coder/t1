@@ -18,10 +18,12 @@
  *    `mode: 'live'`; en `dry_run` (por defecto) devuelven `simulado` sin enviar.
  *    Así el pipeline automático no manda mensajes reales salvo que se pida
  *    explícitamente la ejecución en vivo.
- *  - Acciones pesadas/irreversibles (crear reserva, link de pago, lanzar
- *    campaña, crear cliente, asignar agente) quedan RECONOCIDAS pero
- *    `no_soportado`: la interfaz está completa y se cablean una por una, sin
- *    disparar dinero/reservas a ciegas desde un loop.
+ *  - Las acciones pesadas (crear reserva, link de pago, lanzar campaña, crear
+ *    cliente) también están cableadas, pero el catálogo de Workflows NO las
+ *    ofrece todavía (ver `NOT_EXPOSED_ACTIONS` en services/workflows/params.ts):
+ *    solo las usa el orquestador Mr Go, que pide confirmación en modo live.
+ *  - Los `params` de una regla de Workflows llegan ya mezclados con el payload
+ *    del evento (precedencia en services/workflows/params.ts).
  *
  * Contrato: `executeAction` NUNCA lanza; siempre devuelve un `ActionResult`
  * estructurado (los errores se capturan y se reportan con `status: 'error'`).
