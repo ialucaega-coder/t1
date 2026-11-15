@@ -15,7 +15,7 @@ vi.mock('../../lib/prisma', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
-import { getMpStatus, saveMpConfig, loadMpConfig, disconnectMp } from '../../services/mercadopago/config';
+import { getMpStatus, saveMpConfig, loadMpConfig, loadMpConfigForWebhook, MpConfigError, disconnectMp } from '../../services/mercadopago/config';
 import { encrypt } from '../../lib/crypto';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -30,7 +30,7 @@ beforeEach(() => {
 describe('services/mercadopago/config', () => {
   it('getMpStatus: no conectado sin Connection; moneda por defecto ARS', async () => {
     mock(prisma.connection.findFirst).mockResolvedValue(null);
-    expect(await getMpStatus('biz_1')).toEqual({ connected: false, enabled: false, currency: 'ARS' });
+    expect(await getMpStatus('biz_1')).toEqual({ connected: false, enabled: false, currency: 'ARS', webhookSecretConfigured: false });
   });
 
   it('getMpStatus: conectado sin exponer el token', async () => {
@@ -38,7 +38,7 @@ describe('services/mercadopago/config', () => {
       config: { accessTokenEnc: encrypt('APP_USR-123'), currency: 'MXN', enabled: true },
     });
     const status = await getMpStatus('biz_1');
-    expect(status).toEqual({ connected: true, enabled: true, currency: 'MXN' });
+    expect(status).toEqual({ connected: true, enabled: true, currency: 'MXN', webhookSecretConfigured: false });
     expect(JSON.stringify(status)).not.toContain('APP_USR-123');
   });
 
@@ -80,5 +80,47 @@ describe('services/mercadopago/config', () => {
     expect(prisma.connection.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { config: {}, isActive: false } })
     );
+  });
+});
+
+describe('services/mercadopago/config — clave secreta del webhook', () => {
+  it('saveMpConfig cifra la clave del webhook y getMpStatus solo informa que existe', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(prisma.connection.findUnique).mockResolvedValue({ config: { accessTokenEnc: encrypt('APP_USR-1'), enabled: true } });
+
+    await saveMpConfig('biz_1', { webhookSecret: 'clave-falsa' });
+
+    const saved = mock(prisma.connection.update).mock.calls[0][0].data.config;
+    expect(saved.webhookSecretEnc).toBeTypeOf('string');
+    expect(saved.webhookSecretEnc).not.toContain('clave-falsa');
+
+    mock(prisma.connection.findFirst).mockResolvedValue({ config: saved });
+    const status = await getMpStatus('biz_1');
+    expect(status.webhookSecretConfigured).toBe(true);
+    expect(JSON.stringify(status)).not.toContain('clave-falsa');
+    expect((await loadMpConfig('biz_1'))?.webhookSecret).toBe('clave-falsa');
+  });
+
+  it('saveMpConfig con webhookSecret null quita la clave', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(prisma.connection.findUnique).mockResolvedValue({
+      config: { accessTokenEnc: encrypt('APP_USR-1'), webhookSecretEnc: encrypt('vieja') },
+    });
+    await saveMpConfig('biz_1', { webhookSecret: null });
+    const saved = mock(prisma.connection.update).mock.calls[0][0].data.config;
+    expect(saved.webhookSecretEnc).toBeUndefined();
+  });
+});
+
+describe('services/mercadopago/config — loadMpConfigForWebhook', () => {
+  it('credenciales ilegibles: loadMpConfig devuelve null pero la variante del webhook lanza MpConfigError', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ config: { accessTokenEnc: 'basura-no-cifrada', enabled: true } });
+    expect(await loadMpConfig('biz_1')).toBeNull();
+    await expect(loadMpConfigForWebhook('biz_1')).rejects.toBeInstanceOf(MpConfigError);
+  });
+
+  it('sin conexión devuelve null (no es un error)', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    expect(await loadMpConfigForWebhook('biz_1')).toBeNull();
   });
 });

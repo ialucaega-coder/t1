@@ -8,12 +8,13 @@
  * acotamos a 100 KB; el resto de la API conserva los 5 MB.
  *
  * Los webhooks de terceros (Meta, Telegram, Stripe, Twilio...) NO entran en esta
- * lista: tienen su propio tamaño y firma, y cortarlos perdería mensajes.
+ * lista: tienen su propio tamaño y firma, y cortarlos perdería mensajes. La excepción
+ * es el de MercadoPago (avisos de pago de unos pocos bytes): 100 KB sobra.
  */
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { validateRequestSize } from './security';
 
-export const PUBLIC_BODY_PREFIXES = ['/api/public', '/api/auth'] as const;
+export const PUBLIC_BODY_PREFIXES = ['/api/public', '/api/auth', '/api/mercadopago/webhook'] as const;
 export const PUBLIC_BODY_LIMIT_BYTES = 100 * 1024; // 100 KB
 export const DEFAULT_BODY_LIMIT_BYTES = 5 * 1024 * 1024; // 5 MB
 

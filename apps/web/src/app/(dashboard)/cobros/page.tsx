@@ -144,7 +144,11 @@ export default function CobrosPage() {
           <li>Ponés el monto y una descripción del cobro.</li>
           <li>Generás un link seguro de pago con {provider === 'mercadopago' ? 'MercadoPago' : 'tarjeta (Stripe)'}.</li>
           <li>Se lo mandás al cliente por WhatsApp o el canal que uses.</li>
-          <li>El cliente paga y te queda registrado.</li>
+          <li>
+            {provider === 'mercadopago'
+              ? 'El cliente paga y, cuando MercadoPago confirma el pago, se registra solo en Movimientos (solo pagos aprobados).'
+              : 'El cliente paga con tarjeta desde el link (el pago se confirma en tu panel de Stripe).'}
+          </li>
         </ol>
         <p className="mt-3 text-xs text-amber-300/90 flex items-start gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />

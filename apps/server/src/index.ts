@@ -61,6 +61,7 @@ import { brandRouter } from './routes/brand';
 import { galeriaRouter } from './routes/galeria';
 import { calcomRouter } from './routes/calcom';
 import { mercadopagoRouter } from './routes/mercadopago';
+import { mercadopagoWebhookRouter } from './routes/mercadopagoWebhook';
 import { manychatRouter } from './routes/manychat';
 import { composioRouter } from './routes/composio';
 import { workflowsRouter } from './routes/workflows';
@@ -234,6 +235,11 @@ app.use(
 app.use(sanitizeRequest);
 app.use(issueCsrfToken);
 app.use(csrfProtection);
+
+// Webhook público de MercadoPago (confirmación de pago): va ANTES del límite global
+// por IP (llega desde IPs compartidas por todos los negocios) y tiene su propio rate
+// limit por negocio; la autenticidad se verifica consultando el pago a la API.
+app.use('/api/mercadopago/webhook', mercadopagoWebhookRouter);
 
 // Webhooks de terceros: llegan desde IPs compartidas (ManyChat, Telegram, Meta,
 // Stripe, Twilio), así que el límite global POR IP los cortaría para todos los
