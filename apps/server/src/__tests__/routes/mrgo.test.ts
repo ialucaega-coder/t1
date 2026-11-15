@@ -66,7 +66,14 @@ vi.mock('../../services/mrgo/memory', async (importOriginal) => {
   };
 });
 
+// --- Mock de la oficina (pausas): sin pausas por defecto ---
+vi.mock('../../services/mrgo/office', () => ({
+  loadOffice: vi.fn(async () => ({ paused: [], positions: {} })),
+  saveOffice: vi.fn(),
+}));
+
 import { loadAgents, saveAgents } from '../../services/mrgo/agents';
+import { loadOffice } from '../../services/mrgo/office';
 import { orchestrate } from '../../services/mrgo/orchestrator';
 import { loadMemory, saveMemory } from '../../services/mrgo/memory';
 import { mrgoRouter } from '../../routes/mrgo';
@@ -335,6 +342,39 @@ describe('services/mrgo/orchestrator', () => {
 
     expect(dec.nextAgent).toBe('ventas');
     expect(dec.tool).toBe('generar_link_pago');
+  });
+
+  it('no despacha a un agente PAUSADO en la Oficina: lo saca del prompt y cae al fallback', async () => {
+    mock(loadOffice).mockResolvedValueOnce({ paused: ['ventas'], positions: {} });
+    const gen = vi.fn(async () => '{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"generar_link_pago"}');
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'cuánto sale' });
+
+    expect(loadOffice).toHaveBeenCalledWith('biz_1');
+    expect(dec.nextAgent).toBe('ceo'); // el LLM eligió ventas (pausado) → no se respeta
+    expect(dec.tool).toBeUndefined();
+    const opts = (gen.mock.calls[0] as unknown[])[1] as { systemPrompt: string };
+    expect(opts.systemPrompt).not.toContain('- ventas:');
+    expect(opts.systemPrompt).toContain('- ceo:');
+  });
+
+  it('si el CEO está pausado, el fallback elige otro agente activo', async () => {
+    mock(loadOffice).mockResolvedValueOnce({ paused: ['ceo'], positions: {} });
+    fakeProvider('no soy json');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+  });
+
+  it('si falla la lectura de la Oficina, rutea igual (sin pausas)', async () => {
+    mock(loadOffice).mockRejectedValueOnce(new Error('db caída'));
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
   });
 
   it('fallback si el motor de IA no está disponible', async () => {

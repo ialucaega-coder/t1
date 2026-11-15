@@ -47,9 +47,23 @@ export default function HabilidadesPage() {
       </div>
 
       <p className="text-sm text-slate-400 max-w-2xl">
-        Las habilidades son lo que tu bot <strong className="text-white">sabe hacer</strong> —
-        cada una agrega una capacidad específica. Activalas según lo que necesite tu negocio.
+        Las habilidades resumen lo que tu bot <strong className="text-white">sabe hacer</strong>.
       </p>
+
+      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-200 max-w-3xl">
+        <Info className="h-4 w-4 shrink-0 mt-0.5" />
+        <div className="space-y-1.5 leading-relaxed">
+          <p>
+            <strong className="text-amber-100">Hoy estas habilidades son informativas:</strong> activarlas o
+            desactivarlas no cambia lo que responde el bot en el chat.
+          </p>
+          <p>
+            Lo que sí influye en el bot son los <strong className="text-amber-100">Superpoderes</strong> (sección
+            Superpoderes) y los ajustes con su propio interruptor, como el{' '}
+            <strong className="text-amber-100">Asistente de voz</strong> (Activo/Inactivo en su pantalla).
+          </p>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {skills.map((skill) => {
@@ -74,6 +88,7 @@ export default function HabilidadesPage() {
                   <div>
                     <h3 className="text-sm font-semibold text-white">{skill.name}</h3>
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider">{skill.subtitle}</span>
+                    <span className="ml-1.5 align-middle text-[9px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-400">Informativa</span>
                   </div>
                 </div>
                 <button

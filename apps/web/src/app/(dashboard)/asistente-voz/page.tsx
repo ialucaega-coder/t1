@@ -10,6 +10,7 @@ import * as voiceApi from '@/lib/api/voice';
 import type { VoiceConfig } from '@/lib/api/voice';
 import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/common/Toast';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
 
 // ────────────────────────────────────────────────────────────────
 // Voces de Amazon Polly soportadas por Twilio (llamada real), por idioma.
@@ -103,6 +104,9 @@ export default function AsistenteVozPage() {
 
   const [cfg, setCfg] = useState<VoiceConfig | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Hay cambios en pantalla que todavía no se guardaron en el servidor.
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [twilioReady, setTwilioReady] = useState(false);
 
@@ -120,6 +124,24 @@ export default function AsistenteVozPage() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Carga (y recarga, con "Reintentar") de la configuración del asistente.
+  const loadConfig = () => {
+    voiceApi
+      .getConfig()
+      .then((c) => { setCfg(c); setDirty(false); })
+      .catch((e) => {
+        setCfg(null);
+        setLoadError(e instanceof Error && e.message ? e.message : 'No se pudo cargar la configuración del asistente de voz.');
+      })
+      .finally(() => setLoading(false));
+  };
+
+  const retryLoadConfig = () => {
+    setLoading(true);
+    setLoadError(null);
+    loadConfig();
+  };
+
   // ─── Carga inicial ───────────────────────────────────────────────
   useEffect(() => {
     // Capturamos la referencia del array de timers al montar: nunca se reasigna
@@ -127,7 +149,7 @@ export default function AsistenteVozPage() {
     const activeTimers = timers.current;
     setWebhookUrl(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api'}/voice/incoming`);
 
-    voiceApi.getConfig().then(setCfg).catch(() => setCfg(null)).finally(() => setLoading(false));
+    loadConfig();
     voiceApi.getStatus().then((s) => setTwilioReady(s.configured)).catch(() => {});
 
     const loadVoices = () => {
@@ -155,8 +177,10 @@ export default function AsistenteVozPage() {
     if (match) setDemoVoiceUri(match.voiceURI);
   }, [cfg, browserVoices, demoVoiceUri]);
 
-  const set = <K extends keyof VoiceConfig>(key: K, val: VoiceConfig[K]) =>
+  const set = <K extends keyof VoiceConfig>(key: K, val: VoiceConfig[K]) => {
     setCfg((c) => (c ? { ...c, [key]: val } : c));
+    setDirty(true);
+  };
 
   const pollyOptions = cfg ? (POLLY_VOICES[cfg.language] || POLLY_VOICES['es-MX']) : [];
   const demoVoices = cfg
@@ -236,6 +260,7 @@ export default function AsistenteVozPage() {
     try {
       const saved = await voiceApi.saveConfig(cfg);
       setCfg(saved);
+      setDirty(false);
       toast({ type: 'success', message: 'Configuración del asistente guardada' });
     } catch (e) {
       toast({ type: 'error', message: e instanceof Error ? e.message : 'No se pudo guardar' });
@@ -244,10 +269,21 @@ export default function AsistenteVozPage() {
     }
   };
 
-  if (loading || !cfg) {
+  if (loading) {
     return (
       <div className="p-6 flex items-center gap-2 text-slate-400">
         <Loader2 className="w-4 h-4 animate-spin" /> Cargando asistente de voz…
+      </div>
+    );
+  }
+
+  if (!cfg) {
+    return (
+      <div className="p-6 max-w-2xl">
+        <ErrorAlert
+          message={loadError ?? 'No se pudo cargar la configuración del asistente de voz.'}
+          onRetry={retryLoadConfig}
+        />
       </div>
     );
   }
@@ -283,6 +319,16 @@ export default function AsistenteVozPage() {
           </label>
         </div>
       </div>
+
+      {dirty && (
+        <div role="status" className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-amber-500/10 border-amber-500/30 text-amber-300 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span className="flex-1">Tenés cambios sin guardar (incluido el interruptor Activo/Inactivo). Tocá &quot;Guardar configuración&quot; para aplicarlos a las llamadas reales.</span>
+          <button onClick={save} disabled={saving} className="shrink-0 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-500/20 border border-amber-500/40 hover:bg-amber-500/30 disabled:opacity-50">
+            {saving ? 'Guardando…' : 'Guardar ahora'}
+          </button>
+        </div>
+      )}
 
       {!twilioReady && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-amber-500/10 border-amber-500/30 text-amber-300 text-sm">

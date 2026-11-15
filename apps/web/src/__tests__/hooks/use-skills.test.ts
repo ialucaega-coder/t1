@@ -14,6 +14,7 @@ vi.mock('@/lib/api/index', () => ({
 
 import { useSkills } from '@/hooks/use-skills';
 import { skillsApi } from '@/lib/api/index';
+import { SKILLS } from '@/constants/skills';
 
 const mockGet = skillsApi.getSkills as ReturnType<typeof vi.fn>;
 
@@ -46,6 +47,25 @@ describe('hooks/use-skills', () => {
     expect(skill.isActive).toBe(true);
     expect(skill.icon).toBeDefined();
     expect(result.current.error).toBeNull();
+  });
+
+  it('mapea el ícono aunque el nombre del server venga sin tildes (Catalogo / Atencion)', async () => {
+    mockGet.mockResolvedValue([
+      { name: 'Catalogo & Pedidos', subtitle: 's', description: 'd', isActive: true },
+      { name: 'Atencion por voz', subtitle: 's', description: 'd', isActive: true },
+      { name: 'Reportes automaticos', subtitle: 's', description: 'd', isActive: true },
+    ]);
+
+    const { result } = renderHook(() => useSkills());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const byName = (n: string) => SKILLS.find((s) => s.name === n)!.icon;
+    const [cat, voz, rep] = result.current.skills;
+    expect(cat.icon).toBe(byName('Catálogo & Pedidos'));
+    expect(voz.icon).toBe(byName('Atención por voz'));
+    expect(rep.icon).toBe(byName('Reportes automáticos'));
+    // El nombre que se muestra/usa para togglear sigue siendo el persistido.
+    expect(cat.name).toBe('Catalogo & Pedidos');
   });
 
   it('ante error setea el mensaje y deja la lista vacía (sin datos falsos)', async () => {

@@ -22,6 +22,7 @@ import {
 } from './agents';
 import { loadMemory, buildMemoryPrompt } from './memory';
 import { loadIndustry, buildIndustryPrompt } from './industry';
+import { loadOffice } from './office';
 import { extractJson } from './json';
 
 /** Entrada del orquestador. */
@@ -55,6 +56,19 @@ const DEFAULT_EMOTION = 'neutral';
 
 /** Tope del input para no inflar el prompt con textos gigantes. */
 const MAX_INPUT_LEN = 4000;
+
+/**
+ * Claves de agentes en pausa (estado de la Oficina). Si la lectura falla no
+ * rompemos el ruteo: sin dato asumimos que no hay pausas.
+ */
+async function loadPausedKeys(businessId: string): Promise<Set<string>> {
+  try {
+    const office = await loadOffice(businessId);
+    return new Set(Array.isArray(office?.paused) ? office.paused : []);
+  } catch {
+    return new Set();
+  }
+}
 
 /**
  * Arma el prompt de sistema de routing con el catálogo de agentes ACTIVOS y el
@@ -153,14 +167,17 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
   // latencia es la de la más lenta; antes eran 4 round-trips seriales a la DB.
   const providerPromise = getAIProviderForBusiness(businessId);
   providerPromise.catch(() => {}); // evita unhandledRejection si salimos antes del await
-  const [agents, industry, memory] = await Promise.all([
+  const [agents, industry, memory, pausedKeys] = await Promise.all([
     loadAgents(businessId),
     loadIndustry(businessId),
     loadMemory(businessId),
+    loadPausedKeys(businessId),
   ]);
-  const activeAgents = agents.filter((a) => a.activo);
+  // Un agente pausado desde la Oficina NO recibe trabajo: se lo saca del catálogo
+  // que ve el LLM y de los destinos válidos del parseo (igual que uno inactivo).
+  const activeAgents = agents.filter((a) => a.activo && !pausedKeys.has(a.key));
   if (activeAgents.length === 0) {
-    return fallbackDecision(agents, 'no hay agentes activos configurados');
+    return fallbackDecision(agents, 'no hay agentes activos y sin pausa configurados');
   }
   if (!text) {
     return fallbackDecision(activeAgents, 'el mensaje vino vacío');

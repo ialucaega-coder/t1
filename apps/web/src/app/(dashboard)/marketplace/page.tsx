@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift, Trash2, Store } from 'lucide-react';
+import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift, Store, Bell, QrCode, Heart, MapPin } from 'lucide-react';
+import { normalizeText, toKebabCase } from '@/lib/text';
 import { useMarketplace } from '@/hooks/use-marketplace';
 import { MARKETPLACE_CATEGORIES, type MarketplaceCategory } from '@/constants/marketplace';
 import { SearchInput } from '@/components/ui/SearchInput';
@@ -16,7 +17,14 @@ const iconMap: Record<string, React.ElementType> = {
   'calendar': Calendar, 'shopping-bag': ShoppingBag, 'heart-pulse': HeartPulse,
   'utensils': UtensilsCrossed, 'credit-card': CreditCard, 'message-square': MessageSquare,
   'graduation-cap': GraduationCap, 'truck': Truck, 'clipboard-list': ClipboardList, 'gift': Gift,
+  // Íconos que usa el catálogo que siembra el server (vienen en PascalCase: "Bell", "QrCode"…).
+  'bell': Bell, 'star': Star, 'qr-code': QrCode, 'heart': Heart, 'map-pin': MapPin,
 };
+
+/** Resuelve el ícono de un item aceptando kebab-case ("credit-card") o PascalCase ("CreditCard"). */
+function iconFor(name: string): React.ElementType {
+  return iconMap[toKebabCase(name)] || ShoppingBag;
+}
 
 function StarRating({ rating }: { rating: number }) {
   return (
@@ -60,9 +68,12 @@ export default function MarketplacePage() {
     }
   }
 
+  // Búsqueda y categoría sin distinguir tildes: el seed del server puede traer
+  // "Gastronomia"/"Educacion" y el front usa "Gastronomía"/"Educación".
   const filtered = items.filter((item) => {
-    const matchesSearch = item.name.toLowerCase().includes(search.toLowerCase()) || item.description.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = activeCategory === 'Todos' || item.category === activeCategory;
+    const needle = normalizeText(search);
+    const matchesSearch = normalizeText(item.name).includes(needle) || normalizeText(item.description).includes(needle);
+    const matchesCategory = activeCategory === 'Todos' || normalizeText(item.category) === normalizeText(activeCategory);
     return matchesSearch && matchesCategory;
   });
 
@@ -91,7 +102,7 @@ export default function MarketplacePage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {filtered.map((item) => {
-          const Icon = iconMap[item.icon] || ShoppingBag;
+          const Icon = iconFor(item.icon);
           return (
             <div key={item.id} className="card-accent flex flex-col">
               <div className="flex items-start gap-3 mb-3">

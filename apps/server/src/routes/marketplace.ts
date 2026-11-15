@@ -11,9 +11,9 @@ const DEFAULT_ITEMS = [
   { name: 'Cobro automático', description: 'Cobra por MercadoPago o Stripe al confirmar reserva', category: 'Comercio', rating: 4.6, reviews: 189, price: '$2.990/mes', author: 'Mr. Go Assistance', icon: 'CreditCard' },
   { name: 'Fidelización', description: 'Sistema de puntos y recompensas para clientes frecuentes', category: 'Comercio', rating: 4.5, reviews: 156, price: 'Gratis', author: 'Mr. Go Assistance', icon: 'Star' },
   { name: 'Encuestas post-servicio', description: 'Pide feedback automático después de cada servicio', category: 'Servicios', rating: 4.3, reviews: 98, price: 'Gratis', author: 'Mr. Go Assistance', icon: 'MessageSquare' },
-  { name: 'Menú digital QR', description: 'Genera un menú digital con QR para tu negocio', category: 'Gastronomia', rating: 4.7, reviews: 312, price: 'Gratis', author: 'Mr. Go Assistance', icon: 'QrCode' },
+  { name: 'Menú digital QR', description: 'Genera un menú digital con QR para tu negocio', category: 'Gastronomía', rating: 4.7, reviews: 312, price: 'Gratis', author: 'Mr. Go Assistance', icon: 'QrCode' },
   { name: 'Historia clínica', description: 'Registro de historia clínica por paciente', category: 'Salud', rating: 4.9, reviews: 67, price: '$4.990/mes', author: 'Mr. Go Assistance', icon: 'Heart' },
-  { name: 'Agenda educativa', description: 'Gestión de clases, alumnos y asistencia', category: 'Educacion', rating: 4.4, reviews: 45, price: 'Gratis', author: 'Mr. Go Assistance', icon: 'GraduationCap' },
+  { name: 'Agenda educativa', description: 'Gestión de clases, alumnos y asistencia', category: 'Educación', rating: 4.4, reviews: 45, price: 'Gratis', author: 'Mr. Go Assistance', icon: 'GraduationCap' },
   { name: 'Multi-sucursal', description: 'Gestiona múltiples ubicaciones desde un panel', category: 'Comercio', rating: 4.2, reviews: 78, price: '$5.990/mes', author: 'Mr. Go Assistance', icon: 'MapPin' },
 ];
 

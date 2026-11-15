@@ -13,6 +13,7 @@
  * activos, CEO destacado). Derecha = centro de comandos (input + feed).
  */
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
@@ -176,7 +177,7 @@ export default function OficinaPage() {
   // Señal de delegación para el piso: al cambiar el nonce, vuela un sobre
   // del CEO al agente que atendió la orden.
   const [delivery, setDelivery] = useState<{ to: string; nonce: number } | null>(null);
-  // Agentes pausados (solo foco visual de la oficina; no cambia el backend).
+  // Agentes pausados: el orquestador del server no les deriva trabajo (ver services/mrgo/orchestrator.ts).
   const [pausados, setPausados] = useState<Set<string>>(new Set());
   // Posiciones personalizadas de los puestos (editor del piso) + modo edición.
   const [posiciones, setPosiciones] = useState<Record<string, { x: number; y: number }>>({});
@@ -580,8 +581,8 @@ export default function OficinaPage() {
   // La "vida" (useOfficeLife) vive dentro de <OfficeFloorLive>: cada paseo de un
   // agente re-renderiza solo el piso, no esta página entera.
 
-  /** Pausar / reactivar un agente (foco visual de la oficina). Persiste el nuevo
-   *  estado para que las pausas vuelvan igual tras recargar. */
+  /** Pausar / reactivar un agente. Persiste el estado: el orquestador deja de
+   *  derivarle trabajo mientras esté en pausa (una orden ya en curso no se interrumpe). */
   function togglePausa(key: string) {
     const next = new Set(pausados);
     if (next.has(key)) next.delete(key);
@@ -1194,12 +1195,12 @@ export default function OficinaPage() {
                     <p className="mt-2 text-xs text-[#857a66]">
                       Reglas que disparan acciones solas (mensaje entrante, nueva reserva, pago…).
                     </p>
-                    <a
+                    <Link
                       href="/workflows"
                       className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[#ddd4c4] bg-[#f6f2ea] px-3 py-1.5 text-xs font-medium text-[#4a4034] transition-colors hover:bg-[#ece5d8]"
                     >
                       Abrir Automatizaciones
-                    </a>
+                    </Link>
                   </div>
                 )}
 
