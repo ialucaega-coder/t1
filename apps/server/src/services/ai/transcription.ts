@@ -29,7 +29,9 @@ export function isTranscriptionAvailable(): boolean {
 function getClient(): OpenAI | null {
   if (!process.env.OPENAI_API_KEY) return null;
   if (!cachedClient) {
-    cachedClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    // Sin timeout el SDK espera hasta 10 min y 2 reintentos: un Whisper lento
+    // colgaría el handler del webhook. Mismo criterio que los providers de chat.
+    cachedClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
   }
   return cachedClient;
 }

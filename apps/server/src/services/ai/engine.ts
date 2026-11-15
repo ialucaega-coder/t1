@@ -19,6 +19,7 @@ import { prisma } from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { encrypt, safeDecrypt } from '../../lib/crypto';
 import { enforceSpendCap } from './spendCap';
+import { FailoverProvider, type FallbackSlot } from './failover';
 
 const CONNECTION_TYPE = 'AI_ENGINE';
 
@@ -154,6 +155,34 @@ function resolveKey(engine: AIEngine, cfg: EngineConfig): string | null {
   return null;
 }
 
+function buildProvider(engine: AIEngine, key: string): AIProvider {
+  return engine.kind === 'anthropic'
+    ? new AnthropicProvider({ apiKey: key, model: engine.model })
+    : new OpenAIProvider({ apiKey: key, baseURL: engine.baseURL, model: engine.model });
+}
+
+/** Máximo de motores de respaldo (cada intento fallido suma latencia). */
+const MAX_FALLBACKS = 2;
+
+/**
+ * Motores de respaldo del negocio: de OTRA familia que el activo (si cayó el
+ * proveedor, otro modelo del mismo proveedor cae igual), no locales, y con key
+ * usable (propia o relay). Orden del catálogo, uno por familia.
+ */
+export function fallbackSlots(active: AIEngine, cfg: EngineConfig): FallbackSlot[] {
+  const seen = new Set<string>([active.provider]);
+  const slots: FallbackSlot[] = [];
+  for (const e of AI_ENGINES) {
+    if (slots.length >= MAX_FALLBACKS) break;
+    if (seen.has(e.provider) || e.keyless || e.type !== 'api') continue;
+    const key = resolveKey(e, cfg);
+    if (!key) continue;
+    seen.add(e.provider);
+    slots.push({ label: `${e.provider}:${e.model ?? e.id}`, build: () => buildProvider(e, key) });
+  }
+  return slots;
+}
+
 /**
  * Devuelve el AIProvider a usar para un negocio, según su motor activo.
  * Si el motor elegido no tiene key usable, cae al proveedor por defecto de la
@@ -177,11 +206,15 @@ export async function getAIProviderForBusiness(businessId: string): Promise<AIPr
   // claro que processMessage captura para degradar con un mensaje amable).
   if (!key) return safeDefaultProvider();
 
-  let provider: AIProvider;
-  if (engine.kind === 'anthropic') {
-    provider = new AnthropicProvider({ apiKey: key, model: engine.model });
-  } else {
-    provider = new OpenAIProvider({ apiKey: key, baseURL: engine.baseURL, model: engine.model });
+  let provider: AIProvider = buildProvider(engine, key);
+
+  // Respaldo: si el motor activo falla, probar otros motores del negocio ya
+  // listos (key propia o relay). AI_FAILOVER=false lo desactiva.
+  if (process.env.AI_FAILOVER !== 'false') {
+    const fallbacks = fallbackSlots(engine, cfg);
+    if (fallbacks.length > 0) {
+      provider = new FailoverProvider(provider, `${engine.provider}:${engine.model ?? engine.id}`, fallbacks);
+    }
   }
 
   providerCache.set(cacheKeyFor(businessId, engine.id), { provider, expiresAt: now + PROVIDER_CACHE_TTL_MS });
