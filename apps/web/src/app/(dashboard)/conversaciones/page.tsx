@@ -296,19 +296,68 @@ export default function ConversacionesPage() {
     } catch { /* marcar leído no es crítico */ }
   }, [scheduleRefresh]);
 
+  // Idempotency-Key del envío en curso: un doble click o un reintento de red del
+  // MISMO texto reusa la clave y el server no manda el mensaje dos veces.
+  const replyKeyRef = useRef<{ conversationId: string; text: string; key: string } | null>(null);
+  const sendingRef = useRef(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  function keyForReply(conversationId: string, text: string): string {
+    const current = replyKeyRef.current;
+    if (current && current.conversationId === conversationId && current.text === text) return current.key;
+    const key =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    replyKeyRef.current = { conversationId, text, key };
+    return key;
+  }
+
+  // El mensaje SIEMPRE queda guardado; si no llegó al cliente, avisamos el motivo.
+  function notifyDelivery(result: conversationsApi.ReplyResult) {
+    if (result.deliveryStatus === 'failed') {
+      toast({
+        type: 'error',
+        message: `No se pudo enviar al cliente: ${result.deliveryError || 'el canal rechazó el mensaje.'}`,
+      });
+    }
+  }
+
   async function handleReply() {
-    if (!replyText.trim() || !selectedId || sending) return;
+    const text = replyText.trim();
+    if (!text || !selectedId || sending || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     try {
-      await conversationsApi.reply(selectedId, replyText.trim());
+      const result = await conversationsApi.reply(selectedId, text, keyForReply(selectedId, text));
+      replyKeyRef.current = null;
       setReplyText('');
+      // `duplicate`: el primer request (mismo doble click) ya mostró el resultado.
+      if (!('duplicate' in result)) notifyDelivery(result);
       refetchDetail();
       refetch();
     } catch (err) {
       console.error('Error sending reply:', err);
       toast({ type: 'error', message: 'No se pudo enviar la respuesta.' });
     } finally {
+      sendingRef.current = false;
       setSending(false);
+    }
+  }
+
+  async function handleRetryDelivery(messageId: string) {
+    if (!selectedId || retryingId) return;
+    setRetryingId(messageId);
+    try {
+      const result = await conversationsApi.retryReply(selectedId, messageId);
+      notifyDelivery(result);
+      refetchDetail();
+      refetch();
+    } catch (err) {
+      console.error('Error retrying delivery:', err);
+      toast({ type: 'error', message: 'No se pudo reintentar el envío.' });
+    } finally {
+      setRetryingId(null);
     }
   }
 
@@ -798,6 +847,25 @@ export default function ConversacionesPage() {
                         {new Date(msg.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                         {msg.responseTime != null && msg.role === 'BOT' ? ` · ${msg.responseTime}ms` : ''}
                       </p>
+                      {msg.metadata?.sender === 'human' && msg.metadata.deliveryStatus === 'failed' && (
+                        <div className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-red-500/10 border border-red-500/20 px-2 py-1.5">
+                          <AlertTriangle className="h-3 w-3 text-red-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-medium text-red-300">No se pudo enviar al cliente</p>
+                            {msg.metadata.deliveryError && (
+                              <p className="text-[10px] text-red-300/80">{msg.metadata.deliveryError}</p>
+                            )}
+                            <button
+                              onClick={() => handleRetryDelivery(msg.id)}
+                              disabled={retryingId !== null}
+                              className="mt-1 text-[10px] text-red-200 underline hover:text-white disabled:opacity-50 flex items-center gap-1"
+                            >
+                              {retryingId === msg.id && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                              Reintentar
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

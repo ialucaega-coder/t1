@@ -10,6 +10,11 @@ import { getIO } from '../lib/socket';
 import { generateCopilot } from '../services/ai/copilot';
 import { generateLeadScore, type LeadScore } from '../services/ai/lead-score';
 import type { ConversationAttribution } from '../services/whatsapp/attribution';
+import { deliverToChannel, type DeliveryStatus } from '../services/channels/deliver';
+import { IDEMP_TYPE_MRGO, readIdempotencyKey, claimIdempotentKey, releaseIdempotentKey } from '../lib/idempotency';
+
+/** Tope de intentos de envío por mensaje (el primero + reintentos manuales). */
+const MAX_DELIVERY_ATTEMPTS = 5;
 
 const replySchema = z.object({
   text: z.string().min(1).max(5000).transform((v) => v.trim()),
@@ -275,36 +280,126 @@ router.get(
   })
 );
 
+/**
+ * Metadata que guardamos en el Message de una respuesta humana. El enum
+ * MessageRole no tiene HUMAN (schema congelado), así que el rol sigue siendo BOT
+ * y lo que distingue a un humano es `metadata.sender === 'human'`.
+ */
+interface HumanReplyMeta {
+  sender: 'human';
+  userId: string;
+  userName?: string;
+  deliveryStatus: 'pending' | DeliveryStatus;
+  deliveryError?: string;
+  providerMessageId?: string;
+  deliveryAttempts: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Entrega el mensaje al canal real y deja el resultado en `Message.metadata`.
+ * Nunca lanza: si falla el update del resultado, igual devolvemos lo que pasó con
+ * el envío (el humano tiene que saber si el cliente lo recibió o no).
+ */
+async function deliverAndRecord(
+  conversation: { id: string; channel: string; contactPhone: string | null; metadata: Prisma.JsonValue | null; businessId: string },
+  message: { id: string; text: string },
+  baseMeta: HumanReplyMeta,
+) {
+  const result = await deliverToChannel(conversation, message.text, conversation.businessId);
+
+  const { deliveryError: _prevError, providerMessageId: _prevId, ...rest } = baseMeta;
+  const finalMeta: HumanReplyMeta = {
+    ...rest,
+    deliveryStatus: result.status,
+    ...(result.error ? { deliveryError: result.error } : {}),
+    ...(result.providerMessageId ? { providerMessageId: result.providerMessageId } : {}),
+  };
+
+  let saved: Prisma.JsonValue = finalMeta as unknown as Prisma.JsonValue;
+  try {
+    const updated = await prisma.message.update({
+      where: { id: message.id },
+      data: { metadata: finalMeta as unknown as Prisma.InputJsonObject },
+      select: { metadata: true },
+    });
+    saved = updated.metadata ?? saved;
+  } catch (err) {
+    console.error('No se pudo registrar el resultado de entrega del mensaje:', (err as Error).message);
+  }
+
+  // Los otros agentes ven el cambio de estado (enviado/falló) sin recargar.
+  getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
+    conversationId: conversation.id,
+  });
+
+  return { result, metadata: saved };
+}
+
+// Respuesta de un humano desde el Inbox. Guarda el mensaje (rol BOT + metadata
+// sender='human') y DESPUÉS lo envía al cliente por el canal real de la
+// conversación. Si el envío falla el mensaje queda guardado igual (el humano no
+// pierde su texto): se responde 200 con deliveryStatus='failed' y el motivo.
+// `Idempotency-Key` (opcional) evita el doble envío por doble click/reintento.
 router.post(
   '/:id/reply',
   requireAuth,
+  // Cada reply puede disparar un mensaje real (WhatsApp cobra por mensaje).
+  tenantRateLimit({ name: 'conv-reply', max: 60 }),
   validate(replySchema),
   asyncHandler(async (req, res) => {
     const { text } = req.body;
+    const { businessId, userId } = req.auth!;
 
     const conversation = await prisma.conversation.findFirst({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId },
+      where: { id: req.params.id as string, businessId },
     });
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
 
-    const message = await prisma.message.create({
-      data: {
-        conversationId: conversation.id,
-        role: 'BOT',
-        text,
-      },
-    });
-
-    if (conversation.status === 'HANDOFF') {
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { status: 'OPEN' },
-      });
+    // At-most-once: la clave se reserva ANTES de guardar/enviar. Un duplicado no
+    // vuelve a mandar nada; la UI ya tiene la respuesta del primer request.
+    const idemKey = readIdempotencyKey(req.header('Idempotency-Key'));
+    const idemScope = idemKey ? `conv-reply:${conversation.id}:${idemKey}` : null;
+    if (idemScope) {
+      const claimed = await claimIdempotentKey(prisma, businessId, IDEMP_TYPE_MRGO, idemScope);
+      if (!claimed) return res.json({ duplicate: true });
     }
 
+    let message;
+    let baseMeta: HumanReplyMeta;
+    try {
+      const author = await prisma.user.findFirst({
+        where: { id: userId, businessId },
+        select: { name: true },
+      });
+
+      baseMeta = {
+        sender: 'human',
+        userId,
+        ...(author?.name ? { userName: author.name } : {}),
+        deliveryStatus: 'pending',
+        deliveryAttempts: 1,
+      };
+
+      message = await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          role: 'BOT',
+          text,
+          metadata: baseMeta as unknown as Prisma.InputJsonObject,
+        },
+      });
+    } catch (err) {
+      // Todavía no salió nada al cliente: liberamos la clave para que el reintento
+      // con la misma Idempotency-Key no quede bloqueado como duplicado.
+      if (idemScope) await releaseIdempotentKey(prisma, businessId, IDEMP_TYPE_MRGO, idemScope);
+      throw err;
+    }
+
+    // Una respuesta humana reabre la conversación derivada; una sola escritura.
     await prisma.conversation.update({
       where: { id: conversation.id },
-      data: { updatedAt: new Date() },
+      data: { updatedAt: new Date(), ...(conversation.status === 'HANDOFF' ? { status: 'OPEN' as const } : {}) },
     });
 
     getIO()?.to(`business:${conversation.businessId}`).emit('conversation:new-message', {
@@ -312,7 +407,76 @@ router.post(
       message,
     });
 
-    res.json(message);
+    const { result, metadata } = await deliverAndRecord(conversation, message, baseMeta);
+
+    res.json({
+      ...message,
+      metadata,
+      deliveryStatus: result.status,
+      ...(result.error ? { deliveryError: result.error } : {}),
+    });
+  })
+);
+
+// Reintenta el envío de una respuesta humana cuya entrega falló (no crea otro
+// mensaje: reusa el existente). El paso failed -> pending es atómico, así que un
+// doble click no manda dos veces.
+router.post(
+  '/:id/reply/:messageId/retry',
+  requireAuth,
+  tenantRateLimit({ name: 'conv-reply', max: 60 }),
+  asyncHandler(async (req, res) => {
+    const { businessId } = req.auth!;
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    const message = await prisma.message.findFirst({
+      where: { id: req.params.messageId as string, conversationId: conversation.id, role: 'BOT' },
+    });
+    const prev = readMeta(message?.metadata) as Partial<HumanReplyMeta>;
+    if (!message || prev.sender !== 'human') return res.status(404).json({ error: 'Message not found' });
+    if (prev.deliveryStatus !== 'failed') {
+      return res.status(409).json({ error: 'Este mensaje no tiene un envío fallido para reintentar.', code: 'NOT_FAILED' });
+    }
+
+    // Tope de intentos: evita que un cliente que no responde (o un loop) dispare
+    // envíos reales sin fin. El primer envío cuenta como intento 1.
+    const attemptsSoFar = typeof prev.deliveryAttempts === 'number' ? prev.deliveryAttempts : 1;
+    if (attemptsSoFar >= MAX_DELIVERY_ATTEMPTS) {
+      return res.status(409).json({
+        error: `Ya se intentó enviar este mensaje ${attemptsSoFar} veces. Revisá la conexión del canal o escribilo de nuevo como un mensaje nuevo.`,
+        code: 'MAX_ATTEMPTS',
+      });
+    }
+
+    const baseMeta: HumanReplyMeta = {
+      sender: 'human',
+      userId: typeof prev.userId === 'string' ? prev.userId : req.auth!.userId,
+      ...(typeof prev.userName === 'string' ? { userName: prev.userName } : {}),
+      deliveryStatus: 'pending',
+      deliveryAttempts: attemptsSoFar + 1,
+    };
+
+    // Reserva atómica: solo UNA llamada concurrente logra pasar de failed a pending.
+    const claimed = await prisma.message.updateMany({
+      where: { id: message.id, conversationId: conversation.id, metadata: { path: ['deliveryStatus'], equals: 'failed' } },
+      data: { metadata: baseMeta as unknown as Prisma.InputJsonObject },
+    });
+    if (claimed.count === 0) {
+      return res.status(409).json({ error: 'Este mensaje ya se está reintentando.', code: 'NOT_FAILED' });
+    }
+
+    const { result, metadata } = await deliverAndRecord(conversation, message, baseMeta);
+
+    res.json({
+      ...message,
+      metadata,
+      deliveryStatus: result.status,
+      ...(result.error ? { deliveryError: result.error } : {}),
+    });
   })
 );
 

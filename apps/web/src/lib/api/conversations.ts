@@ -81,8 +81,18 @@ export interface Conversation {
   messages?: { text: string; role: string; createdAt: string }[];
 }
 
+/** Metadata de un mensaje. Las respuestas humanas traen sender='human' + estado de entrega. */
+export interface MessageMeta {
+  sender?: 'human';
+  userId?: string;
+  userName?: string;
+  deliveryStatus?: DeliveryStatus;
+  deliveryError?: string;
+  deliveryAttempts?: number;
+}
+
 export interface ConversationDetail extends Conversation {
-  messages: { id: string; role: string; text: string; responseTime: number | null; createdAt: string }[];
+  messages: { id: string; role: string; text: string; responseTime: number | null; createdAt: string; metadata?: MessageMeta | null }[];
   /** Solo con paginación de mensajes (`limit`): hay mensajes anteriores sin cargar. */
   hasMoreMessages?: boolean;
 }
@@ -125,8 +135,41 @@ export function close(id: string) {
   return httpClient.patch<{ success: boolean }>(`/conversations/${id}/close`, {});
 }
 
-export function reply(id: string, text: string) {
-  return httpClient.post<{ id: string; role: string; text: string; createdAt: string }>(`/conversations/${id}/reply`, { text });
+/** Estado de entrega de una respuesta humana al canal real del cliente. */
+export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'not_applicable';
+
+/** Respuesta de POST /reply (y /retry): el mensaje guardado + cómo salió el envío. */
+export interface ReplyResult {
+  id: string;
+  role: string;
+  text: string;
+  createdAt: string;
+  metadata?: MessageMeta | null;
+  deliveryStatus: DeliveryStatus;
+  /** Motivo legible del fallo cuando deliveryStatus = 'failed'. */
+  deliveryError?: string;
+}
+
+/** Duplicado detectado por Idempotency-Key: el primer request ya se encargó. */
+export interface ReplyDuplicate {
+  duplicate: true;
+}
+
+/**
+ * Responde como humano: guarda el mensaje y lo envía al canal real. Si se pasa
+ * `idempotencyKey`, un doble click o reintento de red no manda el texto dos veces.
+ */
+export function reply(id: string, text: string, idempotencyKey?: string) {
+  return httpClient.post<ReplyResult | ReplyDuplicate>(
+    `/conversations/${id}/reply`,
+    { text },
+    idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+  );
+}
+
+/** Reintenta el envío de una respuesta cuya entrega falló (no crea otro mensaje). */
+export function retryReply(id: string, messageId: string) {
+  return httpClient.post<ReplyResult>(`/conversations/${id}/reply/${messageId}/retry`, {});
 }
 
 // Asigna la conversación a un miembro del equipo (o desasigna con null).

@@ -100,3 +100,24 @@ export async function claimIdempotentKey(
   });
 }
 
+
+/**
+ * Libera una clave reservada con `claimIdempotentKey` cuando la operación NO
+ * llegó a ejecutarse (ej. falló el guardado previo al efecto externo), para que
+ * un reintento con la misma clave no quede bloqueado como duplicado. Nunca lanza.
+ * Solo usarla si no hubo efecto externo: si el mensaje ya salió, la clave debe quedar.
+ */
+export async function releaseIdempotentKey(
+  db: ConnectionDb,
+  businessId: string,
+  type: string,
+  key: string,
+): Promise<void> {
+  try {
+    await db.connection.deleteMany({
+      where: { businessId, type, config: { path: ['key'], equals: key } },
+    });
+  } catch (err) {
+    console.error('No se pudo liberar la clave de idempotencia:', (err as Error).message);
+  }
+}
