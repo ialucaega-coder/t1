@@ -2,7 +2,7 @@
 -- Índices que el schema YA declara (@@index/@@unique) y que NO existen en la base
 -- real. Verificado el 2026-11-13 contra pg_indexes: faltan 27 de 52.
 -- APLICADO el 2026-11-14 (sin CONCURRENTLY, tablas casi vacías; 27/27 verificados en pg_indexes). Alinear la base con el schema NO cambia el schema (sigue congelado), pero sí
--- toca la base: lo corre el DUEÑO. NO APLICADO.
+-- toca la base: lo corrió el DUEÑO (ya aplicado, ver arriba).
 --
 -- Causa probable: la base se armó con `db push` antes de agregar esos índices y
 -- la baseline 0_init se marcó como aplicada sin ejecutarse (ver DEPLOY.md).
