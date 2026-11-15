@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { UserPlus, Shield, MoreVertical, Mail, Clock, Users, Trash2, Check, SlidersHorizontal, X, RotateCcw, Lock } from 'lucide-react';
+import { UserPlus, Shield, MoreVertical, Mail, Clock, Users, Trash2, Check, SlidersHorizontal, X, RotateCcw, Lock, Send } from 'lucide-react';
 import { useTeam } from '@/hooks/use-team';
+import { teamApi } from '@/lib/api/index';
 import { usePermissions } from '@/hooks/use-permissions';
 import { minTierForCapability, PLAN_LABELS } from '@/constants/permissions';
 import { ROLE_CONFIG, ROLE_TO_ENUM, type TeamRole, type TeamMember } from '@/constants/team';
@@ -17,10 +18,16 @@ import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 const ALL_ROLES: TeamRole[] = ['Admin', 'Profesional', 'Viewer'];
 
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('es-AR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export default function EquipoPage() {
   const { toast } = useToast();
-  const { members, isLoading, error, refetch, inviteMember, updateMember, removeMember } = useTeam();
+  const { members, isLoading, error, refetch, updateMember, removeMember } = useTeam();
   const perms = usePermissions();
+  // Referencia de "ahora" fija por montaje (para marcar invitaciones vencidas sin llamar Date.now() en el render).
+  const [now] = useState(() => Date.now());
   const [search, setSearch] = useState('');
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -32,6 +39,9 @@ export default function EquipoPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [toRemove, setToRemove] = useState<TeamMember | null>(null);
   const [removing, setRemoving] = useState(false);
+  // Reenviar invitación (el link anterior deja de servir, por eso se confirma).
+  const [toResend, setToResend] = useState<TeamMember | null>(null);
+  const [resending, setResending] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Modal de permisos granulares por miembro.
@@ -61,14 +71,43 @@ export default function EquipoPage() {
     if (!inviteEmail) return;
     setInviting(true);
     try {
-      await inviteMember({ email: inviteEmail, role: ROLE_TO_ENUM[inviteRole] });
+      const email = inviteEmail.trim();
+      const res = await teamApi.inviteMember({ email, role: ROLE_TO_ENUM[inviteRole] });
       setInviteEmail('');
       setShowInvite(false);
-      toast({ type: 'success', message: 'Miembro agregado al equipo' });
+      refetch();
+      // Honesto: si el mail no salió (proveedor sin configurar, etc.) lo decimos.
+      toast(
+        res.emailSent
+          ? { type: 'success', message: `Invitación enviada a ${email}` }
+          : {
+              type: 'error',
+              message: `Creamos la invitación para ${email}, pero no pudimos enviar el mail. Probá con "Reenviar invitación" más tarde.`,
+            },
+      );
     } catch (err) {
-      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo agregar al miembro' });
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo invitar al miembro' });
     }
     finally { setInviting(false); }
+  };
+
+  const handleResend = async () => {
+    if (!toResend) return;
+    setResending(true);
+    try {
+      const res = await teamApi.resendInvite(toResend.id);
+      refetch();
+      toast(
+        res.emailSent
+          ? { type: 'success', message: `Invitación reenviada a ${toResend.email}. El link anterior ya no sirve.` }
+          : { type: 'error', message: `No pudimos enviar el mail a ${toResend.email}. Probá de nuevo más tarde.` },
+      );
+      setToResend(null);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo reenviar la invitación' });
+    } finally {
+      setResending(false);
+    }
   };
 
   const handleChangeRole = async (member: TeamMember, role: TeamRole) => {
@@ -90,10 +129,13 @@ export default function EquipoPage() {
     setRemoving(true);
     try {
       await removeMember(toRemove.id);
-      toast({ type: 'success', message: 'Miembro quitado del equipo' });
+      toast({
+        type: 'success',
+        message: toRemove.status === 'pending' ? 'Invitación revocada' : 'Miembro quitado del equipo',
+      });
       setToRemove(null);
     } catch (err) {
-      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo quitar al miembro' });
+      toast({ type: 'error', message: err instanceof Error ? err.message : toRemove.status === 'pending' ? 'No se pudo revocar la invitación' : 'No se pudo quitar al miembro' });
     } finally {
       setRemoving(false);
     }
@@ -140,8 +182,8 @@ export default function EquipoPage() {
   };
 
   const steps = [
-    { number: '01', title: 'Agregas al miembro', description: 'Correo y rol. Queda registrado en el equipo.' },
-    { number: '02', title: 'Le asignas un rol', description: 'Según lo que tenga que hacer. Podés cambiarlo cuando quieras desde el menú del miembro.' },
+    { number: '01', title: 'Invitás por correo', description: 'Le mandamos un link de un solo uso (vence en 7 días) para que elija su contraseña. Mientras no lo acepte figura como pendiente.' },
+    { number: '02', title: 'Le asignás un rol', description: 'Según lo que tenga que hacer. Podés cambiarlo cuando quieras desde el menú del miembro; si cambia, tiene que volver a iniciar sesión.' },
     { number: '03', title: 'Tú decides qué ve cada rol', description: 'Administrador ve todo. Equipo solo opera — y tú marcas qué secciones abre.' },
   ];
 
@@ -177,7 +219,7 @@ export default function EquipoPage() {
           <div className="flex items-center gap-3">
             <SearchInput value={search} onChange={setSearch} placeholder="Buscar miembro..." className="max-w-[220px]" />
             <button onClick={() => setShowInvite(!showInvite)} className="btn-primary text-xs">
-              <UserPlus className="h-3.5 w-3.5" /> Agregar miembro
+              <UserPlus className="h-3.5 w-3.5" /> Invitar miembro
             </button>
           </div>
         </div>
@@ -185,7 +227,7 @@ export default function EquipoPage() {
         {showInvite && (
           <div className="card-accent mb-4">
             <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-              <UserPlus className="h-4 w-4 text-brand-400" /> Agregar miembro
+              <UserPlus className="h-4 w-4 text-brand-400" /> Invitar miembro
             </h4>
             <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3">
               <div className="flex-1 w-full">
@@ -201,7 +243,7 @@ export default function EquipoPage() {
                 </select>
               </div>
               <button onClick={handleInvite} disabled={inviting || !inviteEmail} className="btn-primary text-xs whitespace-nowrap disabled:opacity-50">
-                <Mail className="h-3.5 w-3.5" /> {inviting ? 'Agregando...' : 'Agregar al equipo'}
+                <Mail className="h-3.5 w-3.5" /> {inviting ? 'Enviando...' : 'Enviar invitación'}
               </button>
             </div>
           </div>
@@ -220,9 +262,20 @@ export default function EquipoPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium text-white truncate">{member.name}</p>
-                    {member.status === 'pending' && <StatusBadge variant="warning">PENDIENTE</StatusBadge>}
+                    {member.status === 'pending'
+                      ? <StatusBadge variant="warning">PENDIENTE</StatusBadge>
+                      : <StatusBadge variant="active">ACTIVO</StatusBadge>}
                   </div>
                   <p className="text-xs text-slate-500 truncate flex items-center gap-1"><Mail className="h-3 w-3" />{member.email}</p>
+                  {member.status === 'pending' && (
+                    <p className="text-[10px] text-yellow-400/80 truncate">
+                      {member.inviteExpiresAt && new Date(member.inviteExpiresAt).getTime() <= now
+                        ? `La invitación a ${member.email} venció. Reenviá una nueva.`
+                        : member.inviteExpiresAt
+                          ? `Invitación enviada a ${member.email} · vence el ${fmtDate(member.inviteExpiresAt)}`
+                          : `Invitación pendiente de ${member.email}. Reenviala si no le llegó.`}
+                    </p>
+                  )}
                   {!perms.isLoading && (
                     <button
                       onClick={() => openPermissions(member)}
@@ -235,10 +288,19 @@ export default function EquipoPage() {
                     </button>
                   )}
                 </div>
+                {member.status === 'pending' && (
+                  <button
+                    onClick={() => setToResend(member)}
+                    className="hidden sm:flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:border-brand-400/40 hover:text-white transition-colors"
+                    title="Reenviar invitación"
+                  >
+                    <Send className="h-3 w-3" /> Reenviar
+                  </button>
+                )}
                 <span className={`badge border text-[9px] ${roleConfig?.class || ''}`}>{roleConfig?.label || member.role}</span>
                 <span className="text-[10px] text-slate-500 hidden sm:flex items-center gap-1">
                   <Clock className="h-3 w-3" />
-                  {new Date(member.joinedAt).toLocaleDateString('es-AR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  {fmtDate(member.joinedAt)}
                 </span>
                 <div className="relative" ref={openMenuId === member.id ? menuRef : undefined}>
                   <button
@@ -270,11 +332,19 @@ export default function EquipoPage() {
                         <SlidersHorizontal className="h-3.5 w-3.5 text-brand-400" /> Permisos y herramientas
                       </button>
                       <div className="my-1 border-t border-slate-700/50" />
+                      {member.status === 'pending' && (
+                        <button
+                          onClick={() => { setOpenMenuId(null); setToResend(member); }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-300 hover:bg-surface-100 hover:text-white transition-colors"
+                        >
+                          <Send className="h-3.5 w-3.5 text-brand-400" /> Reenviar invitación
+                        </button>
+                      )}
                       <button
                         onClick={() => { setOpenMenuId(null); setToRemove(member); }}
                         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-400 hover:bg-red-500/10 transition-colors"
                       >
-                        <Trash2 className="h-3.5 w-3.5" /> Quitar del equipo
+                        <Trash2 className="h-3.5 w-3.5" /> {member.status === 'pending' ? 'Revocar invitación' : 'Quitar del equipo'}
                       </button>
                     </div>
                   )}
@@ -411,11 +481,28 @@ export default function EquipoPage() {
         isOpen={toRemove !== null}
         onClose={() => setToRemove(null)}
         onConfirm={handleRemove}
-        title="Quitar del equipo"
-        message={toRemove ? `¿Seguro que querés quitar a ${toRemove.name} del equipo? Perderá el acceso al panel.` : ''}
-        confirmLabel="Quitar"
+        title={toRemove?.status === 'pending' ? 'Revocar invitación' : 'Quitar del equipo'}
+        message={
+          toRemove
+            ? toRemove.status === 'pending'
+              ? `¿Revocar la invitación a ${toRemove.email}? El link que le mandamos deja de funcionar y se borra de la lista.`
+              : `¿Seguro que querés quitar a ${toRemove.name} del equipo? Perderá el acceso al panel y se le cerrarán las sesiones abiertas.`
+            : ''
+        }
+        confirmLabel={toRemove?.status === 'pending' ? 'Revocar' : 'Quitar'}
         variant="danger"
         loading={removing}
+      />
+
+      <ConfirmDialog
+        isOpen={toResend !== null}
+        onClose={() => setToResend(null)}
+        onConfirm={handleResend}
+        title="Reenviar invitación"
+        message={toResend ? `Vamos a mandar un mail nuevo a ${toResend.email}. El link anterior deja de funcionar y el nuevo vence en 7 días.` : ''}
+        confirmLabel="Reenviar"
+        variant="default"
+        loading={resending}
       />
     </div>
   );

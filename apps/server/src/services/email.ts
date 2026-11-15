@@ -6,9 +6,11 @@ import {
   welcomeTemplate,
   invoiceTemplate,
   genericNotificationTemplate,
+  teamInviteTemplate,
   type BookingEmailData,
   type OrderEmailData,
   type InvoiceEmailData,
+  type TeamInviteEmailData,
 } from './email-templates';
 
 // ─── Configuración ──────────────────────────────────────────────────
@@ -147,5 +149,22 @@ export async function sendGenericNotification(
     to,
     subject,
     html: genericNotificationTemplate(subject, htmlContent),
+  });
+}
+
+/**
+ * Envía la invitación al equipo con el link de aceptación. El link lleva el token
+ * (secreto): este módulo nunca lo loguea (solo destinatario y asunto).
+ */
+export async function sendTeamInviteEmail(
+  to: string,
+  invite: TeamInviteEmailData
+): Promise<boolean> {
+  return send({
+    to,
+    // Asunto FIJO: el nombre del negocio lo elige quien se registra y este mail sale desde
+    // el dominio oficial; no puede viajar en el asunto (phishing / saltos de línea).
+    subject: 'Te invitaron a unirte a un equipo en Mr. Go Assistance',
+    html: teamInviteTemplate(invite),
   });
 }

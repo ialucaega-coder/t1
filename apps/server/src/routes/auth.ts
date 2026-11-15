@@ -5,10 +5,10 @@ import { authRateLimit } from '../middleware/rateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
-import { registerSchema, loginSchema, twoFactorCodeSchema, secondFactorCodeSchema, passwordSchema, RegisterInput, LoginInput } from '../validators/auth';
+import { registerSchema, loginSchema, twoFactorCodeSchema, secondFactorCodeSchema, passwordSchema, acceptInviteSchema, RegisterInput, LoginInput, AcceptInviteInput } from '../validators/auth';
 import { requireAuth } from '../middleware/auth';
 import { getAuthSecret } from '../lib/secrets';
-import { revokeUserSessions } from '../services/auth/revocation';
+import { revokeUserSessions, isSessionRevoked } from '../services/auth/revocation';
 import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
 import {
   generateRecoveryCodes,
@@ -17,6 +17,8 @@ import {
   verifySecondFactor,
 } from '../services/auth/twoFactorRecovery';
 import { hashPassword, verifyPassword, equalizeVerifyTiming } from '../lib/password';
+import { acceptInvite, isInviteTokenLive, InviteError } from '../services/team/invitations';
+import { acceptInviteRateLimit } from '../services/team/inviteRateLimit';
 
 const updateMeSchema = z.object({
   name: z.string().max(100).optional(),
@@ -241,6 +243,64 @@ router.post(
   })
 );
 
+// Mensaje único para TODO fallo del canje (token inexistente, usado, vencido, email
+// ya registrado en otro lado...): no revela si el email existe ni por qué falló.
+const INVITE_GENERIC_ERROR =
+  'La invitación no es válida o ya venció. Pedile a quien te invitó que te envíe una nueva.';
+
+/**
+ * Canje de una invitación al equipo (público). Valida el token (hash, vencimiento,
+ * un solo uso), crea el usuario con el rol del miembro invitado, activa al miembro,
+ * quema el token y devuelve la sesión igual que /register y /login.
+ */
+router.post(
+  '/accept-invite',
+  authRateLimit,
+  acceptInviteRateLimit,
+  validate(acceptInviteSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as AcceptInviteInput;
+
+    // Descarta tokens inexistentes/vencidos ANTES de gastar un hash Argon2 (CPU) en
+    // un request anónimo. El canje de abajo revalida todo bajo lock.
+    if (!(await isInviteTokenLive(data.token))) {
+      auditAuthEvent('AUTH_INVITE_REJECTED', req, { metadata: { reason: 'invalid_or_expired' } });
+      res.status(400).json({ error: INVITE_GENERIC_ERROR });
+      return;
+    }
+
+    const passwordHash = await hashPassword(data.password);
+
+    let accepted;
+    try {
+      accepted = await acceptInvite({ token: data.token, name: data.name, passwordHash });
+    } catch (err) {
+      if (err instanceof InviteError) {
+        auditAuthEvent('AUTH_INVITE_REJECTED', req, { metadata: { reason: err.reason.toLowerCase() } });
+        res.status(400).json({ error: INVITE_GENERIC_ERROR });
+        return;
+      }
+      throw err;
+    }
+
+    const { user, business, memberId } = accepted;
+    const token = signToken({ userId: user.id, businessId: business.id, role: user.role });
+    setSessionCookie(res, token);
+
+    auditAuthEvent('AUTH_INVITE_ACCEPTED', req, {
+      userId: user.id,
+      businessId: business.id,
+      metadata: { memberId, role: user.role },
+    });
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      business: { id: business.id, name: business.name, slug: business.slug },
+    });
+  })
+);
+
 router.get(
   '/me',
   asyncHandler(async (req, res) => {
@@ -251,12 +311,23 @@ router.get(
     }
     try {
       const token = header.slice(7);
-      const payload = jwt.verify(token, getAuthSecret()) as { userId: string; businessId: string; role: string };
+      const payload = jwt.verify(token, getAuthSecret()) as { userId: string; businessId: string; role: string; iat?: number };
+      // Misma revocación que requireAuth: un logout, cambio de rol o baja corta la
+      // sesión también acá (antes /me seguía devolviendo datos con un JWT revocado).
+      if (await isSessionRevoked(payload.businessId, payload.userId, payload.iat)) {
+        res.status(401).json({ error: 'Session expired' });
+        return;
+      }
       const user = await prisma.user.findUnique({
         where: { id: payload.userId },
         include: { business: true },
       });
       if (!user) {
+        res.status(401).json({ error: 'User not found' });
+        return;
+      }
+      // Cuenta dada de baja (p. ej. quitada del equipo): su JWT no sirve aunque no venza.
+      if (user.isActive === false || user.deletedAt) {
         res.status(401).json({ error: 'User not found' });
         return;
       }
@@ -289,6 +360,16 @@ router.patch(
       return;
     }
 
+    if (await isSessionRevoked(payload.businessId, payload.userId, payload.iat)) {
+      res.status(401).json({ error: 'Session expired' });
+      return;
+    }
+    const current = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!current || current.isActive === false || current.deletedAt) {
+      res.status(401).json({ error: 'User not found' });
+      return;
+    }
+
     const { name, currentPassword, newPassword } = req.body;
     const update: Record<string, string> = {};
 
@@ -305,9 +386,7 @@ router.patch(
         res.status(400).json({ error: 'Current password is required' });
         return;
       }
-      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
-      if (!user) { res.status(401).json({ error: 'User not found' }); return; }
-      const { valid } = await verifyPassword(currentPassword, user.passwordHash);
+      const { valid } = await verifyPassword(currentPassword, current.passwordHash);
       if (!valid) {
         res.status(400).json({ error: 'Current password is incorrect' });
         return;

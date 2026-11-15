@@ -28,6 +28,7 @@ vi.mock('../../middleware/rateLimit', () => ({
 
 vi.mock('../../services/auth/revocation', () => ({
   revokeUserSessions: vi.fn(),
+  isSessionRevoked: vi.fn(async () => false),
 }));
 
 import { prisma } from '../../lib/prisma';
@@ -63,6 +64,8 @@ const updatedRow = {
 beforeEach(() => {
   vi.clearAllMocks();
   mock(prisma.user.update).mockResolvedValue(updatedRow);
+  // Cuenta activa por defecto (PATCH /me ahora rechaza cuentas dadas de baja).
+  mock(prisma.user.findUnique).mockResolvedValue({ id: 'u1', isActive: true, deletedAt: null });
 });
 
 describe('routes/auth · PATCH /me', () => {
@@ -172,7 +175,6 @@ describe('routes/auth · PATCH /me', () => {
       const data = mock(prisma.user.update).mock.calls[0][0].data;
       expect(data).toEqual({ name: 'Ana María' });
       expect(data).not.toHaveProperty('passwordHash');
-      expect(prisma.user.findUnique).not.toHaveBeenCalled();
       expect(revokeUserSessions).not.toHaveBeenCalled();
     });
   });

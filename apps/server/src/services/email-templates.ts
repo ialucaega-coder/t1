@@ -230,3 +230,50 @@ export function genericNotificationTemplate(title: string, htmlContent: string):
 
   return baseLayout(content, title);
 }
+
+export interface TeamInviteEmailData {
+  businessName: string;
+  /** Rol legible (ej. "Administrador"). */
+  roleLabel: string;
+  /** Link de aceptación (contiene el token en el fragmento). */
+  acceptUrl: string;
+  /** Fecha legible de vencimiento (ej. "22 de noviembre de 2026"). */
+  expiresLabel: string;
+}
+
+/**
+ * Nombre de negocio apto para mostrar en un mail: sin caracteres de control ni de
+ * formato (saltos de línea, bidi), espacios colapsados y máx. 80 caracteres. Defensa en
+ * profundidad: el registro ya lo limita, pero el nombre se puede editar por otras vías.
+ */
+export function safeDisplayName(value: string, max = 80): string {
+  const cleaned = value
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned;
+}
+
+export function teamInviteTemplate(rawData: TeamInviteEmailData): string {
+  const data = { ...rawData, businessName: safeDisplayName(rawData.businessName) || 'un equipo' };
+  const content = `
+    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">Te invitaron a un equipo</h2>
+    <p style="margin:0 0 16px;">Te invitaron a unirte a <strong>${escapeHtml(data.businessName)}</strong> en Mr. Go Assistance con el rol de <strong>${escapeHtml(data.roleLabel)}</strong>.</p>
+    <table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px auto;">
+      <tr>
+        <td style="background-color:${BRAND_COLOR};border-radius:8px;text-align:center;">
+          <a href="${escapeHtml(data.acceptUrl)}" style="display:inline-block;padding:12px 32px;color:#FFFFFF;font-size:16px;font-weight:600;text-decoration:none;">
+            Aceptar invitación
+          </a>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0 0 8px;font-size:14px;color:${MUTED_COLOR};">
+      El link se puede usar una sola vez y vence el ${escapeHtml(data.expiresLabel)}. Elegís tu contraseña al aceptar.
+    </p>
+    <p style="margin:0;font-size:14px;color:${MUTED_COLOR};">
+      Si no esperabas esta invitación, ignorá este mail: sin aceptarla no se crea ninguna cuenta.
+    </p>`;
+
+  return baseLayout(content, `Te invitaron a ${escapeHtml(data.businessName)} en Mr. Go Assistance`);
+}

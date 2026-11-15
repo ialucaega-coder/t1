@@ -32,7 +32,14 @@ export const registerSchema = z.object({
   email: normalizedEmail,
   password: passwordSchema,
   name: z.string().min(2).trim(),
-  businessName: z.string().min(2).trim(),
+  // El nombre del negocio se muestra en mails que salen del dominio oficial (invitaciones):
+  // se acota y se rechazan saltos de línea y caracteres de control/formato (bidi, etc.).
+  businessName: z
+    .string()
+    .trim()
+    .min(2)
+    .max(80, 'El nombre del negocio no puede superar los 80 caracteres')
+    .regex(/^[^\p{Cc}\p{Cf}\u2028\u2029]+$/u, 'El nombre del negocio no puede tener saltos de línea ni caracteres de control'),
 });
 
 /** Credenciales de inicio de sesión. */
@@ -64,5 +71,17 @@ export const secondFactorCodeSchema = z.object({
     .regex(/^(\d{6}|[A-Za-z0-9]{5}-?[A-Za-z0-9]{5})$/, 'Ingresá el código de 6 dígitos o un código de recuperación'),
 });
 
+/**
+ * Canje de una invitación al equipo. La contraseña sigue la MISMA política que el
+ * registro (passwordSchema). El token solo se acota en largo: su formato se valida
+ * en el servicio y cualquier problema responde el mismo error genérico.
+ */
+export const acceptInviteSchema = z.object({
+  token: z.string().min(1).max(200),
+  name: z.string().trim().min(2, 'Ingresá tu nombre').max(100),
+  password: passwordSchema,
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type AcceptInviteInput = z.infer<typeof acceptInviteSchema>;

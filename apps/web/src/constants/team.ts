@@ -8,6 +8,8 @@ export interface TeamMember {
   avatar?: string;
   status: 'active' | 'pending';
   joinedAt: string;
+  /** Vencimiento de la invitación pendiente (ISO). Solo viene si el miembro está pendiente. */
+  inviteExpiresAt?: string | null;
 }
 
 export const ROLE_CONFIG: Record<TeamRole, { label: string; class: string }> = {
