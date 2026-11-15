@@ -18,8 +18,10 @@ export default function EstadisticasPage() {
         {
           label: 'Clientes',
           value: overview.totalClients.toLocaleString('es-AR'),
-          change: overview.bookingChange,
-          trend: overview.bookingChange.startsWith('-') ? 'down' : 'up',
+          // El overview no trae variación de clientes (bookingChange es la de reservas):
+          // se deja vacío y la tarjeta se renderiza sin variación, en vez de mostrar un dato ajeno.
+          change: '',
+          trend: 'up',
           icon: Users,
         },
         {
@@ -65,9 +67,19 @@ export default function EstadisticasPage() {
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {statCards.map((stat) => (
-              <StatCard key={stat.label} stat={stat} />
-            ))}
+            {statCards.map((stat) =>
+              stat.change ? (
+                <StatCard key={stat.label} stat={stat} />
+              ) : (
+                <div key={stat.label} className="card">
+                  <div className="flex items-center justify-between mb-3">
+                    <stat.icon className="h-5 w-5 text-brand-400" />
+                  </div>
+                  <p className="text-2xl font-bold text-white">{stat.value}</p>
+                  <p className="text-xs text-slate-500 mt-1">{stat.label}</p>
+                </div>
+              ),
+            )}
           </div>
 
           <WeeklyChart data={weeklyChartData} />

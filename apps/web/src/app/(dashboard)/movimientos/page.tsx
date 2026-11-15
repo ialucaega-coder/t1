@@ -43,15 +43,24 @@ export default function MovimientosPage() {
   const [newReference, setNewReference] = useState('');
   const [newNotes, setNewNotes] = useState('');
 
+  // Totales reales del server (agregado sobre TODOS los movimientos filtrados,
+  // no solo la página de 25 filas cargada). null = todavía no cargó / falló.
+  const [summary, setSummary] = useState<transactionsApi.TransactionsSummary | null>(null);
+
   const fetchTransactions = useCallback(async () => {
     setIsLoading(true);
     try {
       const params: Record<string, string> = { page: String(page), pageSize: '25' };
       if (typeFilter) params.type = typeFilter;
+      const summaryParams: Record<string, string> = {};
+      if (typeFilter) summaryParams.type = typeFilter;
+      // El resumen falla en forma independiente: si no carga, la lista igual se ve.
+      const summaryPromise = transactionsApi.getTransactionsSummary(summaryParams).catch(() => null);
       const res = await transactionsApi.getTransactions(params);
       setTransactions(res.data);
       setTotal(res.total);
       setTotalPages(res.totalPages ?? 1);
+      setSummary(await summaryPromise);
     } catch {
       setError('Error al cargar movimientos');
     } finally {
@@ -85,8 +94,11 @@ export default function MovimientosPage() {
     }
   }
 
-  const totalSales = transactions.filter((t) => t.type === 'SALE').reduce((s, t) => s + Number(t.amount), 0);
-  const totalRefunds = transactions.filter((t) => t.type === 'REFUND').reduce((s, t) => s + Number(t.amount), 0);
+  // "Ventas" incluye los cobros parciales (suman al ingreso); Neto = Ventas - Reembolsos.
+  const fmt = (n: number | undefined) => (n === undefined ? '—' : `$${n.toLocaleString('es-AR')}`);
+  const totalSales = summary ? summary.sales + summary.partial : undefined;
+  const totalRefunds = summary?.refunds;
+  const totalNet = summary?.net;
 
   return (
     <div className="space-y-4">
@@ -117,21 +129,21 @@ export default function MovimientosPage() {
             <ArrowUpRight className="h-3.5 w-3.5" />
             <span className="text-[10px] uppercase tracking-wider">Ventas</span>
           </div>
-          <p className="text-lg font-bold font-mono text-white">${totalSales.toLocaleString('es-AR')}</p>
+          <p className="text-lg font-bold font-mono text-white">{fmt(totalSales)}</p>
         </div>
         <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-3">
           <div className="flex items-center gap-2 text-red-400 mb-1">
             <ArrowDownRight className="h-3.5 w-3.5" />
             <span className="text-[10px] uppercase tracking-wider">Reembolsos</span>
           </div>
-          <p className="text-lg font-bold font-mono text-white">${totalRefunds.toLocaleString('es-AR')}</p>
+          <p className="text-lg font-bold font-mono text-white">{fmt(totalRefunds)}</p>
         </div>
         <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-3">
           <div className="flex items-center gap-2 text-brand-400 mb-1">
             <DollarSign className="h-3.5 w-3.5" />
             <span className="text-[10px] uppercase tracking-wider">Neto</span>
           </div>
-          <p className="text-lg font-bold font-mono text-white">${(totalSales - totalRefunds).toLocaleString('es-AR')}</p>
+          <p className="text-lg font-bold font-mono text-white">{fmt(totalNet)}</p>
         </div>
       </div>
 

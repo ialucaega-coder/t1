@@ -111,7 +111,7 @@ export default function ServiciosPage() {
           icon={Briefcase}
           title={search ? 'Sin resultados' : 'No hay servicios creados'}
           description={search ? undefined : 'Creá tu primer servicio para que tus clientes puedan reservar.'}
-          action={!search ? { label: 'Crear servicio', onClick: () => setEditing({} as Service) } : undefined}
+          action={!search ? { label: 'Crear servicio', onClick: () => { setEditing(null); setShowModal(true); } } : undefined}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">

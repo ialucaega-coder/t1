@@ -21,6 +21,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { useToast } from '@/components/common/Toast';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {
   draft: { label: 'Borrador', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
@@ -58,6 +59,9 @@ export default function CampanasPage() {
   const [sending, setSending] = useState<string | null>(null);
   const [recipientCount, setRecipientCount] = useState<number | null>(null);
   const [loadingRecipients, setLoadingRecipients] = useState(false);
+  const [pendingSend, setPendingSend] = useState<{ id: string; name: string; channel: string } | null>(null);
+  const [pendingSendCount, setPendingSendCount] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const { toast } = useToast();
 
   async function fetchRecipientCount(channel: string) {
@@ -135,7 +139,19 @@ export default function CampanasPage() {
       toast({ type: 'error', message: 'Error al eliminar campaña' });
     } finally {
       setDeleting(null);
+      setPendingDelete(null);
     }
+  }
+
+  // El envío masivo es irreversible: primero se pide confirmación, mostrando
+  // la cantidad de destinatarios si se pudo calcular.
+  function askSend(c: { id: string; name: string; channel: string }) {
+    setPendingSend({ id: c.id, name: c.name, channel: c.channel });
+    setPendingSendCount(null);
+    campaignsApi
+      .getRecipients(c.channel)
+      .then((data) => setPendingSendCount(data.total))
+      .catch(() => setPendingSendCount(null));
   }
 
   async function handleSend(id: string) {
@@ -147,6 +163,7 @@ export default function CampanasPage() {
       toast({ type: 'error', message: 'Error al enviar campaña' });
     } finally {
       setSending(null);
+      setPendingSend(null);
     }
   }
 
@@ -245,7 +262,7 @@ export default function CampanasPage() {
                   {c.status === 'draft' && (
                     <>
                       <button
-                        onClick={() => handleSend(c.id)}
+                        onClick={() => askSend(c)}
                         disabled={sending === c.id}
                         className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
                       >
@@ -265,7 +282,8 @@ export default function CampanasPage() {
                     </>
                   )}
                   <button
-                    onClick={() => handleDelete(c.id)}
+                    onClick={() => setPendingDelete({ id: c.id, name: c.name })}
+                    aria-label="Eliminar campaña"
                     disabled={deleting === c.id}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                   >
@@ -397,6 +415,36 @@ export default function CampanasPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingSend !== null}
+        onClose={() => setPendingSend(null)}
+        onConfirm={() => pendingSend && handleSend(pendingSend.id)}
+        title="¿Enviar campaña?"
+        message={
+          pendingSend
+            ? `Vas a enviar "${pendingSend.name}" por ${CHANNEL_LABELS[pendingSend.channel] || pendingSend.channel}` +
+              (pendingSendCount !== null
+                ? ` a ${pendingSendCount} ${pendingSendCount === 1 ? 'cliente' : 'clientes'}.`
+                : ' a todos los clientes con datos de contacto para ese canal.') +
+              ' El envío no se puede deshacer.'
+            : ''
+        }
+        confirmLabel="Enviar ahora"
+        variant="warning"
+        loading={pendingSend !== null && sending === pendingSend.id}
+      />
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => pendingDelete && handleDelete(pendingDelete.id)}
+        title="¿Eliminar campaña?"
+        message={`Vas a eliminar la campaña "${pendingDelete?.name ?? ''}". Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={pendingDelete !== null && deleting === pendingDelete.id}
+      />
     </div>
   );
 }

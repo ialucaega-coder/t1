@@ -13,7 +13,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { useToast } from '@/components/common/Toast';
 import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
-const PLAN_OPTIONS: AgencyClient['plan'][] = ['Free', 'Local B+'];
+const PLAN_OPTIONS: AgencyClient['plan'][] = ['Free', 'Mr Go +'];
 const STATUS_OPTIONS: { value: AgencyClient['status']; label: string }[] = [
   { value: 'active', label: 'Activo' },
   { value: 'trial', label: 'Trial' },
@@ -194,7 +194,7 @@ export default function AgenciaPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge variant={client.plan === 'Local B+' ? 'premium' : 'inactive'}>{client.plan}</StatusBadge>
+                    <StatusBadge variant={client.plan === 'Mr Go +' ? 'premium' : 'inactive'}>{client.plan}</StatusBadge>
                   </td>
                   <td className="px-4 py-3 text-sm text-white">{client.bots}</td>
                   <td className="px-4 py-3">

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
@@ -17,19 +18,45 @@ import { dispatchEvent } from '../services/workflows';
 
 const router = Router();
 
+/**
+ * Filtros compartidos por el listado y el resumen. Siempre acotados al negocio
+ * del usuario autenticado. `type` es el tipo de movimiento (SALE/REFUND/PARTIAL)
+ * y `paymentMethod` el método de cobro (CASH/CARD/TRANSFER/QR): son campos
+ * distintos y no deben mezclarse.
+ */
+const transactionFiltersSchema = z.object({
+  type: z.enum(['SALE', 'REFUND', 'PARTIAL']).optional(),
+  paymentMethod: z.enum(['CASH', 'CARD', 'TRANSFER', 'QR']).optional(),
+  from: z.string().min(1).optional(),
+  to: z.string().min(1).optional(),
+});
+
+function buildTransactionWhere(businessId: string, query: Record<string, unknown>) {
+  const { type, paymentMethod, from, to } = transactionFiltersSchema.parse({
+    type: query.type || undefined,
+    paymentMethod: query.paymentMethod || undefined,
+    from: query.from || undefined,
+    to: query.to || undefined,
+  });
+  const where: Record<string, unknown> = { businessId };
+
+  if (type) where.type = type;
+  if (paymentMethod) where.paymentMethod = paymentMethod;
+  if (from || to) {
+    const createdAt: Record<string, Date> = {};
+    if (from) createdAt.gte = new Date(from);
+    if (to) createdAt.lte = new Date(to);
+    where.createdAt = createdAt;
+  }
+  return where;
+}
+
 router.get(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { from, to, type, page, pageSize } = req.query;
-    const where: Record<string, unknown> = { businessId: req.auth!.businessId };
-
-    if (type) where.type = type;
-    if (from || to) {
-      where.createdAt = {};
-      if (from) (where.createdAt as Record<string, unknown>).gte = new Date(from as string);
-      if (to) (where.createdAt as Record<string, unknown>).lte = new Date(to as string);
-    }
+    const { page, pageSize } = req.query;
+    const where = buildTransactionWhere(req.auth!.businessId, req.query);
 
     // Nueva paginación (?limit / ?offset): forma estándar { ...limit... }.
     if (req.query.limit !== undefined || req.query.offset !== undefined) {
@@ -62,6 +89,41 @@ router.get(
       page: pagination.page,
       pageSize: pagination.pageSize,
       totalPages: Math.ceil(total / pagination.pageSize),
+    });
+  })
+);
+
+/**
+ * Totales reales (no de la página cargada) con los mismos filtros que el
+ * listado. Devuelve montos y cantidad por tipo, y el neto (ventas + parciales
+ * - reembolsos).
+ */
+router.get(
+  '/summary',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const where = buildTransactionWhere(req.auth!.businessId, req.query);
+    const groups = await prisma.transaction.groupBy({
+      by: ['type'],
+      where,
+      _sum: { amount: true },
+      _count: { _all: true },
+    });
+
+    const totalOf = (t: string) => Number(groups.find((g) => g.type === t)?._sum.amount ?? 0);
+    const countOf = (t: string) => groups.find((g) => g.type === t)?._count._all ?? 0;
+
+    const sales = totalOf('SALE');
+    const partial = totalOf('PARTIAL');
+    const refunds = totalOf('REFUND');
+
+    res.json({
+      sales,
+      partial,
+      refunds,
+      net: sales + partial - refunds,
+      count: groups.reduce((s, g) => s + g._count._all, 0),
+      counts: { SALE: countOf('SALE'), PARTIAL: countOf('PARTIAL'), REFUND: countOf('REFUND') },
     });
   })
 );

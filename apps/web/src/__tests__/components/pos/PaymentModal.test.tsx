@@ -2,8 +2,8 @@
  * Pruebas de `PaymentModal` (`src/components/pos/PaymentModal.tsx`).
  * Componente de cobro: se prueban el resumen y total, el cálculo de vuelto en
  * efectivo, el bloqueo del botón ante efectivo insuficiente, y el cobro —
- * incluyendo el header Idempotency-Key, el payload, la pantalla de éxito y la
- * degradación a recibo LOCAL cuando la API falla.
+ * incluyendo el header Idempotency-Key, el payload, la pantalla de éxito y el
+ * manejo de error (no se marca completada, se muestra el error y se reintenta).
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -82,12 +82,27 @@ describe('components/pos/PaymentModal', () => {
     expect(screen.getByText('$500')).toBeInTheDocument();
   });
 
-  it('degrada a recibo LOCAL cuando la API falla (no rompe el cobro)', async () => {
-    post.mockRejectedValue(new Error('network'));
-    render(<PaymentModal {...baseProps()} />);
+  it('si la API falla NO marca la venta como completada: muestra el error del server y permite reintentar', async () => {
+    post.mockRejectedValueOnce(new Error('Acceso denegado: se requiere rol ADMIN'));
+    const props = baseProps();
+    render(<PaymentModal {...props} />);
     fireEvent.click(screen.getByRole('button', { name: /Cobrar/ }));
 
+    // Error real del server visible, sin pantalla de éxito ni recibo LOCAL.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Acceso denegado: se requiere rol ADMIN');
+    expect(screen.queryByText('Venta completada')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Recibo #/)).not.toBeInTheDocument();
+    expect(props.onComplete).not.toHaveBeenCalled();
+
+    // El formulario sigue ahí (carrito intacto) y el botón permite reintentar.
+    const retry = screen.getByRole('button', { name: /Reintentar cobro \$1\.500/ });
+    expect(retry).toBeEnabled();
+
+    // Reintento exitoso: reusa la MISMA Idempotency-Key.
+    fireEvent.click(retry);
     await waitFor(() => expect(screen.getByText('Venta completada')).toBeInTheDocument());
-    expect(screen.getByText('Recibo #LOCAL')).toBeInTheDocument();
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1][2]['Idempotency-Key']).toBe(post.mock.calls[0][2]['Idempotency-Key']);
+    expect(screen.getByText('Recibo #ABCD1234')).toBeInTheDocument();
   });
 });

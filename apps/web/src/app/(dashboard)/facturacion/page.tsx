@@ -15,6 +15,8 @@ import { httpClient } from '@/lib/api';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 import { CheckoutButton } from '@/components/billing/CheckoutButton';
 import { PlanUsage } from '@/components/billing/PlanUsage';
 
@@ -73,7 +75,25 @@ const tierBg: Record<string, string> = {
   ENTERPRISE: 'bg-purple-500/10',
 };
 
+/**
+ * Descuento anual real: compara el precio anual contra 12 meses del mensual.
+ * Devuelve el mayor descuento entre los planes pagos, o 0 si no hay datos
+ * suficientes (en ese caso no se muestra ningún porcentaje).
+ */
+function getYearlyDiscountPercent(plans: Plan[]): number {
+  let best = 0;
+  for (const p of plans) {
+    if (p.priceMonthly > 0 && p.priceYearly > 0) {
+      const pct = Math.round((1 - p.priceYearly / (p.priceMonthly * 12)) * 100);
+      if (pct > best) best = pct;
+    }
+  }
+  return best;
+}
+
 export default function FacturacionPage() {
+  const { toast } = useToast();
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -109,16 +129,24 @@ export default function FacturacionPage() {
     try {
       const sub = await httpClient.post<Subscription>('/billing/cancel', {});
       setSubscription(sub);
+      toast({ type: 'success', message: 'Suscripción cancelada. Seguís con acceso hasta el final del período.' });
     } catch (err) {
       console.error('Error cancelling:', err);
+      toast({
+        type: 'error',
+        message: err instanceof Error && err.message ? err.message : 'No se pudo cancelar la suscripción. Intentá de nuevo.',
+      });
     } finally {
       setCancelling(false);
+      setConfirmCancel(false);
     }
   }
 
   if (loading) {
     return <LoadingSpinner label="Cargando facturación..." />;
   }
+
+  const yearlyDiscount = getYearlyDiscountPercent(plans);
 
   return (
     <div className="max-w-5xl space-y-8">
@@ -171,7 +199,7 @@ export default function FacturacionPage() {
           </div>
           {subscription.status === 'ACTIVE' && !subscription.cancelAtPeriodEnd && (
             <button
-              onClick={handleCancel}
+              onClick={() => setConfirmCancel(true)}
               disabled={cancelling}
               className="mt-4 text-sm text-red-400 hover:text-red-300 transition-colors disabled:opacity-50"
             >
@@ -205,7 +233,9 @@ export default function FacturacionPage() {
           }`}
         >
           Anual
-          <span className="ml-1.5 text-xs opacity-75">-20%</span>
+          {yearlyDiscount > 0 && (
+            <span className="ml-1.5 text-xs opacity-75">-{yearlyDiscount}%</span>
+          )}
         </button>
       </div>
 
@@ -362,6 +392,18 @@ export default function FacturacionPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmCancel}
+        onClose={() => setConfirmCancel(false)}
+        onConfirm={handleCancel}
+        title="¿Cancelar la suscripción?"
+        message="Tu plan se va a cancelar y, al terminar el período actual, perdés los beneficios del plan. ¿Querés continuar?"
+        confirmLabel="Sí, cancelar suscripción"
+        cancelLabel="Volver"
+        variant="danger"
+        loading={cancelling}
+      />
     </div>
   );
 }

@@ -64,9 +64,9 @@ export default function EquipoPage() {
       await inviteMember({ email: inviteEmail, role: ROLE_TO_ENUM[inviteRole] });
       setInviteEmail('');
       setShowInvite(false);
-      toast({ type: 'success', message: 'Invitación enviada correctamente' });
+      toast({ type: 'success', message: 'Miembro agregado al equipo' });
     } catch (err) {
-      toast({ type: 'error', message: err instanceof Error ? err.message : 'Error al enviar la invitación' });
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo agregar al miembro' });
     }
     finally { setInviting(false); }
   };
@@ -140,8 +140,8 @@ export default function EquipoPage() {
   };
 
   const steps = [
-    { number: '01', title: 'Invitas con un link', description: 'Nombre, correo y rol. Te da un link de 7 días, un solo uso. Lo mandas por WhatsApp.' },
-    { number: '02', title: 'La persona se crea su acceso', description: 'Abre el link, elige su contraseña y llena su perfil: WhatsApp, puesto, horario.' },
+    { number: '01', title: 'Agregas al miembro', description: 'Correo y rol. Queda registrado en el equipo.' },
+    { number: '02', title: 'Le asignas un rol', description: 'Según lo que tenga que hacer. Podés cambiarlo cuando quieras desde el menú del miembro.' },
     { number: '03', title: 'Tú decides qué ve cada rol', description: 'Administrador ve todo. Equipo solo opera — y tú marcas qué secciones abre.' },
   ];
 
@@ -177,7 +177,7 @@ export default function EquipoPage() {
           <div className="flex items-center gap-3">
             <SearchInput value={search} onChange={setSearch} placeholder="Buscar miembro..." className="max-w-[220px]" />
             <button onClick={() => setShowInvite(!showInvite)} className="btn-primary text-xs">
-              <UserPlus className="h-3.5 w-3.5" /> Invitar miembro
+              <UserPlus className="h-3.5 w-3.5" /> Agregar miembro
             </button>
           </div>
         </div>
@@ -185,7 +185,7 @@ export default function EquipoPage() {
         {showInvite && (
           <div className="card-accent mb-4">
             <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-              <UserPlus className="h-4 w-4 text-brand-400" /> Enviar invitación
+              <UserPlus className="h-4 w-4 text-brand-400" /> Agregar miembro
             </h4>
             <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3">
               <div className="flex-1 w-full">
@@ -201,7 +201,7 @@ export default function EquipoPage() {
                 </select>
               </div>
               <button onClick={handleInvite} disabled={inviting || !inviteEmail} className="btn-primary text-xs whitespace-nowrap disabled:opacity-50">
-                <Mail className="h-3.5 w-3.5" /> {inviting ? 'Enviando...' : 'Enviar invitación'}
+                <Mail className="h-3.5 w-3.5" /> {inviting ? 'Agregando...' : 'Agregar al equipo'}
               </button>
             </div>
           </div>

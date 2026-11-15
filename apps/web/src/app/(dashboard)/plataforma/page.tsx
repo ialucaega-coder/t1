@@ -26,6 +26,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { useToast } from '@/components/common/Toast';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Modal } from '@/components/ui/Modal';
@@ -51,6 +52,10 @@ export default function PlataformaPage() {
   const [denied, setDenied] = useState(false);
   // Acción en curso por negocio (deshabilita sus botones mientras guarda).
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Acciones sensibles pendientes de confirmación (cambio de plan / suspensión).
+  const [pendingPlan, setPendingPlan] = useState<{ biz: PlatformBusiness; tier: PlanTier } | null>(null);
+  const [pendingSuspend, setPendingSuspend] = useState<PlatformBusiness | null>(null);
 
   // Modal de feature flags.
   const [featuresFor, setFeaturesFor] = useState<PlatformBusiness | null>(null);
@@ -98,6 +103,7 @@ export default function PlataformaPage() {
       toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo cambiar el estado' });
     } finally {
       setBusyId(null);
+      setPendingSuspend(null);
     }
   };
 
@@ -118,6 +124,7 @@ export default function PlataformaPage() {
       toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo cambiar el plan' });
     } finally {
       setBusyId(null);
+      setPendingPlan(null);
     }
   };
 
@@ -223,7 +230,10 @@ export default function PlataformaPage() {
                         <select
                           value={biz.planTier ?? ''}
                           disabled={busy}
-                          onChange={(e) => handleChangePlan(biz, e.target.value as PlanTier)}
+                          onChange={(e) => {
+                            const tier = e.target.value as PlanTier;
+                            if (tier && tier !== biz.planTier) setPendingPlan({ biz, tier });
+                          }}
                           className="input py-1.5 text-xs disabled:opacity-50"
                         >
                           {!biz.planTier && <option value="">Sin plan</option>}
@@ -267,7 +277,7 @@ export default function PlataformaPage() {
                             <SlidersHorizontal className="h-3.5 w-3.5" /> Features
                           </button>
                           <button
-                            onClick={() => handleToggleActive(biz)}
+                            onClick={() => (biz.isActive ? setPendingSuspend(biz) : handleToggleActive(biz))}
                             disabled={busy}
                             className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                               biz.isActive
@@ -365,6 +375,32 @@ export default function PlataformaPage() {
           </>
         )}
       </Modal>
+
+      <ConfirmDialog
+        isOpen={pendingPlan !== null}
+        onClose={() => setPendingPlan(null)}
+        onConfirm={() => pendingPlan && handleChangePlan(pendingPlan.biz, pendingPlan.tier)}
+        title="¿Cambiar el plan?"
+        message={
+          pendingPlan
+            ? `Vas a cambiar el plan de ${pendingPlan.biz.name} a ${PLAN_LABELS[pendingPlan.tier]}. Afecta sus límites y su facturación.`
+            : ''
+        }
+        confirmLabel="Cambiar plan"
+        variant="warning"
+        loading={pendingPlan !== null && busyId === pendingPlan.biz.id}
+      />
+
+      <ConfirmDialog
+        isOpen={pendingSuspend !== null}
+        onClose={() => setPendingSuspend(null)}
+        onConfirm={() => pendingSuspend && handleToggleActive(pendingSuspend)}
+        title="¿Suspender negocio?"
+        message={`Vas a suspender ${pendingSuspend?.name ?? ''}. Sus usuarios y bots dejan de funcionar hasta que lo reactives.`}
+        confirmLabel="Suspender"
+        variant="danger"
+        loading={pendingSuspend !== null && busyId === pendingSuspend.id}
+      />
     </div>
   );
 }

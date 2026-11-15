@@ -15,6 +15,8 @@ import { statsApi } from '@/lib/api/index';
 import type { DashboardStats } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 import { OnboardingChecklist } from '@/components/dashboard/OnboardingChecklist';
 import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
@@ -75,6 +77,7 @@ export default function DashboardPage() {
   const { overview, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useStats();
   const { bots, isLoading: botsLoading, error: botsError, refetch: refetchBots, createBot, updateBot, deleteBot } = useBots();
   const { business } = useAuth();
+  const { toast } = useToast();
   useSocket(business?.id ?? null);
   useSocketEvent('booking:created', () => {
     refetchStats();
@@ -91,6 +94,8 @@ export default function DashboardPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [botToDelete, setBotToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deletingBot, setDeletingBot] = useState(false);
 
   useEffect(() => {
     statsApi.getDashboard().then(setDashboard).catch(() => {});
@@ -127,11 +132,25 @@ export default function DashboardPage() {
 
   const handleToggleStatus = async (bot: { id: string; status: string }) => {
     const newStatus = bot.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
-    await updateBot(bot.id, { status: newStatus as any });
+    try {
+      await updateBot(bot.id, { status: newStatus as any });
+      toast({ type: 'success', message: newStatus === 'ACTIVE' ? 'Bot activado' : 'Bot pausado' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo cambiar el estado del bot' });
+    }
   };
 
   const handleDelete = async (id: string) => {
-    await deleteBot(id);
+    setDeletingBot(true);
+    try {
+      await deleteBot(id);
+      toast({ type: 'success', message: 'Bot eliminado' });
+      setBotToDelete(null);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo eliminar el bot' });
+    } finally {
+      setDeletingBot(false);
+    }
   };
 
   if (isLoading) return <LoadingSpinner label="Cargando dashboard..." />;
@@ -393,7 +412,7 @@ export default function DashboardPage() {
                     <button onClick={() => handleToggleStatus(bot)} className="p-1.5 rounded-lg hover:bg-surface-100 text-slate-400 hover:text-white transition-colors" title={bot.status === 'ACTIVE' ? 'Pausar' : 'Activar'}>
                       {bot.status === 'ACTIVE' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                     </button>
-                    <button onClick={() => handleDelete(bot.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors" title="Eliminar">
+                    <button onClick={() => setBotToDelete({ id: bot.id, name: bot.name })} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors" title="Eliminar" aria-label={`Eliminar bot ${bot.name}`}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -474,6 +493,17 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={botToDelete !== null}
+        onClose={() => setBotToDelete(null)}
+        onConfirm={() => botToDelete && handleDelete(botToDelete.id)}
+        title="¿Eliminar bot?"
+        message={`Vas a eliminar el bot "${botToDelete?.name ?? ''}" con su configuración. Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deletingBot}
+      />
     </div>
   );
 }

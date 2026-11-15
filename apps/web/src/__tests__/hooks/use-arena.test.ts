@@ -134,7 +134,7 @@ describe('hooks/use-arena', () => {
     let returned: unknown;
     await act(async () => { returned = await result.current.sendChat('hey'); });
 
-    expect(mockSendChat).toHaveBeenCalledWith('hey');
+    expect(mockSendChat).toHaveBeenCalledWith('hey', undefined);
     expect(returned).toEqual({ reply: 'Hola' });
     // No recarga las listas.
     expect(mockBuilders).toHaveBeenCalledTimes(1);

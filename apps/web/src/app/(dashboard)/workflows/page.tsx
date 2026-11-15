@@ -19,6 +19,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { useToast } from '@/components/common/Toast';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 interface RuleForm {
   nombre: string;
@@ -63,6 +64,7 @@ export default function WorkflowsPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [ruleToDelete, setRuleToDelete] = useState<{ id: string; nombre: string } | null>(null);
   // Panel "Probar automatización"
   const [testTrigger, setTestTrigger] = useState('');
   const [testLive, setTestLive] = useState(false);
@@ -150,6 +152,7 @@ export default function WorkflowsPage() {
       toast({ type: 'error', message: 'Error al eliminar la automatización' });
     } finally {
       setDeleting(null);
+      setRuleToDelete(null);
     }
   }
 
@@ -316,8 +319,9 @@ export default function WorkflowsPage() {
                   />
                 </button>
                 <button
-                  onClick={() => handleDelete(r.id)}
+                  onClick={() => setRuleToDelete({ id: r.id, nombre: r.nombre })}
                   disabled={deleting === r.id}
+                  aria-label="Eliminar regla"
                   className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                 >
                   {deleting === r.id ? (
@@ -535,6 +539,17 @@ export default function WorkflowsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={ruleToDelete !== null}
+        onClose={() => setRuleToDelete(null)}
+        onConfirm={() => ruleToDelete && handleDelete(ruleToDelete.id)}
+        title="¿Eliminar automatización?"
+        message={`Vas a eliminar la regla "${ruleToDelete?.nombre ?? ''}". Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={ruleToDelete !== null && deleting === ruleToDelete.id}
+      />
     </div>
   );
 }

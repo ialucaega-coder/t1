@@ -39,6 +39,6 @@ export function voteBuilder(id: string) {
   return httpClient.post<ArenaBuilder>(`/arena/builders/${id}/vote`, {});
 }
 
-export function sendChat(message: string) {
-  return httpClient.post<ArenaChatResponse>('/arena/chat', { message });
+export function sendChat(message: string, conversationId?: string) {
+  return httpClient.post<ArenaChatResponse>('/arena/chat', conversationId ? { message, conversationId } : { message });
 }

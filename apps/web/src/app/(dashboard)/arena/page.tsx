@@ -17,6 +17,7 @@ interface Message {
   text: string;
   timestamp: string;
   responseTime?: number;
+  isError?: boolean;
 }
 
 const testScenarios = [
@@ -29,7 +30,7 @@ const testScenarios = [
 ];
 
 const prizes = [
-  { place: '1er lugar', icon: '1F947', reward: '1 año de Local B+ gratis + 30 min 1-a-1 + grupo privado de WhatsApp' },
+  { place: '1er lugar', icon: '1F947', reward: '1 año de Mr Go + gratis + 30 min 1-a-1 + grupo privado de WhatsApp' },
   { place: '2do lugar', icon: '1F948', reward: '$200 USD + 30 min 1-a-1 + grupo privado de WhatsApp' },
   { place: '3er lugar', icon: '1F949', reward: '30 min 1-a-1 + acceso al grupo privado de WhatsApp' },
 ];
@@ -67,6 +68,14 @@ export default function ArenaPage() {
     }
   }
 
+  async function handleVoteIdea(id: string) {
+    try {
+      await voteIdea(id);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo votar' });
+    }
+  }
+
   async function handleCreateBuilder() {
     const name = builderName.trim();
     const title = builderTitle.trim();
@@ -78,7 +87,8 @@ export default function ArenaPage() {
     try {
       await createBuilder({
         name,
-        description: `${title}${builderDesc.trim() ? ' — ' + builderDesc.trim() : ''}`,
+        title,
+        description: builderDesc.trim(),
         systemPrompt: builderPrompt.trim(),
         model: 'claude-sonnet-5',
       });
@@ -117,6 +127,7 @@ export default function ArenaPage() {
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [lastResponseTime, setLastResponseTime] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -130,16 +141,19 @@ export default function ArenaPage() {
     setIsTyping(true);
     const start = Date.now();
     try {
-      const res = await sendChat(text.trim());
+      const res = await sendChat(text.trim(), conversationId);
       const elapsed = Date.now() - start;
-      const botMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', text: res?.reply || 'Entendido. Déjame consultar eso y te respondo en un momento.', timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), responseTime: elapsed };
+      if (res?.conversationId) setConversationId(res.conversationId);
+      if (!res?.reply) throw new Error('El bot no devolvió una respuesta');
+      const botMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', text: res.reply, timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), responseTime: elapsed };
       setMessages((prev) => [...prev, botMsg]);
       setLastResponseTime(elapsed);
-    } catch {
-      const elapsed = Date.now() - start;
-      const botMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', text: 'Entendido. Déjame consultar eso y te respondo en un momento. ¿Hay algo más en lo que pueda ayudarte?', timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), responseTime: elapsed };
-      setMessages((prev) => [...prev, botMsg]);
-      setLastResponseTime(elapsed);
+    } catch (err) {
+      // Error real (red, cuota, servidor): se muestra como error, NO como respuesta del bot.
+      const detail = err instanceof Error && err.message ? err.message : 'Error desconocido';
+      const errMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', isError: true, text: `No se pudo obtener la respuesta del bot: ${detail}`, timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) };
+      setMessages((prev) => [...prev, errMsg]);
+      toast({ type: 'error', message: `No se pudo obtener la respuesta del bot: ${detail}` });
     } finally { setIsTyping(false); }
   };
 
@@ -198,7 +212,7 @@ export default function ArenaPage() {
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   {msg.role === 'bot' && <div className="h-7 w-7 rounded-full bg-brand-400/20 flex items-center justify-center shrink-0 mt-1"><Bot className="h-3.5 w-3.5 text-brand-400" /></div>}
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-brand-400 text-white rounded-br-md' : 'bg-surface-100 text-slate-200 border border-slate-700/50 rounded-bl-md'}`}>
+                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-brand-400 text-white rounded-br-md' : msg.isError ? 'bg-red-500/10 text-red-300 border border-red-500/30 rounded-bl-md' : 'bg-surface-100 text-slate-200 border border-slate-700/50 rounded-bl-md'}`}>
                     <p className="text-sm leading-relaxed">{msg.text}</p>
                     <div className={`flex items-center gap-2 mt-1 ${msg.role === 'user' ? 'justify-end' : ''}`}>
                       <span className={`text-[10px] ${msg.role === 'user' ? 'text-brand-200' : 'text-slate-500'}`}>{msg.timestamp}</span>
@@ -315,7 +329,7 @@ export default function ArenaPage() {
             <div className="space-y-3">
               {ideas.map((idea: ArenaIdea) => (
                 <div key={idea.id} className="card flex items-center gap-4">
-                  <button onClick={() => voteIdea(idea.id)} className="flex flex-col items-center gap-0.5 text-slate-400 hover:text-brand-400">
+                  <button onClick={() => handleVoteIdea(idea.id)} className="flex flex-col items-center gap-0.5 text-slate-400 hover:text-brand-400">
                     <ThumbsUp className="h-4 w-4" /><span className="text-xs font-bold">{idea.votes || 0}</span>
                   </button>
                   <div className="flex-1">

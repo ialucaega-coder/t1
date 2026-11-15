@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Search, UserPlus, Users, ChevronLeft, ChevronRight,
   Calendar, ShoppingBag, Mail, Phone, Clock, Trash2,
@@ -11,6 +11,7 @@ import { useClients, useClientDetail } from '@/hooks/use-clients';
 import * as clientsApi from '@/lib/api/clients';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ClientFormModal } from '@/components/clients/ClientFormModal';
+import { clientErrorMessage } from '@/components/clients/client-errors';
 import { TagChip, TagManager, ClientTagEditor } from '@/components/clients/ClientTags';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -84,13 +85,26 @@ export default function ClientesPage() {
   usePageCounter(isLoading ? null : fmtCounter(total, 'CLIENTE', 'CLIENTES'));
 
   async function handleCreate(data: { name: string; email: string; phone: string; notes: string }) {
+    let created: { id: string };
     try {
-      await clientsApi.createClient({ name: data.name, email: data.email, phone: data.phone || undefined });
-      refetch();
-      toast({ type: 'success', message: 'Cliente creado correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al crear cliente' });
+      created = await clientsApi.createClient({ name: data.name, email: data.email, phone: data.phone || undefined });
+    } catch (err) {
+      // Se relanza para que el modal siga abierto con lo que escribió el usuario y
+      // muestre el motivo real del server (409 email duplicado, 403 límite de plan, etc.).
+      throw new Error(clientErrorMessage(err, 'Error al crear cliente'));
     }
+    refetch();
+    // La nota interna vive en el CRM (PUT /clients/:id/note), no en POST /clients.
+    const note = data.notes.trim();
+    if (note) {
+      try {
+        await clientsApi.setClientNote(created.id, note);
+      } catch (err) {
+        toast({ type: 'error', message: `Cliente creado, pero no se pudo guardar la nota: ${clientErrorMessage(err, 'error desconocido')}` });
+        return;
+      }
+    }
+    toast({ type: 'success', message: 'Cliente creado correctamente' });
   }
 
   async function handleUpdate(data: { name: string; email: string; phone: string; notes: string }) {
@@ -98,12 +112,16 @@ export default function ClientesPage() {
     // El backend solo acepta name/phone en update (email es identidad del cliente).
     try {
       await clientsApi.updateClient(detail.id, { name: data.name, phone: data.phone || undefined });
-      refetch();
-      refetchDetail();
-      toast({ type: 'success', message: 'Cliente actualizado correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al actualizar cliente' });
+      // La nota se guarda aparte (CRM), solo si cambió.
+      if (data.notes.trim() !== (detail.note ?? '').trim()) {
+        await clientsApi.setClientNote(detail.id, data.notes.trim());
+      }
+    } catch (err) {
+      throw new Error(clientErrorMessage(err, 'Error al actualizar cliente'));
     }
+    refetch();
+    refetchDetail();
+    toast({ type: 'success', message: 'Cliente actualizado correctamente' });
   }
 
   async function handleDelete(id: string) {
@@ -119,6 +137,13 @@ export default function ClientesPage() {
       setDeleting(null);
     }
   }
+
+  // Memoizado: ClientFormModal reinicia sus campos cuando `initial` cambia de
+  // identidad, y un objeto nuevo en cada render borraría lo que se está tipeando.
+  const editInitial = useMemo(
+    () => (detail ? { name: detail.name, email: detail.email, phone: detail.phone ?? '', notes: detail.note ?? '' } : undefined),
+    [detail],
+  );
 
   if (isLoading && clients.length === 0) return <LoadingSpinner label="Cargando clientes..." />;
 
@@ -499,7 +524,7 @@ export default function ClientesPage() {
         onClose={() => setEditOpen(false)}
         onSave={handleUpdate}
         title="Editar cliente"
-        initial={detail ? { name: detail.name, email: detail.email, phone: detail.phone ?? '', notes: '' } : undefined}
+        initial={editInitial}
       />
     </div>
   );

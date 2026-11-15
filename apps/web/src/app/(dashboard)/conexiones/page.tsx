@@ -215,9 +215,13 @@ function TelegramCard() {
 
   const handleDisconnect = async () => {
     setIsDisconnecting(true);
-    await disconnectTelegram();
+    const success = await disconnectTelegram();
     setIsDisconnecting(false);
-    toast({ type: 'success', message: 'Bot de Telegram desconectado' });
+    if (success) {
+      toast({ type: 'success', message: 'Bot de Telegram desconectado' });
+    } else {
+      toast({ type: 'error', message: 'No se pudo desconectar el bot de Telegram' });
+    }
   };
 
   return (
@@ -571,11 +575,12 @@ function WebhooksSection() {
       <ConfirmDialog
         isOpen={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } setDeleteTarget(null); }}
+        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget); } }}
         title="Eliminar webhook"
         message="¿Eliminar este webhook?"
         confirmLabel="Eliminar"
         variant="danger"
+        loading={deleting}
       />
 
       {webhooks.length === 0 && !showForm ? (

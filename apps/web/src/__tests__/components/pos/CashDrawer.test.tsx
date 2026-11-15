@@ -101,4 +101,9 @@ describe('components/pos/CashDrawer', () => {
     await waitFor(() => expect(diferencia()).toBe('+$100'));
     expect(screen.getByText(/sobrante de efectivo/i)).toBeInTheDocument();
   });
+
+  it('avisa que la caja se guarda solo en este dispositivo', async () => {
+    render(<CashDrawer />);
+    expect(await screen.findByText(/La caja se guarda solo en este dispositivo/)).toBeInTheDocument();
+  });
 });

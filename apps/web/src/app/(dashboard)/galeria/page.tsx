@@ -11,6 +11,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { Modal } from '@/components/ui/Modal';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const TIPOS: { value: GalleryTipo; label: string }[] = [
   { value: 'image', label: 'Imagen' },
@@ -80,6 +81,7 @@ export default function GaleriaPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; titulo: string } | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -135,6 +137,9 @@ export default function GaleriaPage() {
   }
 
   async function handleDelete(id: string) {
+    // Se cierra el diálogo antes de recargar: `load` muestra el spinner de página
+    // completa y, si quedara el target seteado, el diálogo reaparecería al terminar.
+    setDeleteTarget(null);
     setDeleting(id);
     try {
       await galleryApi.deleteGalleryItem(id);
@@ -196,10 +201,11 @@ export default function GaleriaPage() {
                   </span>
                 </div>
                 <button
-                  onClick={() => handleDelete(item.id)}
+                  onClick={() => setDeleteTarget({ id: item.id, titulo: item.titulo || 'Sin título' })}
                   disabled={deleting === item.id}
                   className="shrink-0 ml-2 p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                   title="Eliminar"
+                  aria-label="Eliminar elemento"
                 >
                   {deleting === item.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -297,6 +303,16 @@ export default function GaleriaPage() {
           </div>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && handleDelete(deleteTarget.id)}
+        title="¿Eliminar elemento?"
+        message={`Vas a eliminar "${deleteTarget?.titulo ?? ''}" de la galería. Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+      />
     </div>
   );
 }

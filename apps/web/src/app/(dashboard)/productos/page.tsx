@@ -111,7 +111,7 @@ export default function ProductosPage() {
           icon={ShoppingBag}
           title={search ? 'Sin resultados' : 'No hay productos creados'}
           description={search ? undefined : 'Agregá productos a tu catálogo para vender online.'}
-          action={!search ? { label: 'Crear producto', onClick: () => setEditing({} as Product) } : undefined}
+          action={!search ? { label: 'Crear producto', onClick: () => { setEditing(null); setShowModal(true); } } : undefined}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">

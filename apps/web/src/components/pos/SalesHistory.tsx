@@ -43,7 +43,7 @@ export function SalesHistory() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(page), pageSize: '20' });
-      if (filterMethod) params.set('type', filterMethod);
+      if (filterMethod) params.set('paymentMethod', filterMethod);
       if (dateFrom) params.set('from', dateFrom);
       if (dateTo) params.set('to', dateTo);
       const res = await httpClient.get<{ data: Transaction[]; totalPages: number }>(`/transactions?${params}`);

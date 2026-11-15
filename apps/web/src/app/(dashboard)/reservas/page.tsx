@@ -47,6 +47,7 @@ export default function ReservasPage() {
   const [selectedDate, setSelectedDate] = useState(today);
   const [view, setView] = useState<ViewMode>('list');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createTime, setCreateTime] = useState<string | undefined>(undefined);
   const [selectedBooking, setSelectedBooking] = useState<LegacyBooking | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
@@ -146,7 +147,7 @@ export default function ReservasPage() {
           >
             <Download className="h-3.5 w-3.5" /> Exportar
           </button>
-          <button onClick={() => setShowCreateModal(true)} className="btn-primary text-xs">
+          <button onClick={() => { setCreateTime(undefined); setShowCreateModal(true); }} className="btn-primary text-xs">
             <Plus className="h-3.5 w-3.5" /> Nueva reserva
           </button>
         </div>
@@ -165,7 +166,7 @@ export default function ReservasPage() {
       ) : view === 'list' ? (
         <BookingList bookings={filteredBookings} onSelect={setSelectedBooking} />
       ) : (
-        <BookingCalendar bookings={filteredBookings} onSlotClick={(time) => { setShowCreateModal(true); }} />
+        <BookingCalendar bookings={filteredBookings} onSlotClick={(time) => { setCreateTime(time); setShowCreateModal(true); }} />
       )}
 
       <div className="flex items-center justify-between text-xs text-slate-500 border-t border-slate-700/50 pt-4">
@@ -175,9 +176,10 @@ export default function ReservasPage() {
 
       <BookingFormModal
         isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        onClose={() => { setShowCreateModal(false); setCreateTime(undefined); }}
         onSubmit={handleCreate}
         initialDate={selectedDate}
+        initialTime={createTime}
       />
 
       <BookingDetailModal

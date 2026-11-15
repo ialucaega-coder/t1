@@ -9,7 +9,7 @@ import request from 'supertest';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    transaction: { create: vi.fn(), findFirst: vi.fn() },
+    transaction: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
     connection: { findFirst: vi.fn(), create: vi.fn() },
     $transaction: vi.fn(),
     $executeRaw: vi.fn(),
@@ -112,5 +112,80 @@ describe('routes/transactions — disparo de "pago_recibido"', () => {
 
     expect(res.status).toBe(201);
     expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('routes/transactions — GET / (filtro por método de pago)', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.transaction.findMany).mockResolvedValue([]);
+    mock(prisma.transaction.count).mockResolvedValue(0);
+  });
+
+  it('filtra por paymentMethod (no por type) y siempre acota por businessId', async () => {
+    const res = await request(app).get('/api/transactions?paymentMethod=CARD');
+
+    expect(res.status).toBe(200);
+    const where = mock(prisma.transaction.findMany).mock.calls[0][0].where;
+    expect(where).toEqual({ businessId: 'biz_1', paymentMethod: 'CARD' });
+    expect(where.type).toBeUndefined();
+  });
+
+  it('type sigue filtrando por tipo de movimiento', async () => {
+    await request(app).get('/api/transactions?type=REFUND&paymentMethod=CASH');
+    const where = mock(prisma.transaction.findMany).mock.calls[0][0].where;
+    expect(where).toEqual({ businessId: 'biz_1', type: 'REFUND', paymentMethod: 'CASH' });
+  });
+
+  it('rechaza con 400 un método de pago inválido (antes un método en `type` rompía el filtro)', async () => {
+    const res = await request(app).get('/api/transactions?type=CASH');
+    expect(res.status).toBe(400);
+    const res2 = await request(app).get('/api/transactions?paymentMethod=BITCOIN');
+    expect(res2.status).toBe(400);
+    expect(prisma.transaction.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('routes/transactions — GET /summary (totales reales)', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.transaction.groupBy).mockResolvedValue([
+      { type: 'SALE', _sum: { amount: 10000 }, _count: { _all: 40 } },
+      { type: 'PARTIAL', _sum: { amount: 500 }, _count: { _all: 2 } },
+      { type: 'REFUND', _sum: { amount: 1500 }, _count: { _all: 3 } },
+    ]);
+  });
+
+  it('agrega con groupBy filtrado por businessId y los mismos filtros de la lista', async () => {
+    const res = await request(app).get('/api/transactions/summary?paymentMethod=CASH&from=2026-01-01');
+
+    expect(res.status).toBe(200);
+    const args = mock(prisma.transaction.groupBy).mock.calls[0][0];
+    expect(args.by).toEqual(['type']);
+    expect(args.where).toMatchObject({ businessId: 'biz_1', paymentMethod: 'CASH' });
+    expect(args.where.createdAt.gte).toEqual(new Date('2026-01-01'));
+    expect(res.body).toEqual({
+      sales: 10000,
+      partial: 500,
+      refunds: 1500,
+      net: 9000,
+      count: 45,
+      counts: { SALE: 40, PARTIAL: 2, REFUND: 3 },
+    });
+  });
+
+  it('sin movimientos devuelve ceros', async () => {
+    mock(prisma.transaction.groupBy).mockResolvedValue([]);
+    const res = await request(app).get('/api/transactions/summary');
+    expect(res.body).toMatchObject({ sales: 0, refunds: 0, net: 0, count: 0 });
+  });
+
+  it('rechaza filtros inválidos con 400', async () => {
+    const res = await request(app).get('/api/transactions/summary?type=NOPE');
+    expect(res.status).toBe(400);
   });
 });

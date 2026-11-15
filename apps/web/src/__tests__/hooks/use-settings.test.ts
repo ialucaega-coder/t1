@@ -1,7 +1,7 @@
 /**
  * Pruebas unitarias para el hook `useSettings` (`src/hooks/use-settings.ts`):
- * carga, error con fallback a valores por defecto, refetch y updateSettings
- * (éxito y error). Se mockea el namespace `settingsApi` de `@/lib/api/index`.
+ * carga, error de carga (sin volcar datos falsos), refetch y updateSettings
+ * (éxito y propagación del error). Se mockea el namespace `settingsApi` de `@/lib/api/index`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -24,12 +24,12 @@ beforeEach(() => {
 });
 
 describe('hooks/use-settings', () => {
-  it('inicia en estado de carga con los valores por defecto', () => {
+  it('inicia en estado de carga sin datos inventados', () => {
     mockGet.mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useSettings());
 
     expect(result.current.isLoading).toBe(true);
-    expect(result.current.settings.businessName).toBe('Mi Negocio');
+    expect(result.current.settings).toBeNull();
   });
 
   it('carga la configuración desde la API', async () => {
@@ -43,14 +43,14 @@ describe('hooks/use-settings', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('ante error setea el mensaje y hace fallback a los valores por defecto', async () => {
+  it('ante error de carga setea el mensaje y NO vuelca datos falsos', async () => {
     mockGet.mockRejectedValue(new Error('API caída'));
 
     const { result } = renderHook(() => useSettings());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('API caída');
-    expect(result.current.settings.businessName).toBe('Mi Negocio');
+    expect(result.current.settings).toBeNull();
   });
 
   it('usa mensaje genérico cuando el error no es Error', async () => {
@@ -74,21 +74,27 @@ describe('hooks/use-settings', () => {
     });
 
     expect(mockUpdate).toHaveBeenCalledWith({ businessName: 'Actualizado' });
-    expect(result.current.settings.businessName).toBe('Actualizado');
+    expect(result.current.settings?.businessName).toBe('Actualizado');
   });
 
-  it('updateSettings setea error cuando falla', async () => {
+  it('updateSettings relanza el error cuando falla y conserva los datos reales', async () => {
     mockGet.mockResolvedValue({ businessName: 'Original' });
     mockUpdate.mockRejectedValue(new Error('Sin permisos'));
 
     const { result } = renderHook(() => useSettings());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
+    let thrown: unknown;
     await act(async () => {
-      await result.current.updateSettings({ businessName: 'x' });
+      try {
+        await result.current.updateSettings({ businessName: 'x' });
+      } catch (err) {
+        thrown = err;
+      }
     });
 
-    expect(result.current.error).toBe('Sin permisos');
+    expect((thrown as Error).message).toBe('Sin permisos');
+    expect(result.current.settings?.businessName).toBe('Original');
   });
 
   it('refetch vuelve a pedir la configuración', async () => {

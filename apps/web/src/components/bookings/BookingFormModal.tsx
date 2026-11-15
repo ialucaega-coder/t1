@@ -58,6 +58,16 @@ export function BookingFormModal({ isOpen, onClose, onSubmit, initialDate, initi
     return () => { cancelled = true; };
   }, [isOpen]);
 
+  // El modal queda montado entre aperturas: useState solo toma initialDate/initialTime
+  // la primera vez. Al abrir, volvemos a tomar la fecha y la hora que llegan por props
+  // (p. ej. la franja tocada en el calendario).
+  useEffect(() => {
+    if (!isOpen) return;
+    setDate(initialDate ?? new Date().toISOString().slice(0, 10));
+    setStartTime(initialTime ?? '');
+    setError('');
+  }, [isOpen, initialDate, initialTime]);
+
   const selectedService = services.find((s) => s.id === serviceId);
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -6,6 +6,21 @@ export function getTransactions(params?: Record<string, string>) {
   return httpClient.get<PaginatedResponse<Transaction>>(`/transactions${qs}`);
 }
 
+/** Totales reales del server (no de la página cargada), con los mismos filtros que la lista. */
+export interface TransactionsSummary {
+  sales: number;
+  partial: number;
+  refunds: number;
+  net: number;
+  count: number;
+  counts: { SALE: number; PARTIAL: number; REFUND: number };
+}
+
+export function getTransactionsSummary(params?: Record<string, string>) {
+  const qs = params && Object.keys(params).length ? '?' + new URLSearchParams(params).toString() : '';
+  return httpClient.get<TransactionsSummary>(`/transactions/summary${qs}`);
+}
+
 export function createTransaction(data: CreateTransactionData) {
   return httpClient.post<Transaction>('/transactions', data);
 }

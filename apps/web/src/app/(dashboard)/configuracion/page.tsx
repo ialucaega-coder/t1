@@ -13,6 +13,7 @@ import { useToast } from '@/components/common/Toast';
 import { MotorDeIA } from '@/app/(dashboard)/ia/MotorDeIA';
 import { RecoveryCodesPanel } from '@/components/auth/RecoveryCodesPanel';
 import type { Schedule } from '@/types';
+import type { BusinessSettings } from '@/lib/api/settings';
 
 const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -20,12 +21,18 @@ const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', '
 // la app o código de recuperación (10 caracteres, con o sin guion).
 const isSecondFactorCode = (v: string) => /^(\d{6}|[A-Za-z0-9]{5}-?[A-Za-z0-9]{5})$/.test(v.trim());
 
+const errorMessage = (err: unknown, fallback: string) =>
+  err instanceof Error && err.message ? err.message : fallback;
+
 export default function ConfiguracionPage() {
   const { settings, isLoading, error, refetch, updateSettings } = useSettings();
   const { user, updateProfile } = useAuth();
-  const [form, setForm] = useState(settings);
+  // null hasta que haya datos reales: nunca se editan ni se guardan valores de relleno.
+  const [form, setForm] = useState<BusinessSettings | null>(settings);
   const [isSaving, setIsSaving] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  // Borradores de los inputs de hora: se guardan al perder el foco (no en cada cambio).
+  const [timeDrafts, setTimeDrafts] = useState<Record<string, string>>({});
   const [loadingSchedules, setLoadingSchedules] = useState(true);
   const [profileName, setProfileName] = useState(user?.name || '');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -47,7 +54,7 @@ export default function ConfiguracionPage() {
   const { toast } = useToast();
 
   useEffect(() => {
-    setForm(settings);
+    if (settings) setForm(settings);
   }, [settings]);
 
   useEffect(() => {
@@ -189,21 +196,44 @@ export default function ConfiguracionPage() {
     try {
       const updated = await schedulesApi.updateSchedule(schedule.id, { isActive: !schedule.isActive });
       setSchedules((prev) => prev.map((s) => (s.id === schedule.id ? updated : s)));
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast({ type: 'error', message: errorMessage(err, 'No se pudo actualizar el horario') });
+    }
   }
 
   async function handleUpdateTime(schedule: Schedule, field: 'startTime' | 'endTime', value: string) {
     try {
       const updated = await schedulesApi.updateSchedule(schedule.id, { [field]: value });
       setSchedules((prev) => prev.map((s) => (s.id === schedule.id ? updated : s)));
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast({ type: 'error', message: errorMessage(err, 'No se pudo guardar el horario') });
+    }
+  }
+
+  const draftKey = (schedule: Schedule, field: 'startTime' | 'endTime') => `${schedule.id}:${field}`;
+
+  // Al perder el foco se persiste el borrador (un solo PUT) y se descarta, así el
+  // input vuelve a mostrar el valor del servidor, también si el guardado falla.
+  async function handleTimeBlur(schedule: Schedule, field: 'startTime' | 'endTime') {
+    const key = draftKey(schedule, field);
+    const draft = timeDrafts[key];
+    if (draft === undefined) return;
+    setTimeDrafts((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    if (!draft || draft === schedule[field]) return;
+    await handleUpdateTime(schedule, field, draft);
   }
 
   async function handleDeleteSchedule(id: string) {
     try {
       await schedulesApi.deleteSchedule(id);
       setSchedules((prev) => prev.filter((s) => s.id !== id));
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast({ type: 'error', message: errorMessage(err, 'No se pudo eliminar el horario') });
+    }
   }
 
   async function handleAddSchedule(dayOfWeek: number) {
@@ -215,21 +245,24 @@ export default function ConfiguracionPage() {
         isActive: true,
       });
       setSchedules((prev) => [...prev, created]);
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast({ type: 'error', message: errorMessage(err, 'No se pudo agregar el horario') });
+    }
   }
 
-  const updateField = (field: keyof typeof form, value: string) => {
-    setForm((current) => ({ ...current, [field]: value }));
+  const updateField = (field: keyof BusinessSettings, value: string) => {
+    setForm((current) => (current ? { ...current, [field]: value } : current));
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!form) return;
     setIsSaving(true);
     try {
       await updateSettings(form);
       toast({ type: 'success', message: 'Configuración guardada correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al guardar configuración' });
+    } catch (err) {
+      toast({ type: 'error', message: errorMessage(err, 'Error al guardar configuración') });
     } finally {
       setIsSaving(false);
     }
@@ -241,7 +274,7 @@ export default function ConfiguracionPage() {
 
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl space-y-8">
-      {error && <ErrorAlert message={error} onRetry={refetch} />}
+      {error && form && <ErrorAlert message={error} onRetry={refetch} />}
 
       <section className="card">
         <div className="flex items-center gap-3 mb-4">
@@ -415,96 +448,107 @@ export default function ConfiguracionPage() {
         )}
       </section>
 
-      <section className="card">
-        <div className="flex items-center gap-3 mb-4">
-          <Globe className="h-5 w-5 text-brand-400" />
-          <h3 className="font-semibold text-white">Datos del negocio</h3>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Nombre del negocio</label>
-            <input className="input" value={form.businessName} onChange={(e) => updateField('businessName', e.target.value)} />
+      {form ? (
+        <>
+        <section className="card">
+          <div className="flex items-center gap-3 mb-4">
+            <Globe className="h-5 w-5 text-brand-400" />
+            <h3 className="font-semibold text-white">Datos del negocio</h3>
           </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Slug (URL)</label>
-            <input className="input" value={form.slug} onChange={(e) => updateField('slug', e.target.value)} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Nombre del negocio</label>
+              <input className="input" value={form.businessName} onChange={(e) => updateField('businessName', e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Slug (URL)</label>
+              <input className="input" value={form.slug} onChange={(e) => updateField('slug', e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Teléfono</label>
+              <input className="input" value={form.phone} onChange={(e) => updateField('phone', e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Email</label>
+              <input className="input" value={form.email} onChange={(e) => updateField('email', e.target.value)} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-xs text-slate-500 mb-1 block">Dirección</label>
+              <input className="input" value={form.address} onChange={(e) => updateField('address', e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Zona horaria</label>
+              <select className="input" value={form.timezone} onChange={(e) => updateField('timezone', e.target.value)}>
+                <option>America/Argentina/Buenos_Aires</option>
+                <option>America/Mexico_City</option>
+                <option>America/Bogota</option>
+                <option>America/Santiago</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Moneda</label>
+              <select className="input" value={form.currency} onChange={(e) => updateField('currency', e.target.value)}>
+                <option>ARS</option>
+                <option>USD</option>
+                <option>MXN</option>
+                <option>COP</option>
+              </select>
+            </div>
           </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Teléfono</label>
-            <input className="input" value={form.phone} onChange={(e) => updateField('phone', e.target.value)} />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Email</label>
-            <input className="input" value={form.email} onChange={(e) => updateField('email', e.target.value)} />
-          </div>
-          <div className="md:col-span-2">
-            <label className="text-xs text-slate-500 mb-1 block">Dirección</label>
-            <input className="input" value={form.address} onChange={(e) => updateField('address', e.target.value)} />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Zona horaria</label>
-            <select className="input" value={form.timezone} onChange={(e) => updateField('timezone', e.target.value)}>
-              <option>America/Argentina/Buenos_Aires</option>
-              <option>America/Mexico_City</option>
-              <option>America/Bogota</option>
-              <option>America/Santiago</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Moneda</label>
-            <select className="input" value={form.currency} onChange={(e) => updateField('currency', e.target.value)}>
-              <option>ARS</option>
-              <option>USD</option>
-              <option>MXN</option>
-              <option>COP</option>
-            </select>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="card">
-        <div className="flex items-center gap-3 mb-4">
-          <Palette className="h-5 w-5 text-brand-400" />
-          <h3 className="font-semibold text-white">White-label</h3>
-          <span className="badge-active">ACTIVO</span>
-        </div>
-        <p className="text-sm text-slate-400 mb-4">
-          Tu panel, con tu marca. Ponle a tus bots un panel con tu logo, tu color y uno de tres estilos.
-        </p>
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          {THEME_OPTIONS.map((t) => (
-            <button
-              key={t.name}
-              type="button"
-              onClick={() => updateField('theme', t.name.toLowerCase())}
-              className={`rounded-lg p-4 border-2 transition-all ${
-                form.theme === t.name.toLowerCase()
-                  ? 'border-brand-500'
-                  : 'border-slate-700 hover:border-slate-600'
-              } ${t.bg}`}
-            >
-              <p className={`font-semibold ${t.text}`}>{t.name}</p>
-              <p className={`text-xs opacity-60 ${t.text}`}>{t.desc}</p>
-            </button>
-          ))}
-        </div>
-        <div>
-          <label className="text-xs text-slate-500 mb-1 block">Color de acento</label>
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              value={form.accentColor}
-              onChange={(e) => updateField('accentColor', e.target.value)}
-              className="h-10 w-10 rounded border border-slate-700 bg-transparent cursor-pointer"
-            />
-            <input
-              className="input max-w-[120px]"
-              value={form.accentColor}
-              onChange={(e) => updateField('accentColor', e.target.value)}
-            />
+        <section className="card">
+          <div className="flex items-center gap-3 mb-4">
+            <Palette className="h-5 w-5 text-brand-400" />
+            <h3 className="font-semibold text-white">White-label</h3>
+            <span className="badge-active">ACTIVO</span>
           </div>
-        </div>
-      </section>
+          <p className="text-sm text-slate-400 mb-4">
+            Tu panel, con tu marca. Ponle a tus bots un panel con tu logo, tu color y uno de tres estilos.
+          </p>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            {THEME_OPTIONS.map((t) => (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => updateField('theme', t.name.toLowerCase())}
+                className={`rounded-lg p-4 border-2 transition-all ${
+                  form.theme === t.name.toLowerCase()
+                    ? 'border-brand-500'
+                    : 'border-slate-700 hover:border-slate-600'
+                } ${t.bg}`}
+              >
+                <p className={`font-semibold ${t.text}`}>{t.name}</p>
+                <p className={`text-xs opacity-60 ${t.text}`}>{t.desc}</p>
+              </button>
+            ))}
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Color de acento</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={form.accentColor}
+                onChange={(e) => updateField('accentColor', e.target.value)}
+                className="h-10 w-10 rounded border border-slate-700 bg-transparent cursor-pointer"
+              />
+              <input
+                className="input max-w-[120px]"
+                value={form.accentColor}
+                onChange={(e) => updateField('accentColor', e.target.value)}
+              />
+            </div>
+          </div>
+        </section>
+        </>
+      ) : (
+        <section className="card space-y-3">
+          <p className="text-sm text-slate-400">
+            No pudimos cargar los datos del negocio, por eso no se pueden editar ni guardar por ahora.
+          </p>
+          <ErrorAlert message={error ?? 'Error al cargar configuración'} onRetry={refetch} />
+        </section>
+      )}
 
       <section className="card">
         <p className="text-sm text-slate-400 mb-4">
@@ -549,12 +593,14 @@ export default function ConfiguracionPage() {
                             className={`w-8 h-4 rounded-full relative transition-colors ${sched.isActive ? 'bg-emerald-500' : 'bg-slate-600'}`}>
                             <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${sched.isActive ? 'right-0.5' : 'left-0.5'}`} />
                           </button>
-                          <input type="time" value={sched.startTime}
-                            onChange={(e) => handleUpdateTime(sched, 'startTime', e.target.value)}
+                          <input type="time" value={timeDrafts[draftKey(sched, 'startTime')] ?? sched.startTime}
+                            onChange={(e) => setTimeDrafts((prev) => ({ ...prev, [draftKey(sched, 'startTime')]: e.target.value }))}
+                            onBlur={() => handleTimeBlur(sched, 'startTime')}
                             className="input text-xs py-1 px-2 w-24" disabled={!sched.isActive} />
                           <span className="text-slate-500 text-xs">a</span>
-                          <input type="time" value={sched.endTime}
-                            onChange={(e) => handleUpdateTime(sched, 'endTime', e.target.value)}
+                          <input type="time" value={timeDrafts[draftKey(sched, 'endTime')] ?? sched.endTime}
+                            onChange={(e) => setTimeDrafts((prev) => ({ ...prev, [draftKey(sched, 'endTime')]: e.target.value }))}
+                            onBlur={() => handleTimeBlur(sched, 'endTime')}
                             className="input text-xs py-1 px-2 w-24" disabled={!sched.isActive} />
                           <button type="button" onClick={() => handleDeleteSchedule(sched.id)}
                             className="text-slate-500 hover:text-red-400 transition-colors">
@@ -572,7 +618,7 @@ export default function ConfiguracionPage() {
       </section>
 
       <div className="flex justify-end">
-        <button className="btn-primary" type="submit" disabled={isSaving}>
+        <button className="btn-primary" type="submit" disabled={isSaving || !form}>
           <Save className="h-4 w-4" /> {isSaving ? 'Guardando...' : 'Guardar cambios'}
         </button>
       </div>

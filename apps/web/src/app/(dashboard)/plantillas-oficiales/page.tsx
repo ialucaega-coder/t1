@@ -29,6 +29,7 @@ import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 // Estilos del badge de ESTADO (misma lógica visual que campañas).
 const STATUS_INFO: Record<WaTemplateStatus, { label: string; class: string }> = {
@@ -113,6 +114,9 @@ export default function PlantillasOficialesPage() {
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejecting, setRejecting] = useState(false);
+
+  // Plantilla pendiente de confirmar para borrar.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -297,6 +301,7 @@ export default function PlantillasOficialesPage() {
       toast({ type: 'error', message: err instanceof Error ? err.message : 'Error al eliminar la plantilla' });
     } finally {
       setBusyId(null);
+      setDeleteTarget(null);
     }
   }
 
@@ -434,7 +439,7 @@ export default function PlantillasOficialesPage() {
                       </button>
                     )}
                     <button
-                      onClick={() => handleDelete(t.id)}
+                      onClick={() => setDeleteTarget({ id: t.id, name: t.name })}
                       disabled={busy}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                       aria-label="Eliminar plantilla"
@@ -698,6 +703,17 @@ export default function PlantillasOficialesPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && handleDelete(deleteTarget.id)}
+        title="¿Eliminar plantilla?"
+        message={`Vas a eliminar la plantilla "${deleteTarget?.name ?? ''}". Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleteTarget !== null && busyId === deleteTarget.id}
+      />
     </div>
   );
 }
