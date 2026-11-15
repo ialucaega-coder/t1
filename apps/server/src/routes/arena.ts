@@ -84,7 +84,7 @@ router.post(
         rank: PODIUM_SIZE + 1 + existing,
         description,
         systemPrompt: systemPrompt || '',
-        model: model || 'claude-sonnet-5',
+        model: model || 'claude-sonnet-5-5',
         temperature: temperature || 0.7,
         businessId: req.auth!.businessId,
       },

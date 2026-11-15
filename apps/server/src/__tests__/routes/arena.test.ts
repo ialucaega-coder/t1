@@ -103,7 +103,7 @@ describe('routes/arena', () => {
           data: expect.objectContaining({
             name: 'Bot 1',
             systemPrompt: '',
-            model: 'claude-sonnet-5',
+            model: 'claude-sonnet-5-5',
             temperature: 0.7,
             businessId: 'biz_1',
           }),
