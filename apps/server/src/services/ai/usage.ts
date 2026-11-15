@@ -9,7 +9,12 @@
  */
 import { prisma } from '../../lib/prisma';
 
-/** Precio de lista público aproximado, USD por 1M de tokens (input/output). */
+/**
+ * Precio APROXIMADO en USD por 1M de tokens (input/output). Son estimaciones para
+ * mostrar consumo, no facturación: los precios de la familia Claude 5 no están
+ * verificados contra la lista oficial (se usan los de la generación anterior por
+ * familia). Revisar contra la página de precios del proveedor antes de cobrar con esto.
+ */
 interface Price { in: number; out: number; }
 const PRICING: Record<string, Price> = {
   // Claves genéricas (matchean cualquier variante, p. ej. claude-3-opus) y

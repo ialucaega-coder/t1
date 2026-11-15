@@ -73,7 +73,15 @@ export const AI_ENGINES: AIEngine[] = [
   },
   // ── Anthropic Claude (SDK nativo) ──────────────────────────────────────
   {
-    id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'anthropic',
+    id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'anthropic', model: 'claude-sonnet-5-5',
+    type: 'api', vision: true, kind: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY', icon: 'Bot',
+  },
+  {
+    id: 'claude-haiku', name: 'Claude Haiku (rápido y económico)', provider: 'anthropic', model: 'claude-haiku-5-5',
+    type: 'api', vision: true, kind: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY', icon: 'Zap',
+  },
+  {
+    id: 'claude-opus', name: 'Claude Opus (máxima calidad)', provider: 'anthropic', model: 'claude-opus-5-5',
     type: 'api', vision: true, kind: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY', icon: 'Bot',
   },
   // ── OpenAI ─────────────────────────────────────────────────────────────

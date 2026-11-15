@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AIProvider, AIProviderConfig, ConversationContext, ImageInput } from '../provider';
 import { LLM_TIMEOUT_MS } from '../provider';
 
-const DEFAULT_MODEL = 'claude-sonnet-4-5';
+const DEFAULT_MODEL = 'claude-sonnet-5-5';
 const DEFAULT_MAX_TOKENS = 1024;
 
 export class AnthropicProvider implements AIProvider {
