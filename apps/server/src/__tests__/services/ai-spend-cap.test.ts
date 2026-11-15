@@ -62,6 +62,15 @@ describe('services/ai/spendCap', () => {
     await expect(enforceSpendCap('b1')).resolves.toBeUndefined();
   });
 
+  it('alwaysSpend calcula el gasto aunque no haya tope (ratio null)', async () => {
+    m(prisma.connection.findFirst).mockResolvedValue(null);
+    spend(1.2);
+    const s = await getSpendStatus('b1', true);
+    expect(s.capUsd).toBeNull();
+    expect(s.ratio).toBeNull();
+    expect(s.spentUsd).toBeCloseTo(1.2, 3);
+  });
+
   it('al 100 % corta con SpendCapError y avisa una sola vez', async () => {
     m(prisma.connection.findFirst).mockResolvedValue({ config: { capUsd: 10 } });
     spend(10.5);

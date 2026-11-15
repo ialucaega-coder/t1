@@ -30,8 +30,8 @@ export type SpendLevel = 'ok' | 'warn' | 'blocked';
 export interface SpendStatus {
   capUsd: number | null;
   spentUsd: number;
-  /** 0..n (puede superar 1 si ya se pasó). 0 sin tope. */
-  ratio: number;
+  /** 0..n (puede superar 1 si ya se pasó). null sin tope. */
+  ratio: number | null;
   level: SpendLevel;
   month: string;
 }
@@ -77,17 +77,24 @@ export function levelFor(spentUsd: number, capUsd: number | null): SpendLevel {
   return 'ok';
 }
 
-/** Estado actual del tope del negocio (cacheado 30 s). */
-export async function getSpendStatus(businessId: string): Promise<SpendStatus> {
-  const key = cacheKey(businessId, 'ai-spend-status');
+/**
+ * Estado actual del tope del negocio (cacheado 30 s). Sin tope solo calcula el
+ * gasto si `alwaysSpend` (panel); el camino por mensaje (enforceSpendCap) no
+ * paga esa query para negocios sin tope.
+ */
+export async function getSpendStatus(businessId: string, alwaysSpend = false): Promise<SpendStatus> {
+  const key = cacheKey(businessId, 'ai-spend-status', alwaysSpend ? 'full' : 'cap');
   const cached = cache.get<SpendStatus>(key);
   if (cached) return cached;
 
   const { month, since } = currentMonthWindow();
   const cfg = await loadConfig(businessId);
   let status: SpendStatus;
-  if (!cfg.capUsd) {
-    status = { capUsd: null, spentUsd: 0, ratio: 0, level: 'ok', month };
+  if (!cfg.capUsd && !alwaysSpend) {
+    status = { capUsd: null, spentUsd: 0, ratio: null, level: 'ok', month };
+  } else if (!cfg.capUsd) {
+    const spentUsd = Math.round((await getSpendSince(businessId, since)) * 10000) / 10000;
+    status = { capUsd: null, spentUsd, ratio: null, level: 'ok', month };
   } else {
     const spent = await getSpendSince(businessId, since);
     const spentUsd = Math.round(spent * 10000) / 10000;
@@ -155,7 +162,7 @@ async function claimAlert(businessId: string, month: string, which: 'warned' | '
 async function notifyAdmin(businessId: string, level: 'warn' | 'blocked', status: SpendStatus): Promise<void> {
   const admin = await prisma.user.findFirst({ where: { businessId, role: 'ADMIN' }, select: { id: true } });
   if (!admin) return;
-  const pct = Math.round(status.ratio * 100);
+  const pct = Math.round((status.ratio ?? 0) * 100);
   await prisma.notification.create({
     data: {
       userId: admin.id,

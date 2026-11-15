@@ -253,7 +253,7 @@ const spendCapSchema = z.object({
  * Tope mensual de gasto de IA del negocio y cuánto lleva gastado este mes.
  */
 router.get('/spend-cap', requireAuth, asyncHandler(async (req, res) => {
-  res.json(await getSpendStatus(req.auth!.businessId));
+  res.json(await getSpendStatus(req.auth!.businessId, true));
 }));
 
 /**
@@ -263,7 +263,7 @@ router.get('/spend-cap', requireAuth, asyncHandler(async (req, res) => {
 router.put('/spend-cap', requireAuth, requireRole('ADMIN'), validate(spendCapSchema), asyncHandler(async (req, res) => {
   const { capUsd } = req.body as z.infer<typeof spendCapSchema>;
   await setSpendCap(req.auth!.businessId, capUsd);
-  res.json(await getSpendStatus(req.auth!.businessId));
+  res.json(await getSpendStatus(req.auth!.businessId, true));
 }));
 
 /**
@@ -300,7 +300,7 @@ router.get('/spend-overview', requireAuth, requirePlatformAdmin, asyncHandler(as
         name: names.get(id) ?? id,
         spentUsd,
         capUsd,
-        ratio: capUsd ? spentUsd / capUsd : 0,
+        ratio: capUsd ? spentUsd / capUsd : null,
         level: levelFor(spentUsd, capUsd),
       };
     })
