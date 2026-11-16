@@ -7,6 +7,7 @@ import type { ChatTurn } from '@/types';
 import { useToast } from '@/components/common/Toast';
 import { MotorDeIA } from './MotorDeIA';
 import { UsageFinOps } from './UsageFinOps';
+import { SpendCapCard } from '@/components/ai/SpendCapCard';
 
 export default function IAPage() {
   return (
@@ -22,6 +23,7 @@ export default function IAPage() {
 
       <MotorDeIA />
       <UsageFinOps />
+      <SpendCapCard />
       <PromptEditorSection />
       <TestChatSection />
     </div>

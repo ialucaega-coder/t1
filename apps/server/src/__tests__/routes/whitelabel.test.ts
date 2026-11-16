@@ -134,6 +134,28 @@ describe('routes/whitelabel', () => {
       );
     });
 
+    describe('name (misma regla que el registro)', () => {
+      const bidi = String.fromCharCode(0x202e);
+      it.each([
+        ['demasiado largo (>80)', 'a'.repeat(81)],
+        ['con salto de línea', 'Banco\nAlerta'],
+        ['con carácter bidi', 'Banco' + bidi + 'tfel'],
+      ])('rechaza (400) un nombre %s y no escribe en la base', async (_label, name) => {
+        const res = await request(app).patch('/api/whitelabel').send({ name });
+
+        expect(res.status).toBe(400);
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it('acepta un nombre normal', async () => {
+        mock(prisma.business.update).mockResolvedValue({ ...businessRow, name: 'Peluquería Ana' });
+
+        const res = await request(app).patch('/api/whitelabel').send({ name: 'Peluquería Ana' });
+
+        expect(res.status).toBe(200);
+      });
+    });
+
     it('rechaza (409) un whatsappNumber ya usado por otro negocio', async () => {
       mock(prisma.business.findFirst).mockResolvedValue({ id: 'otro_biz' }); // número tomado
       const res = await request(app).patch('/api/whitelabel').send({ name: 'X', whatsappNumber: '+5491122223333' });

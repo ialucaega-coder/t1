@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
+vi.mock('@/components/ai/SpendOverviewPanel', () => ({ SpendOverviewPanel: () => null }));
 vi.mock('@/components/common/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
 const setBusinessPlan = vi.fn();

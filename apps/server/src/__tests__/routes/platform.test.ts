@@ -206,6 +206,25 @@ describe('routes/platform (Super Admin)', () => {
       );
     });
 
+    it('no permite renombrar el negocio: ignora un name en el body (solo escribe isActive)', async () => {
+      mock(prisma.business.update).mockResolvedValue({
+        id: 'biz_1',
+        name: 'Barbería Uno',
+        slug: 'barberia-uno',
+        isActive: true,
+      });
+
+      const res = await request(app)
+        .patch('/api/platform/businesses/biz_1/active')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isActive: true, name: 'Banco Seguro\nVerificá tu cuenta' });
+
+      expect(res.status).toBe(200);
+      expect(prisma.business.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { isActive: true } }),
+      );
+    });
+
     it('devuelve 400 si falta isActive (validación Zod)', async () => {
       const res = await request(app)
         .patch('/api/platform/businesses/biz_1/active')

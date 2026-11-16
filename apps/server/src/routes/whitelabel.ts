@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
+import { businessNameSchema } from '../validators/common';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import {
@@ -12,7 +13,7 @@ import {
 } from '../services/whitelabel/config';
 
 const updateWhitelabelSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
+  name: businessNameSchema(1).optional(),
   description: z.string().max(1000).optional(),
   logo: z.string().url().max(500).optional().nullable(),
   primaryColor: z.string().max(20).optional(),

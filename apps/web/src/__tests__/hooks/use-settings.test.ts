@@ -97,6 +97,23 @@ describe('hooks/use-settings', () => {
     expect(result.current.settings?.businessName).toBe('Original');
   });
 
+  it('al reintentar tras un error mantiene el error hasta cargar bien y limpia al éxito', async () => {
+    mockGet.mockRejectedValueOnce(new Error('API caída'));
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.error).toBe('API caída'));
+
+    let resolve!: (v: unknown) => void;
+    mockGet.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    act(() => result.current.refetch());
+    await waitFor(() => expect(result.current.isLoading).toBe(true));
+    expect(result.current.error).toBe('API caída');
+
+    await act(async () => resolve({ businessName: 'Real' }));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.error).toBeNull();
+    expect(result.current.settings?.businessName).toBe('Real');
+  });
+
   it('refetch vuelve a pedir la configuración', async () => {
     mockGet.mockResolvedValue({ businessName: 'Original' });
 

@@ -101,3 +101,48 @@ export interface MessageQuota {
 export function getQuota() {
   return httpClient.get<MessageQuota>('/ai/quota');
 }
+
+// ── Tope mensual de gasto de IA ────────────────────────────────────────
+
+export type SpendLevel = 'ok' | 'warn' | 'blocked';
+
+export interface SpendStatus {
+  /** null = sin tope. */
+  capUsd: number | null;
+  /** Gasto estimado del mes en USD (real aunque no haya tope). */
+  spentUsd: number;
+  /** 0..n (puede pasar de 1). null cuando no hay tope. */
+  ratio: number | null;
+  level: SpendLevel;
+  month: string;
+}
+
+export function getSpendCap() {
+  return httpClient.get<SpendStatus>('/ai/spend-cap');
+}
+
+/** Solo ADMIN. `null` quita el tope. */
+export function setSpendCap(capUsd: number | null) {
+  return httpClient.put<SpendStatus>('/ai/spend-cap', { capUsd });
+}
+
+export interface SpendOverviewRow {
+  businessId: string;
+  name: string;
+  spentUsd: number;
+  capUsd: number | null;
+  /** null cuando el negocio no tiene tope. */
+  ratio: number | null;
+  level: SpendLevel;
+}
+
+export interface SpendOverview {
+  month: string;
+  totalUsd: number;
+  businesses: SpendOverviewRow[];
+}
+
+/** Solo platform admin. */
+export function getSpendOverview() {
+  return httpClient.get<SpendOverview>('/ai/spend-overview');
+}

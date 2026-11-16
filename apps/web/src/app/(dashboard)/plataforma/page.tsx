@@ -30,6 +30,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Modal } from '@/components/ui/Modal';
+import { SpendOverviewPanel } from '@/components/ai/SpendOverviewPanel';
 
 const PLAN_TIERS: PlanTier[] = ['FREE', 'STARTER', 'PRO', 'ENTERPRISE'];
 const PLAN_LABELS: Record<PlanTier, string> = {
@@ -320,6 +321,8 @@ export default function PlataformaPage() {
           </button>
         </div>
       )}
+
+      <SpendOverviewPanel />
 
       <Modal
         isOpen={featuresFor !== null}

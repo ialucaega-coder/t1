@@ -119,6 +119,32 @@ describe('routes/settings', () => {
       );
     });
 
+    describe('businessName (misma regla que el registro)', () => {
+      const bidi = String.fromCharCode(0x202e);
+      it.each([
+        ['demasiado largo (>80)', 'a'.repeat(81)],
+        ['con salto de línea', 'Banco\nBcc: x@y.com'],
+        ['con carácter bidi', 'Banco' + bidi + 'tfel'],
+        ['con ancho cero', 'Ban' + String.fromCharCode(0x200b) + 'co'],
+      ])('rechaza (400) un nombre %s y no escribe en la base', async (_label, businessName) => {
+        const res = await request(app).put('/api/settings').send({ businessName });
+
+        expect(res.status).toBe(400);
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it('acepta un nombre normal y lo guarda recortado', async () => {
+        mock(prisma.business.update).mockResolvedValue({ ...businessRow, name: "Peluquería D'Sol" });
+
+        const res = await request(app).put('/api/settings').send({ businessName: "  Peluquería D'Sol  " });
+
+        expect(res.status).toBe(200);
+        expect(prisma.business.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ name: "Peluquería D'Sol" }) })
+        );
+      });
+    });
+
     it('devuelve 400 con un slug invalido (validacion Zod)', async () => {
       const res = await request(app).put('/api/settings').send({ slug: 'Slug Invalido!' });
 

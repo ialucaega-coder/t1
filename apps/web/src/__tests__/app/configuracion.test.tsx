@@ -126,6 +126,52 @@ describe('configuracion/page - falla de carga', () => {
   });
 });
 
+describe('configuracion/page - reintento sin parpadeo', () => {
+  it('durante el reintento tras un error no muestra el spinner de página completa', async () => {
+    mockSettings({ settings: null, error: 'API caída', isLoading: true });
+    render(<ConfiguracionPage />);
+
+    expect(await screen.findByText('Reintentando...')).toBeInTheDocument();
+    expect(screen.queryByText('Cargando configuración...')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /guardar cambios/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /reintentar/i })).not.toBeInTheDocument();
+  });
+
+  it('con datos ya cargados, un refetch no desmonta el formulario', async () => {
+    mockSettings({ isLoading: true });
+    render(<ConfiguracionPage />);
+
+    expect(await screen.findByDisplayValue('Peluquería Ana')).toBeInTheDocument();
+    expect(screen.queryByText('Cargando configuración...')).not.toBeInTheDocument();
+  });
+
+  it('la carga inicial sí muestra el spinner', async () => {
+    mockSettings({ settings: null, error: null, isLoading: true });
+    render(<ConfiguracionPage />);
+
+    expect(await screen.findByText('Cargando configuración...')).toBeInTheDocument();
+  });
+});
+
+describe('configuracion/page - falla de carga de horarios', () => {
+  it('muestra error con Reintentar en vez de días "Cerrado" y permite reintentar', async () => {
+    mockSettings();
+    mockGetSchedules.mockRejectedValueOnce(new Error('Horarios caídos'));
+    render(<ConfiguracionPage />);
+
+    expect(await screen.findByText('Horarios caídos')).toBeInTheDocument();
+    expect(screen.queryByText('Cerrado')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /agregar/i })).not.toBeInTheDocument();
+
+    mockGetSchedules.mockResolvedValueOnce([SCHEDULE]);
+    fireEvent.click(screen.getByRole('button', { name: /reintentar/i }));
+
+    await waitFor(() => expect(screen.queryByText('Horarios caídos')).not.toBeInTheDocument());
+    expect(await screen.findByDisplayValue('09:00')).toBeInTheDocument();
+    expect(mockGetSchedules).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('configuracion/page - horarios', () => {
   it('guarda la hora una sola vez al perder el foco, no en cada cambio', async () => {
     mockSettings();

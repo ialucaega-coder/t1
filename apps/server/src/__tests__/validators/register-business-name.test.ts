@@ -29,3 +29,12 @@ describe('registerSchema.businessName', () => {
     expect(parse('Ban​co').success).toBe(false);
   });
 });
+
+describe('businessNameSchema compartido', () => {
+  it('min configurable: 1 para settings/whitelabel, 2 para registro', async () => {
+    const { businessNameSchema } = await import('../../validators/common');
+    expect(businessNameSchema(1).safeParse('X').success).toBe(true);
+    expect(businessNameSchema(2).safeParse('X').success).toBe(false);
+    expect(businessNameSchema(1).safeParse('   ').success).toBe(false);
+  });
+});

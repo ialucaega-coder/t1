@@ -25,10 +25,14 @@ export function useSettings(): UseSettingsResult {
 
     async function load() {
       setIsLoading(true);
-      setError(null);
+      // El error previo se mantiene mientras se reintenta (se limpia recién al
+      // cargar bien) para que la pantalla no parpadee ni se desmonte.
       try {
         const data = await settingsApi.getSettings();
-        if (!cancelled) setSettings(data);
+        if (!cancelled) {
+          setSettings(data);
+          setError(null);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar configuración');

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { businessNameSchema } from './common';
 
 /**
  * Normaliza un email: recorta espacios y lo convierte a minúsculas.
@@ -34,12 +35,7 @@ export const registerSchema = z.object({
   name: z.string().min(2).trim(),
   // El nombre del negocio se muestra en mails que salen del dominio oficial (invitaciones):
   // se acota y se rechazan saltos de línea y caracteres de control/formato (bidi, etc.).
-  businessName: z
-    .string()
-    .trim()
-    .min(2)
-    .max(80, 'El nombre del negocio no puede superar los 80 caracteres')
-    .regex(/^[^\p{Cc}\p{Cf}\u2028\u2029]+$/u, 'El nombre del negocio no puede tener saltos de línea ni caracteres de control'),
+  businessName: businessNameSchema(2),
 });
 
 /** Credenciales de inicio de sesión. */

@@ -34,6 +34,9 @@ export default function ConfiguracionPage() {
   // Borradores de los inputs de hora: se guardan al perder el foco (no en cada cambio).
   const [timeDrafts, setTimeDrafts] = useState<Record<string, string>>({});
   const [loadingSchedules, setLoadingSchedules] = useState(true);
+  // Mensaje si no se pudieron cargar los horarios: sin esto la grilla mostraría
+  // todos los días "Cerrado" como si fuera real.
+  const [schedulesError, setSchedulesError] = useState<string | null>(null);
   const [profileName, setProfileName] = useState(user?.name || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -89,11 +92,16 @@ export default function ConfiguracionPage() {
   }
 
   const fetchSchedules = useCallback(async () => {
+    setLoadingSchedules(true);
     try {
       const data = await schedulesApi.getSchedules();
       setSchedules(data);
-    } catch { /* ignore */ }
-    setLoadingSchedules(false);
+      setSchedulesError(null);
+    } catch (err) {
+      setSchedulesError(errorMessage(err, 'No se pudieron cargar los horarios'));
+    } finally {
+      setLoadingSchedules(false);
+    }
   }, []);
 
   useEffect(() => { fetchSchedules(); }, [fetchSchedules]);
@@ -268,7 +276,10 @@ export default function ConfiguracionPage() {
     }
   };
 
-  if (isLoading) {
+  // Spinner de página completa solo en la carga inicial. En un reintento tras error
+  // (`error` sigue seteado hasta que cargue bien) o con datos ya cargados se
+  // mantiene la pantalla, así no se desmonta el formulario ni parpadea.
+  if (isLoading && !settings && !error) {
     return <LoadingSpinner label="Cargando configuración..." />;
   }
 
@@ -546,7 +557,10 @@ export default function ConfiguracionPage() {
           <p className="text-sm text-slate-400">
             No pudimos cargar los datos del negocio, por eso no se pueden editar ni guardar por ahora.
           </p>
-          <ErrorAlert message={error ?? 'Error al cargar configuración'} onRetry={refetch} />
+          <ErrorAlert
+            message={isLoading ? 'Reintentando...' : (error ?? 'Error al cargar configuración')}
+            onRetry={isLoading ? undefined : refetch}
+          />
         </section>
       )}
 
@@ -570,6 +584,8 @@ export default function ConfiguracionPage() {
         </p>
         {loadingSchedules ? (
           <LoadingSpinner label="Cargando horarios..." />
+        ) : schedulesError ? (
+          <ErrorAlert message={schedulesError} onRetry={fetchSchedules} />
         ) : (
           <div className="space-y-2">
             {DAYS.map((day, idx) => {
