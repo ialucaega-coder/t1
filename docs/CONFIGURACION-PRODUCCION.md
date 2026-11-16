@@ -46,18 +46,29 @@ Variables del servicio (idealmente en Secret Manager):
 - Obligatorias: `DATABASE_URL`, `DIRECT_URL`, `NEXTAUTH_SECRET` (`openssl rand -base64 32`),
   `ENCRYPTION_KEY` (propia), `PLATFORM_ADMIN_EMAILS`, `FRONTEND_URL`, `FRONTEND_URLS`,
   `API_PUBLIC_URL`, `TRUST_PROXY_HOPS=1`, `NODE_ENV=production`.
-- IA: `ANTHROPIC_API_KEY` (y/o `OPENAI_API_KEY`), `AI_PROVIDER`.
+- IA: `ANTHROPIC_API_KEY` (y/o `OPENAI_API_KEY`), `AI_PROVIDER`. El modelo sale del
+  catálogo (`services/ai/catalog.ts`), NO de `ANTHROPIC_MODEL`. Opcionales:
+  `AI_FAILOVER=false` (apaga el respaldo entre proveedores), `LLM_TIMEOUT_MS` (default 30000).
+  Cada negocio puede fijar su tope mensual de gasto de IA desde el panel.
 - Pagos: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 - Canales: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`,
   `META_VERIFY_TOKEN`, `META_APP_SECRET`. Telegram: cada negocio carga su bot.
-- Email: `RESEND_API_KEY`, `EMAIL_FROM`. Errores: `SENTRY_DSN`.
+- Email: `RESEND_API_KEY`, `EMAIL_FROM` (mails y campañas por email). Errores: `SENTRY_DSN`.
+- Links públicos: `API_PUBLIC_URL` (dominio público del API, con HTTPS: lo necesita
+  MercadoPago para avisar los pagos y Telegram para el webhook) y `FRONTEND_URL`
+  (links de invitación de equipo).
+- Colas y jobs: `IDEMPOTENCY_TTL_DAYS` (default 30; purga de claves viejas),
+  `QUEUES_DISABLED=true` (fuerza modo inline aun con Redis), `RUN_WORKERS=false` y
+  `RUN_SCHEDULER=false` (dejan una instancia sin workers / sin cron; ver sección 4).
+- Solo desarrollo: `DEV_LOG_INVITE_LINKS` (loguea links de invitación; no setear en producción).
 - Opcional: `PUBLIC_BOOKING_REQUIRE_OTP=true` (requiere Twilio).
 - Nunca setear `SKIP_WEBHOOK_SIGNATURE_VALIDATION`.
 
 ## 4. Redis (solo con 2+ instancias)
 
 `REDIS_URL` en todas las instancias; al menos una con workers (no poner `RUN_WORKERS=false`
-en todas). `connection_limit × instancias` debe quedar bajo el máximo del pooler de Supabase.
+en todas) y al menos una con scheduler (no poner `RUN_SCHEDULER=false` en todas): el
+scheduler dispara los jobs diarios y, cada minuto, el envío de campañas programadas. `connection_limit × instancias` debe quedar bajo el máximo del pooler de Supabase.
 
 ## 5. Webhooks externos (URLs reales, verificadas en el código)
 
@@ -68,6 +79,8 @@ en todas). `connection_limit × instancias` debe quedar bajo el máximo del pool
 | Twilio Voz | `https://<server>/api/voice/incoming` |
 | Meta (Instagram/Messenger) | `https://<server>/api/meta/webhook` (GET de verificación + POST) |
 | Telegram | Se registra solo al conectar el bot (`/api/telegram/webhook/<negocio>`) |
+| MercadoPago | `https://<server>/api/mercadopago/webhook/<negocio>` (requiere `API_PUBLIC_URL`) |
+| ManyChat | `https://<server>/api/manychat/webhook/<negocio>`, con el header `x-webhook-token` |
 
 ## 6. Orden sugerido
 
