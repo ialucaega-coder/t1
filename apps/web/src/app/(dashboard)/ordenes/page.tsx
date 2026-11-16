@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Package, Search, ChevronLeft, ChevronRight, Eye, X,
-  Clock, DollarSign, User, ShoppingBag, ShoppingCart,
+  Clock, User, ShoppingBag, ShoppingCart, Plus,
 } from 'lucide-react';
 import * as ordersApi from '@/lib/api/orders';
 import type { Order } from '@/types';
@@ -12,6 +12,18 @@ import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { useToast } from '@/components/common/Toast';
+import { NewOrderModal } from '@/components/orders/NewOrderModal';
+import { OrderNotes } from '@/components/orders/OrderNotes';
+
+/**
+ * Mensaje del server si lo hay (p. ej. transición no permitida), si no el genérico.
+ * Las transiciones válidas se validan en el server (PATCH /orders/:id/status):
+ * adelante (se pueden saltear pasos), a CANCELLED desde un estado no final, y
+ * nunca hacia atrás ni desde ENTREGADA/CANCELADA.
+ */
+function errMsg(err: unknown, fallback: string) {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; next?: string; nextLabel?: string }> = {
   PENDING: { label: 'Pendiente', color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', next: 'CONFIRMED', nextLabel: 'Confirmar' },
@@ -30,6 +42,9 @@ export default function OrdenesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [showNew, setShowNew] = useState(false);
   const [selected, setSelected] = useState<Order | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<Order | null>(null);
@@ -40,6 +55,7 @@ export default function OrdenesPage() {
     try {
       const params: Record<string, string> = { page: String(page), pageSize: '20' };
       if (statusFilter) params.status = statusFilter;
+      if (search) params.search = search;
       const res = await ordersApi.getOrders(params);
       setOrders(res.data);
       setTotal(res.total);
@@ -49,9 +65,19 @@ export default function OrdenesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [page, statusFilter]);
+  }, [page, statusFilter, search]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
+
+  // La búsqueda se manda al server (cliente o código ORD-XXXXXXXX) con una espera corta.
+  useEffect(() => {
+    if (searchInput.trim() === search) return;
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput, search]);
 
   async function handleAdvanceStatus(order: Order) {
     const cfg = STATUS_CONFIG[order.status];
@@ -62,9 +88,8 @@ export default function OrdenesPage() {
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selected?.id === order.id) setSelected(updated);
       toast({ type: 'success', message: 'Estado de orden actualizado correctamente' });
-    } catch {
-      setError('Error al actualizar estado');
-      toast({ type: 'error', message: 'Error al actualizar estado de la orden' });
+    } catch (err) {
+      toast({ type: 'error', message: errMsg(err, 'Error al actualizar estado de la orden') });
     } finally {
       setUpdatingStatus(false);
     }
@@ -77,9 +102,8 @@ export default function OrdenesPage() {
       setOrders((prev) => prev.map((o) => (o.id === order.id ? updated : o)));
       if (selected?.id === order.id) setSelected(updated);
       toast({ type: 'success', message: 'Orden cancelada correctamente' });
-    } catch {
-      setError('Error al cancelar');
-      toast({ type: 'error', message: 'Error al cancelar orden' });
+    } catch (err) {
+      toast({ type: 'error', message: errMsg(err, 'Error al cancelar la orden') });
     } finally {
       setUpdatingStatus(false);
     }
@@ -96,10 +120,25 @@ export default function OrdenesPage() {
         onClose={() => setCancelTarget(null)}
         onConfirm={() => { if (cancelTarget) { handleCancel(cancelTarget); } setCancelTarget(null); }}
         title="Cancelar orden"
-        message="¿Cancelar esta orden?"
-        confirmLabel="Cancelar orden"
-        variant="warning"
+        message={`¿Cancelar la orden ${cancelTarget ? 'ORD-' + cancelTarget.id.slice(-8).toUpperCase() : ''}? Se le avisa al cliente y no se puede reabrir. Esto no devuelve el stock ni el cobro: hacelo aparte si corresponde.`}
+        confirmLabel="Sí, cancelar orden"
+        cancelLabel="Volver"
+        variant="danger"
+        loading={updatingStatus}
       />
+
+      {showNew && (
+        <NewOrderModal
+          onClose={() => setShowNew(false)}
+          onCreated={(order) => {
+            setShowNew(false);
+            setSelected(order);
+            toast({ type: 'success', message: 'Orden creada correctamente' });
+            if (page !== 1) setPage(1);
+            else fetchOrders();
+          }}
+        />
+      )}
 
       <div className="flex items-center justify-between">
         <div>
@@ -109,6 +148,22 @@ export default function OrdenesPage() {
             {pendingCount > 0 && <span className="text-yellow-400 ml-2">{pendingCount} pendiente{pendingCount !== 1 ? 's' : ''}</span>}
           </p>
         </div>
+        <button onClick={() => setShowNew(true)} className="btn-primary text-xs">
+          <Plus className="h-3.5 w-3.5" /> Nueva orden
+        </button>
+      </div>
+
+      {/* Búsqueda */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Buscar por cliente o código (ORD-...)"
+          aria-label="Buscar órdenes"
+          className="input w-full pl-10"
+        />
       </div>
 
       {/* Filters */}
@@ -141,7 +196,7 @@ export default function OrdenesPage() {
           {isLoading ? (
             <LoadingSpinner label="Cargando órdenes..." />
           ) : orders.length === 0 ? (
-            <EmptyState icon={ShoppingCart} title="No hay órdenes" description={statusFilter ? 'No hay órdenes con ese estado' : undefined} />
+            <EmptyState icon={ShoppingCart} title="No hay órdenes" description={statusFilter || search ? 'No hay órdenes con esos filtros' : undefined} />
           ) : (
             <>
               {orders.map((order) => {
@@ -255,12 +310,14 @@ export default function OrdenesPage() {
                 <span className="text-lg font-bold font-mono text-white">${Number(selected.totalPrice).toLocaleString('es-AR')}</span>
               </div>
 
-              {selected.notes && (
-                <div className="rounded-lg bg-slate-900/50 p-3">
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Notas</p>
-                  <p className="text-xs text-slate-300">{selected.notes}</p>
-                </div>
-              )}
+              <OrderNotes
+                order={selected}
+                onSaved={(updated) => {
+                  setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
+                  setSelected(updated);
+                  toast({ type: 'success', message: 'Nota guardada' });
+                }}
+              />
 
               {/* Actions */}
               {selected.status !== 'DELIVERED' && selected.status !== 'CANCELLED' && (

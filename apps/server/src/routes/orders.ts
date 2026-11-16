@@ -1,10 +1,19 @@
 import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireStaff } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
-import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrderStatusInput } from '../validators/orders';
+import {
+  createOrderSchema,
+  updateOrderStatusSchema,
+  updateOrderNotesSchema,
+  listOrdersQuerySchema,
+  canTransitionOrder,
+  CreateOrderInput,
+  UpdateOrderStatusInput,
+  UpdateOrderNotesInput,
+} from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendOrderStatusUpdate, sendOrderCreated } from '../services/notifications';
@@ -34,10 +43,28 @@ async function loadIdempotentOrder(
 router.get(
   '/',
   requireAuth,
+  requireStaff,
   asyncHandler(async (req, res) => {
-    const { status, page, pageSize } = req.query;
-    const where: Record<string, unknown> = { businessId: req.auth!.businessId };
+    const { page, pageSize } = req.query;
+    const { status, search } = listOrdersQuerySchema.parse({
+      status: req.query.status || undefined,
+      search: typeof req.query.search === 'string' && req.query.search.trim() ? req.query.search : undefined,
+    });
+    // Siempre acotado al negocio del usuario autenticado (multi-tenant).
+    const where: Prisma.OrderWhereInput = { businessId: req.auth!.businessId };
     if (status) where.status = status;
+    if (search) {
+      const or: Prisma.OrderWhereInput[] = [
+        { client: { name: { contains: search, mode: 'insensitive' } } },
+        { client: { email: { contains: search, mode: 'insensitive' } } },
+        { client: { phone: { contains: search } } },
+      ];
+      // Código de orden: "ORD-" + últimos 8 del id en mayúsculas. Aceptamos el
+      // código completo o solo el sufijo (los ids son cuid en minúscula).
+      const code = search.replace(/^ord-?/i, '').toLowerCase();
+      if (/^[a-z0-9]{3,25}$/.test(code)) or.push({ id: { endsWith: code } });
+      where.OR = or;
+    }
 
     // Evita N+1: cliente e items (con su producto) vienen en una sola query vía include.
     const include = {
@@ -101,8 +128,18 @@ router.post(
       }
     }
 
+    // Unifica líneas repetidas del mismo producto (suma cantidades): sin esto, un
+    // producto cargado dos veces hacía fallar el chequeo de existencia de abajo.
+    const merged = new Map<string, number>();
+    for (const item of data.items) {
+      merged.set(item.productId, (merged.get(item.productId) ?? 0) + item.quantity);
+    }
+    data.items = [...merged].map(([productId, quantity]) => ({ productId, quantity }));
+
+    // Los precios SIEMPRE salen de la base (nunca del cliente) y solo se venden
+    // productos propios, activos y no borrados.
     const products = await prisma.product.findMany({
-      where: { id: { in: data.items.map((i) => i.productId) }, businessId },
+      where: { id: { in: data.items.map((i) => i.productId) }, businessId, isActive: true, deletedAt: null },
     });
 
     if (products.length !== data.items.length) {
@@ -210,23 +247,70 @@ router.post(
 router.patch(
   '/:id/status',
   requireAuth,
+  requireStaff,
   validate(updateOrderStatusSchema),
   asyncHandler(async (req, res) => {
     const { status } = req.body as UpdateOrderStatusInput;
-    const order = await prisma.order.update({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
+    const businessId = req.auth!.businessId;
+    const id = String(req.params.id);
+    const include = {
+      items: { include: { product: true } },
+      client: { select: { name: true } },
+    };
+
+    const current = await prisma.order.findFirst({ where: { id, businessId }, select: { status: true } });
+    if (!current) throw new AppError(404, 'Pedido no encontrado');
+
+    // Repetir el estado actual no cambia nada: devolvemos el pedido sin notificar de nuevo.
+    if (current.status === status) {
+      const same = await prisma.order.findFirst({ where: { id, businessId }, include });
+      return res.json(same);
+    }
+
+    if (!canTransitionOrder(current.status, status)) {
+      throw new AppError(409, `No se puede pasar un pedido de ${current.status} a ${status}`);
+    }
+
+    // Update condicional al estado leído: si otra request lo cambió en el medio,
+    // no pisamos (evita reabrir/saltar por carrera).
+    const updated = await prisma.order.updateMany({
+      where: { id, businessId, status: current.status },
       data: { status },
-      include: {
-        items: { include: { product: true } },
-        client: { select: { name: true } },
-      },
     });
+    if (updated.count !== 1) {
+      throw new AppError(409, 'El estado del pedido cambió mientras lo editabas. Recargá e intentá de nuevo.');
+    }
+
+    const order = await prisma.order.findFirstOrThrow({ where: { id, businessId }, include });
 
     // Notifica al cliente el nuevo estado por su mejor canal. Fire-and-forget.
     void sendOrderStatusUpdate(order).catch((err) =>
       console.error('[Orders] Error notificando estado de pedido:', err)
     );
 
+    res.json(order);
+  })
+);
+
+// Nota interna del pedido. Se guarda en Order.notes (el mismo campo que ya
+// existe en el modelo; no hay schema nuevo). Vacía = borrar la nota.
+router.patch(
+  '/:id/notes',
+  requireAuth,
+  requireStaff,
+  validate(updateOrderNotesSchema),
+  asyncHandler(async (req, res) => {
+    const { notes } = req.body as UpdateOrderNotesInput;
+    const businessId = req.auth!.businessId;
+    const id = String(req.params.id);
+
+    const result = await prisma.order.updateMany({
+      where: { id, businessId },
+      data: { notes: notes.trim() || null },
+    });
+    if (result.count !== 1) throw new AppError(404, 'Pedido no encontrado');
+
+    const order = await prisma.order.findFirstOrThrow({ where: { id, businessId }, include: ORDER_INCLUDE });
     res.json(order);
   })
 );
