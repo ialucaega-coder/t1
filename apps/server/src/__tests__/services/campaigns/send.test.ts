@@ -19,6 +19,8 @@ vi.mock('../../../services/whatsapp/client', () => ({
   sendMessage: vi.fn(async () => 'SID'),
 }));
 vi.mock('../../../services/email', () => ({ sendGenericNotification: vi.fn(async () => true) }));
+const emitFailed = vi.fn(async () => undefined);
+vi.mock('../../../services/campaigns/events', () => ({ emitCampaignFailed: (...a: unknown[]) => (emitFailed as (...x: unknown[]) => unknown)(...a) }));
 
 import { prisma } from '../../../lib/prisma';
 import * as whatsapp from '../../../services/whatsapp/client';
@@ -113,5 +115,13 @@ describe('services/campaigns/send', () => {
     expect(prisma.campaign.updateMany).toHaveBeenLastCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'failed' }) }),
     );
+    expect(emitFailed).toHaveBeenCalledTimes(1);
+    expect(emitFailed).toHaveBeenCalledWith(BIZ, 'c1', 'retries_exhausted', { enviados: 0, fallidos: 0 });
+  });
+
+  it('un envío exitoso no emite campaign:failed', async () => {
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    await sendCampaign(BIZ, 'c1');
+    expect(emitFailed).not.toHaveBeenCalled();
   });
 });

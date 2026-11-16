@@ -8,6 +8,8 @@ vi.mock('../../../lib/prisma', () => ({
 }));
 const sendCampaign = vi.fn();
 vi.mock('../../../services/campaigns/send', () => ({ sendCampaign: (...a: unknown[]) => sendCampaign(...a) }));
+const emitFailed = vi.fn();
+vi.mock('../../../services/campaigns/events', () => ({ emitCampaignFailed: (...a: unknown[]) => emitFailed(...a) }));
 const tryLock = vi.fn();
 vi.mock('../../../lib/sharedState', () => ({ sharedTryLock: (...a: unknown[]) => tryLock(...a) }));
 
@@ -46,6 +48,14 @@ describe('dispatchDueCampaigns', () => {
     expect(r.expired).toBe(1);
     expect(sendCampaign).not.toHaveBeenCalled();
     expect(m(prisma.campaign.updateMany).mock.calls[0][0].data).toEqual({ status: 'failed' });
+    expect(emitFailed).toHaveBeenCalledWith('b1', 'c1', 'expired');
+  });
+
+  it('no emite campaign:failed si otra instancia ya la tomó (count 0)', async () => {
+    m(prisma.campaign.findMany).mockResolvedValue([{ id: 'c1', businessId: 'b1', scheduledAt: at(MAX_LATE_MS + 1000) }]);
+    m(prisma.campaign.updateMany).mockResolvedValue({ count: 0 });
+    await dispatchDueCampaigns(NOW);
+    expect(emitFailed).not.toHaveBeenCalled();
   });
 
   it('si otra instancia ganó el claim (400) lo cuenta como skipped, sin error', async () => {

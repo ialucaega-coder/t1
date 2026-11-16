@@ -19,6 +19,7 @@ import { prisma } from '../../lib/prisma';
 import { sharedTryLock } from '../../lib/sharedState';
 import { AppError } from '../../middleware/errorHandler';
 import { sendCampaign } from './send';
+import { emitCampaignFailed } from './events';
 
 /** Más de esto de atraso → no se envía sola. */
 export const MAX_LATE_MS = 6 * 60 * 60 * 1000;
@@ -54,7 +55,10 @@ export async function dispatchDueCampaigns(now: Date = new Date()): Promise<Disp
           where: { id: c.id, businessId: c.businessId, status: 'scheduled' },
           data: { status: 'failed' },
         });
-        if (upd.count > 0) result.expired++;
+        if (upd.count > 0) {
+          result.expired++;
+          await emitCampaignFailed(c.businessId, c.id, 'expired');
+        }
         continue;
       }
       await sendCampaign(c.businessId, c.id, undefined, { scheduledOnly: true });

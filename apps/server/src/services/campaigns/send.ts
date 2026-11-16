@@ -23,6 +23,7 @@ import { defineQueue, enqueue } from '../../lib/queue';
 import { sharedGet, sharedSet, sharedDel } from '../../lib/sharedState';
 import * as whatsapp from '../whatsapp/client';
 import { sendGenericNotification } from '../email';
+import { emitCampaignFailed } from './events';
 
 export interface SendCampaignResult {
   envio: { enviados: number; fallidos: number; canalSoportado: boolean; enCola?: boolean };
@@ -160,6 +161,10 @@ async function runCampaignJob({ businessId, id, message }: CampaignJob): Promise
     await prisma.campaign
       .updateMany({ where: { id, businessId }, data: { status: 'failed', sentCount: cursor.enviados } })
       .catch(() => undefined);
+    await emitCampaignFailed(businessId, id, 'retries_exhausted', {
+      enviados: cursor.enviados,
+      fallidos: cursor.fallidos,
+    });
     await sharedDel(key);
   }
 }
