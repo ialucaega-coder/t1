@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma';
 import { encrypt, safeDecrypt } from '../lib/crypto';
 import { createBot, stopBot, setWebhook, handleUpdate, getBotInfo } from '../services/telegram/bot';
 import { defineQueue, enqueue } from '../lib/queue';
+import { INBOUND_RETRY } from '../services/channels/inboundRetry';
 
 /** Comparación en tiempo constante de dos strings (evita timing attacks). */
 function timingSafeEqualStr(a: string, b: string): boolean {
@@ -54,13 +55,22 @@ function readBotToken(config: TelegramConfig): string | undefined {
   }
 }
 
+/**
+ * Procesa un update de Telegram. Reintentos (criterio de services/channels/
+ * inboundRetry.ts): la lectura de la conexión corre ANTES de que el bot haga nada,
+ * así que un fallo ahí (DB caída un instante) se relanza y la cola reintenta con
+ * backoff. Un fallo dentro de `handleUpdate` NO se reintenta: el bot pudo haber
+ * contestado ya (varios pasos/mensajes por update) y repetirlo le respondería dos
+ * veces al cliente. El dedupe por `update_id` evita procesar el mismo update dos veces.
+ */
 export async function processTelegramUpdate({ businessId, update }: TelegramUpdateJob): Promise<void> {
+  const connection = await prisma.connection.findFirst({
+    where: { businessId, type: 'TELEGRAM', isActive: true },
+    orderBy: { id: 'asc' },
+  });
+  if (!connection) return; // se desconectó mientras el update esperaba en la cola
+
   try {
-    const connection = await prisma.connection.findFirst({
-      where: { businessId, type: 'TELEGRAM', isActive: true },
-      orderBy: { id: 'asc' },
-    });
-    if (!connection) return; // se desconectó mientras el update esperaba en la cola
     // Con varias instancias, la que procesa puede no tener el bot en memoria y lo arma
     // al vuelo con este token.
     await handleUpdate(businessId, update as never, readBotToken(connection.config as TelegramConfig));
@@ -126,7 +136,7 @@ router.post(
     await enqueue<TelegramUpdateJob>(
       TELEGRAM_UPDATE_QUEUE,
       { businessId, update: req.body },
-      typeof updateId === 'number' ? { jobId: `tg_${businessId}_${updateId}` } : {},
+      { ...(typeof updateId === 'number' ? { jobId: `tg_${businessId}_${updateId}` } : {}), ...INBOUND_RETRY },
     );
 
     // Siempre responder 200 a Telegram

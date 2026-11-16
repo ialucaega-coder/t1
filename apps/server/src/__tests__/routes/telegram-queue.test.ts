@@ -25,6 +25,7 @@ vi.mock('../../lib/queue', () => ({
 import { prisma } from '../../lib/prisma';
 import { handleUpdate } from '../../services/telegram/bot';
 import { defineQueue, enqueue } from '../../lib/queue';
+import { INBOUND_RETRY } from '../../services/channels/inboundRetry';
 import { errorHandler } from '../../middleware/errorHandler';
 import { telegramRouter, processTelegramUpdate } from '../../routes/telegram';
 
@@ -72,7 +73,7 @@ describe('Telegram — webhook con cola', () => {
     const [name, data, opts] = mock(enqueue).mock.calls[0];
     expect(name).toBe('telegram-update');
     expect(data).toEqual({ businessId: 'biz_1', update: { update_id: 42, message: { text: 'hola' } } });
-    expect(opts).toEqual({ jobId: 'tg_biz_1_42' });
+    expect(opts).toEqual({ jobId: 'tg_biz_1_42', ...INBOUND_RETRY });
     expect(opts.jobId).not.toContain(':');
     expect(handleUpdate).not.toHaveBeenCalled();
   });
@@ -90,7 +91,7 @@ describe('Telegram — webhook con cola', () => {
   it('un update sin update_id se encola sin jobId (sin dedupe)', async () => {
     mock(prisma.connection.findFirst).mockResolvedValue(connection({ botToken: '123:ABC' }));
     await request(app).post('/api/telegram/webhook/biz_1').query({ token: '123:ABC' }).send({ foo: 'bar' });
-    expect(mock(enqueue).mock.calls[0][2]).toEqual({});
+    expect(mock(enqueue).mock.calls[0][2]).toEqual({ ...INBOUND_RETRY });
   });
 
   it('no encola nada si la autenticación falla', async () => {
@@ -114,6 +115,13 @@ describe('Telegram — worker', () => {
   it('si la conexión ya no está activa, descarta el update sin error', async () => {
     mock(prisma.connection.findFirst).mockResolvedValue(null);
     await expect(processTelegramUpdate({ businessId: 'biz_1', update: { update_id: 9 } })).resolves.toBeUndefined();
+    expect(handleUpdate).not.toHaveBeenCalled();
+  });
+
+  it('un fallo al leer la conexión (antes de que el bot haga nada) SÍ se relanza para que la cola reintente', async () => {
+    mock(prisma.connection.findFirst).mockRejectedValue(new Error('db caída'));
+
+    await expect(processTelegramUpdate({ businessId: 'biz_1', update: { update_id: 9 } })).rejects.toThrow('db caída');
     expect(handleUpdate).not.toHaveBeenCalled();
   });
 

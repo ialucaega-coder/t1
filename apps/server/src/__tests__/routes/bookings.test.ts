@@ -409,6 +409,27 @@ describe('routes/bookings', () => {
       expect(res.body.status).toBe('CONFIRMED');
     });
 
+    it('un PROFESSIONAL puede cambiar el estado', async () => {
+      (prisma.booking.update as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'booking_1', status: 'COMPLETED' });
+
+      const res = await request(app)
+        .patch('/api/bookings/booking_1/status')
+        .set('x-test-role', 'PROFESSIONAL')
+        .send({ status: 'COMPLETED' });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('un CLIENT no puede cambiar el estado de ninguna reserva (403), ni siquiera cancelar', async () => {
+      const res = await request(app)
+        .patch('/api/bookings/booking_1/status')
+        .set('x-test-role', 'CLIENT')
+        .send({ status: 'CANCELLED' });
+
+      expect(res.status).toBe(403);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
     it('devuelve 500 si la actualizacion falla (p.ej. reserva inexistente)', async () => {
       (prisma.booking.update as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('not found'));
 

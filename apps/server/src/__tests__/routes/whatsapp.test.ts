@@ -8,12 +8,17 @@ import express from 'express';
 import request from 'supertest';
 
 vi.mock('../../lib/prisma', () => ({
-  prisma: { conversation: { findFirst: vi.fn() } },
+  prisma: { conversation: { findFirst: vi.fn() }, message: { findFirst: vi.fn() } },
 }));
 vi.mock('../../services/chatbot', () => ({
   processMessage: vi.fn(),
   getActiveSuperpowers: vi.fn(async () => new Set<string>()),
 }));
+// Backoff mínimo: los reintentos de la cola corren inline en los tests.
+vi.mock('../../services/channels/inboundRetry', async () => {
+  const actual = await vi.importActual<typeof import('../../services/channels/inboundRetry')>('../../services/channels/inboundRetry');
+  return { ...actual, INBOUND_RETRY: { attempts: 3, backoffMs: 1 } };
+});
 vi.mock('../../services/ai/transcription', () => ({
   transcribeAudioFromUrl: vi.fn(async () => null),
 }));
@@ -150,12 +155,85 @@ describe('routes/whatsapp — webhook', () => {
     expect(where).toMatchObject({ businessId: 'biz_1', channel: 'WHATSAPP', contactPhone: '+549', status: { in: ['OPEN', 'HANDOFF'] } });
   });
 
-  it('responde 200 aunque processMessage lance (Twilio no debe reintentar)', async () => {
+  it('responde 200 aunque processMessage lance siempre (se agotan los reintentos y no explota)', async () => {
     mock(resolveBusinessByNumber).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1' });
     mock(prisma.conversation.findFirst).mockResolvedValue(null);
+    mock(prisma.message.findFirst).mockResolvedValue(null);
     mock(processMessage).mockRejectedValue(new Error('boom'));
 
-    const res = await request(app).post('/api/whatsapp/webhook').send({ From: 'whatsapp:+549', To: '+1', Body: 'hola' });
+    const res = await request(app).post('/api/whatsapp/webhook').send({ From: 'whatsapp:+549', To: '+1', Body: 'hola', MessageSid: 'SM_fail' });
     expect(res.status).toBe(200);
+    expect(mock(sendMessage)).not.toHaveBeenCalled();
+  });
+
+  describe('reintentos de la cola (sin duplicar)', () => {
+    const send = (sid: string) =>
+      request(app).post('/api/whatsapp/webhook').send({ From: 'whatsapp:+549', To: '+1', Body: 'hola', MessageSid: sid });
+
+    beforeEach(() => {
+      mock(resolveBusinessByNumber).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1' });
+      mock(prisma.conversation.findFirst).mockResolvedValue(null);
+      mock(prisma.message.findFirst).mockResolvedValue(null); // nada guardado todavía
+      mock(sendMessage).mockReset().mockResolvedValue('SM_ok');
+    });
+
+    it('un fallo ANTES de enviar y sin nada guardado se reintenta y responde UNA sola vez', async () => {
+      mock(processMessage)
+        .mockRejectedValueOnce(new Error('db caída un instante'))
+        .mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+      const res = await send('SM_retry_1');
+
+      expect(res.status).toBe(200);
+      expect(mock(processMessage)).toHaveBeenCalledTimes(2);
+      expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+      // El chequeo de "¿ya se guardó algo?" va scopeado por negocio y contacto.
+      expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toMatchObject({
+        conversation: { businessId: 'biz_1', contactPhone: '+549' },
+      });
+    });
+
+    it('un fallo de lectura de la conversación (previo a procesar) también se reintenta', async () => {
+      mock(prisma.conversation.findFirst)
+        .mockRejectedValueOnce(new Error('db caída'))
+        .mockResolvedValue(null);
+      mock(processMessage).mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+      await send('SM_retry_2');
+
+      expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+      expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+    });
+
+    it('un fallo DESPUÉS de procesar (al enviar) NO se reintenta: no regenera ni reenvía', async () => {
+      mock(processMessage).mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+      mock(sendMessage).mockRejectedValue(new Error('twilio caído'));
+
+      const res = await send('SM_after_send');
+
+      expect(res.status).toBe(200);
+      expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+      expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+    });
+
+    it('si falló pero ya quedó un mensaje guardado, NO se reintenta (evita duplicar el mensaje del cliente)', async () => {
+      mock(processMessage).mockRejectedValue(new Error('falló al guardar la respuesta'));
+      mock(prisma.message.findFirst).mockResolvedValue({ id: 'm_user' });
+
+      await send('SM_persisted');
+
+      expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+      expect(mock(sendMessage)).not.toHaveBeenCalled();
+    });
+
+    it('el mismo MessageSid reenviado por Twilio se procesa UNA sola vez (dedupe por jobId)', async () => {
+      mock(processMessage).mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+      await send('SM_dup');
+      await send('SM_dup');
+
+      expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+      expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+    });
   });
 });

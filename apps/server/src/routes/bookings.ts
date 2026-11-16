@@ -7,7 +7,7 @@ import { getIO } from '../lib/socket';
 import { createBookingSchema, updateBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
-import { sendBookingCreated, sendBookingConfirmed, sendBookingCancelled } from '../services/notifications';
+import { queueNotification } from '../services/notifications';
 import { syncBookingToCalcom } from '../services/calcom/sync';
 import { dispatchEvent } from '../services/workflows';
 import { createBooking } from '../services/bookings/create';
@@ -81,10 +81,9 @@ router.post(
 
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:created', { booking });
 
-    // Notifica al admin (in-app). Fire-and-forget: no debe romper la respuesta.
-    void sendBookingCreated(booking).catch((err) =>
-      console.error('[Bookings] Error notificando alta de reserva:', err)
-    );
+    // Notifica al admin (in-app) por la cola de avisos (con reintentos, jobId
+    // idempotente). Sin await: no debe demorar ni romper la respuesta.
+    void queueNotification({ event: 'booking-created', id: booking.id, businessId: req.auth!.businessId });
 
     // Dispara las automatizaciones del negocio para "nueva reserva". El modo
     // (simular vs ejecutar) lo resuelve dispatchEvent según el ajuste del
@@ -158,9 +157,14 @@ router.patch(
   })
 );
 
+// Cambiar el estado (confirmar, cancelar, completar...) es de staff: antes cualquier
+// usuario autenticado, incluso un CLIENT, podía cancelar o completar turnos del negocio.
+// No hay ningún flujo de cliente que use este endpoint (la web solo lo llama desde el
+// panel /reservas), así que se restringe a ADMIN y PROFESSIONAL.
 router.patch(
   '/:id/status',
   requireAuth,
+  requireRole('ADMIN', 'PROFESSIONAL'),
   validate(updateBookingStatusSchema),
   asyncHandler(async (req, res) => {
     const { status } = req.body as UpdateBookingStatusInput;
@@ -174,15 +178,11 @@ router.patch(
     });
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
 
-    // Notifica al cliente por su mejor canal (WhatsApp/email). Fire-and-forget.
+    // Notifica al cliente por su mejor canal (WhatsApp/email) vía la cola de avisos.
     if (status === 'CONFIRMED') {
-      void sendBookingConfirmed(booking).catch((err) =>
-        console.error('[Bookings] Error notificando confirmación:', err)
-      );
+      void queueNotification({ event: 'booking-confirmed', id: booking.id, businessId: req.auth!.businessId });
     } else if (status === 'CANCELLED') {
-      void sendBookingCancelled(booking).catch((err) =>
-        console.error('[Bookings] Error notificando cancelación:', err)
-      );
+      void queueNotification({ event: 'booking-cancelled', id: booking.id, businessId: req.auth!.businessId });
     }
 
     res.json(booking);

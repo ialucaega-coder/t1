@@ -268,7 +268,7 @@ app.use('/api/professionals', professionalsRouter);
 app.use('/api/stats', requireAuth, requireCapability('analytics'), statsRouter);
 app.use('/api/schedules', schedulesRouter);
 app.use('/api/ai', requireAuth, requireStaff, aiRouter);
-app.use('/api/faq', requireAuth, requireCapability('bots'), faqRouter);
+app.use('/api/faq', requireAuth, requireStaff, requireCapability('bots'), faqRouter);
 app.use('/api/onboarding', requireAuth, onboardingRouter);
 app.use('/api/telegram', telegramRouter);
 app.use('/api/settings', settingsRouter);

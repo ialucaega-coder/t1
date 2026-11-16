@@ -16,7 +16,7 @@ import {
 } from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
-import { sendOrderStatusUpdate, sendOrderCreated } from '../services/notifications';
+import { queueNotification } from '../services/notifications';
 import {
   IDEMP_TYPE_ORDER,
   readIdempotencyKey,
@@ -235,9 +235,7 @@ router.post(
 
     // Solo notificamos si es un pedido nuevo (no en el replay idempotente).
     if (!result.duplicated) {
-      void sendOrderCreated(result.order).catch((err) =>
-        console.error('[Orders] Error notificando alta de pedido:', err)
-      );
+      void queueNotification({ event: 'order-created', id: result.order.id, businessId });
     }
 
     res.status(result.duplicated ? 200 : 201).json(result.order);
@@ -283,10 +281,9 @@ router.patch(
 
     const order = await prisma.order.findFirstOrThrow({ where: { id, businessId }, include });
 
-    // Notifica al cliente el nuevo estado por su mejor canal. Fire-and-forget.
-    void sendOrderStatusUpdate(order).catch((err) =>
-      console.error('[Orders] Error notificando estado de pedido:', err)
-    );
+    // Notifica al cliente el nuevo estado por su mejor canal, vía la cola de avisos
+    // (jobId por pedido + estado: un doble PATCH al mismo estado avisa una sola vez).
+    void queueNotification({ event: 'order-status', id: order.id, businessId, status: order.status });
 
     res.json(order);
   })

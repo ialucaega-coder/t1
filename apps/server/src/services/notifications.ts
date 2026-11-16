@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import type { NotificationType, NotificationChannel } from '@prisma/client';
 import { sendGenericNotification } from './email';
 import * as whatsapp from './whatsapp/client';
+import { defineQueue, enqueue, type EnqueueResult } from '../lib/queue';
 
 // ─── Tipos ───────────────────────────────────────────────────────────
 
@@ -196,6 +197,96 @@ export async function sendOrderStatusUpdate(order: OrderPayload) {
     body: `${clientName ? clientName + ', tu' : 'Tu'} pedido por ${priceStr} ahora está ${statusLabel}.`,
     userId: order.clientId,
     businessId: order.businessId,
+  });
+}
+
+// ─── Cola de avisos de reservas y pedidos ────────────────────────────
+
+/**
+ * Los avisos de reservas/pedidos antes eran `void sendXxx(...)` dentro del
+ * request: si la DB fallaba un instante (buscar admins/cliente, crear la
+ * notificación) el aviso se perdía sin reintento. Ahora van por una cola con
+ * reintentos (BullMQ con Redis; sin Redis corren inline, como antes).
+ *
+ * El job lleva solo ids (nunca datos del cliente ni secretos): el handler relee
+ * la reserva/pedido de la DB acotado por `businessId`, así el aviso refleja el
+ * dato actual y es multi-tenant por construcción.
+ *
+ * Idempotencia: `jobId` estable por (evento, id[, estado]). Encolar dos veces el
+ * mismo evento (doble click, reintento del cliente HTTP) lo envía una sola vez
+ * mientras BullMQ retiene el job (~1 h). Límite conocido: confirmar → cancelar →
+ * confirmar la MISMA reserva dentro de esa hora no repite el aviso de confirmación.
+ *
+ * Reintentos: solo se reintenta si el handler LANZA (fallo de DB al armar o
+ * persistir el aviso). Los envíos externos (WhatsApp/email) siguen siendo
+ * fire-and-forget dentro de `deliver`: reintentarlos duplicaría la notificación
+ * in-app ya creada. Un reintento tras un fallo parcial puede duplicar la fila
+ * in-app de algún admin; es preferible a perder el aviso.
+ */
+export const NOTIFICATION_QUEUE = 'notification-send';
+
+export type NotificationEvent =
+  | 'booking-created'
+  | 'booking-confirmed'
+  | 'booking-cancelled'
+  | 'order-created'
+  | 'order-status';
+
+export interface NotificationJob {
+  event: NotificationEvent;
+  /** Id de la reserva o del pedido. */
+  id: string;
+  businessId: string;
+  /** Solo `order-status`: el estado que se notifica (entra en el jobId). */
+  status?: string;
+}
+
+/** Intentos totales y espera base (backoff exponencial) de los avisos. */
+export const NOTIFICATION_ATTEMPTS = 3;
+export const NOTIFICATION_BACKOFF_MS = 5000;
+
+/** Ejecuta un aviso encolado. Lanza si falla (así la cola reintenta). */
+export async function processNotificationJob(job: NotificationJob): Promise<void> {
+  if (job.event.startsWith('booking-')) {
+    const booking = await prisma.booking.findFirst({
+      where: { id: job.id, businessId: job.businessId },
+      include: { client: { select: { name: true } }, service: { select: { name: true } } },
+    });
+    if (!booking) {
+      console.warn('[Notifications] Reserva no encontrada para el aviso; se omite.', { event: job.event, id: job.id });
+      return;
+    }
+    if (job.event === 'booking-created') await sendBookingCreated(booking);
+    else if (job.event === 'booking-confirmed') await sendBookingConfirmed(booking);
+    else await sendBookingCancelled(booking);
+    return;
+  }
+
+  const order = await prisma.order.findFirst({
+    where: { id: job.id, businessId: job.businessId },
+    include: { client: { select: { name: true } } },
+  });
+  if (!order) {
+    console.warn('[Notifications] Pedido no encontrado para el aviso; se omite.', { event: job.event, id: job.id });
+    return;
+  }
+  if (job.event === 'order-created') await sendOrderCreated(order);
+  else await sendOrderStatusUpdate(order);
+}
+
+defineQueue<NotificationJob>(NOTIFICATION_QUEUE, processNotificationJob, { concurrency: 5 });
+
+/**
+ * Encola un aviso con jobId idempotente. Nunca lanza. Llamar SIN await desde las
+ * rutas (`void queueNotification(...)`): la respuesta HTTP no espera el envío ni
+ * siquiera en modo inline (sin Redis).
+ */
+export function queueNotification(job: NotificationJob): Promise<EnqueueResult> {
+  const jobId = ['notif', job.event, job.id, ...(job.status ? [job.status] : [])].join('_');
+  return enqueue<NotificationJob>(NOTIFICATION_QUEUE, job, {
+    jobId,
+    attempts: NOTIFICATION_ATTEMPTS,
+    backoffMs: NOTIFICATION_BACKOFF_MS,
   });
 }
 

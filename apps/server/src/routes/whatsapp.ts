@@ -19,6 +19,7 @@ import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { parseWhatsAppReferral } from '../services/whatsapp/attribution';
 import { requireAuth, requireStaff } from '../middleware/auth';
 import { defineQueue, enqueue } from '../lib/queue';
+import { runInbound, INBOUND_RETRY } from '../services/channels/inboundRetry';
 
 const sendMessageSchema = z.object({
   to: z.string().min(1),
@@ -46,13 +47,16 @@ interface WhatsAppInboundJob {
 
 /**
  * Procesa un mensaje entrante: adjuntos (visión / transcripción), conversación,
- * respuesta del bot y envío DESDE el número del negocio. Todo dentro de try/catch:
- * un fallo se loguea y no se reintenta (reintentar tras haber guardado el mensaje
- * duplicaría la conversación; el dedupe cubre los reintentos del proveedor).
+ * respuesta del bot y envío DESDE el número del negocio.
+ *
+ * Reintentos (ver services/channels/inboundRetry.ts): un fallo ANTES de guardar
+ * nada se relanza y la cola reintenta (con backoff); un fallo con mensajes ya
+ * guardados, o al ENVIAR la respuesta, solo se loguea (reintentar duplicaría).
+ * El dedupe por MessageSid evita procesar dos veces el mismo mensaje.
  */
 async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
   const { businessId, botId, from, to, profileName, rawBody, body, images, audios, attribution } = job;
-  try {
+  await runInbound('WhatsApp webhook error', { businessId, contact: from }, async (phase) => {
     // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
     const hasAttachments = images.length > 0 || audios.length > 0;
     const oidoYVista = hasAttachments
@@ -105,15 +109,16 @@ async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
       ...(attribution ? { attribution } : {}),
     });
 
+    // A partir de acá la respuesta ya está guardada: un fallo del envío NO se reintenta.
+    phase.processed();
+
     // Un humano tomó la conversación: el mensaje ya se guardó, el bot no contesta.
     if (result.botPaused) return;
 
     // Responde DESDE el número del negocio (el `To` al que escribió el
     // cliente), no desde el número global, para respetar el multi-tenant.
     await sendMessage(from, result.text, to.replace('whatsapp:', '').trim() || undefined);
-  } catch (error) {
-    console.error('WhatsApp webhook error:', error);
-  }
+  });
 }
 
 defineQueue<WhatsAppInboundJob>(WA_INBOUND_QUEUE, processWhatsAppInbound, { concurrency: 10 });
@@ -203,7 +208,7 @@ router.post(
         // Twilio) y viaja ya normalizada.
         attribution: parseWhatsAppReferral(req.body) ?? undefined,
       },
-      messageSid ? { jobId: `wa_${messageSid}` } : {},
+      { ...(messageSid ? { jobId: `wa_${messageSid}` } : {}), ...INBOUND_RETRY },
     );
 
     res.status(200).send('OK');

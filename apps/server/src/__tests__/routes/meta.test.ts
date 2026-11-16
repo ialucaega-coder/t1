@@ -15,6 +15,7 @@ vi.mock('../../lib/prisma', () => ({
     connection: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
     bot: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
     conversation: { findFirst: vi.fn() },
+    message: { findFirst: vi.fn() },
     $executeRaw: vi.fn(async () => 1),
     // $transaction ejecuta el callback con el mismo `prisma` mockeado como `tx`.
     $transaction: vi.fn(async function (this: unknown, cb: (tx: unknown) => unknown) {
@@ -23,6 +24,12 @@ vi.mock('../../lib/prisma', () => ({
     }),
   },
 }));
+
+// Backoff mínimo: los reintentos de la cola corren inline en los tests.
+vi.mock('../../services/channels/inboundRetry', async () => {
+  const actual = await vi.importActual<typeof import('../../services/channels/inboundRetry')>('../../services/channels/inboundRetry');
+  return { ...actual, INBOUND_RETRY: { attempts: 3, backoffMs: 1 } };
+});
 
 vi.mock('../../services/meta/client', () => ({
   isConfigured: vi.fn(() => true),
@@ -132,6 +139,83 @@ describe('routes/meta', () => {
       });
       expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'hola', 'INSTAGRAM', expect.objectContaining({ conversationId: 'c1' }));
       expect(mock(sendMessage)).not.toHaveBeenCalled();
+    });
+
+    describe('reintentos de la cola (sin duplicar)', () => {
+      const ev = (mid: string) => [
+        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: 'hola', images: [], audios: [], mid },
+      ];
+      const fire = async () => {
+        await request(app).post('/api/meta/webhook').send({ object: 'instagram', entry: [] });
+        await new Promise((r) => setTimeout(r, 60));
+      };
+
+      beforeEach(() => {
+        mock(resolveBusinessByRecipient).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1', pageAccessToken: 'tok' });
+        mock(prisma.conversation.findFirst).mockResolvedValue(null);
+        mock(prisma.message.findFirst).mockResolvedValue(null);
+        mock(sendMessage).mockReset().mockResolvedValue(undefined);
+      });
+
+      it('un fallo antes de enviar y sin nada guardado se reintenta y responde UNA sola vez', async () => {
+        mock(parseMetaEvents).mockReturnValue(ev('mid_retry'));
+        mock(processMessage)
+          .mockRejectedValueOnce(new Error('db caída un instante'))
+          .mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+        await fire();
+
+        expect(mock(processMessage)).toHaveBeenCalledTimes(2);
+        expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+        expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toMatchObject({
+          conversation: { businessId: 'biz_1', contactPhone: 'U9' },
+        });
+      });
+
+      it('un fallo al resolver el negocio (antes de todo) se reintenta', async () => {
+        mock(parseMetaEvents).mockReturnValue(ev('mid_resolve'));
+        mock(resolveBusinessByRecipient)
+          .mockRejectedValueOnce(new Error('db caída'))
+          .mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1', pageAccessToken: 'tok' });
+        mock(processMessage).mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+        await fire();
+
+        expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+      });
+
+      it('un fallo DESPUÉS de procesar (al enviar) NO se reintenta', async () => {
+        mock(parseMetaEvents).mockReturnValue(ev('mid_after'));
+        mock(processMessage).mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+        mock(sendMessage).mockRejectedValue(new Error('meta caído'));
+
+        await fire();
+
+        expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+        expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+      });
+
+      it('si ya quedó un mensaje guardado NO se reintenta', async () => {
+        mock(parseMetaEvents).mockReturnValue(ev('mid_persisted'));
+        mock(processMessage).mockRejectedValue(new Error('falló al guardar la respuesta'));
+        mock(prisma.message.findFirst).mockResolvedValue({ id: 'm_user' });
+
+        await fire();
+
+        expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+        expect(mock(sendMessage)).not.toHaveBeenCalled();
+      });
+
+      it('el mismo mid reenviado por Meta se procesa UNA sola vez', async () => {
+        mock(parseMetaEvents).mockReturnValue(ev('mid_dup'));
+        mock(processMessage).mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+        await fire();
+        await fire();
+
+        expect(mock(processMessage)).toHaveBeenCalledTimes(1);
+        expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('no llama al cerebro si no se resuelve el negocio', async () => {

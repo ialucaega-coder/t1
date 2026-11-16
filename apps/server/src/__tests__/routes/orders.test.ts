@@ -37,12 +37,11 @@ vi.mock('../../middleware/auth', () => ({
   },
 }));
 vi.mock('../../services/notifications', () => ({
-  sendOrderCreated: vi.fn(async () => undefined),
-  sendOrderStatusUpdate: vi.fn(async () => undefined),
+  queueNotification: vi.fn(async () => 'queued'),
 }));
 
 import { prisma } from '../../lib/prisma';
-import { sendOrderCreated, sendOrderStatusUpdate } from '../../services/notifications';
+import { queueNotification } from '../../services/notifications';
 import { ordersRouter } from '../../routes/orders';
 import { errorHandler } from '../../middleware/errorHandler';
 
@@ -84,7 +83,8 @@ describe('routes/orders — POST / (idempotencia)', () => {
     expect(res.status).toBe(201);
     expect(prisma.order.create).toHaveBeenCalledTimes(1);
     expect(prisma.connection.create).not.toHaveBeenCalled(); // sin clave no registra idempotencia
-    expect(mock(sendOrderCreated)).toHaveBeenCalled();
+    // El aviso va por la cola de avisos (con jobId idempotente en el servicio), con ids y negocio.
+    expect(mock(queueNotification)).toHaveBeenCalledWith(expect.objectContaining({ event: 'order-created', businessId: 'biz_1' }));
   });
 
   it('con Idempotency-Key crea el pedido y registra la clave', async () => {
@@ -119,7 +119,7 @@ describe('routes/orders — POST / (idempotencia)', () => {
     // No se creó nada nuevo ni se notificó.
     expect(prisma.order.create).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(mock(sendOrderCreated)).not.toHaveBeenCalled();
+    expect(mock(queueNotification)).not.toHaveBeenCalled();
   });
 
   it('deduplica dentro de la transacción si la clave aparece tras el fast path (carrera)', async () => {
@@ -313,7 +313,7 @@ describe('routes/orders — PATCH /:id/status (transiciones)', () => {
     const res = await patch('CANCELLED');
     expect(res.status).toBe(200);
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
-    expect(mock(sendOrderStatusUpdate)).not.toHaveBeenCalled();
+    expect(mock(queueNotification)).not.toHaveBeenCalled();
   });
 
   it('busca el pedido por negocio: uno de otro negocio da 404', async () => {
@@ -328,13 +328,14 @@ describe('routes/orders — PATCH /:id/status (transiciones)', () => {
     mock(prisma.order.updateMany).mockResolvedValue({ count: 0 });
     const res = await patch('CONFIRMED');
     expect(res.status).toBe(409);
-    expect(mock(sendOrderStatusUpdate)).not.toHaveBeenCalled();
+    expect(mock(queueNotification)).not.toHaveBeenCalled();
   });
 
   it('notifica al cliente cuando la transición es válida', async () => {
     setCurrent('PENDING');
     await patch('CANCELLED');
-    expect(mock(sendOrderStatusUpdate)).toHaveBeenCalledTimes(1);
+    expect(mock(queueNotification)).toHaveBeenCalledTimes(1);
+    expect(mock(queueNotification)).toHaveBeenCalledWith(expect.objectContaining({ event: 'order-status', id: 'order_1', businessId: 'biz_1' }));
   });
 
   it('un CLIENT no puede cambiar estados (403)', async () => {
