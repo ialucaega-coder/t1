@@ -12,6 +12,7 @@
  * error en uno se reintenta solo y no frena al resto (ver más abajo).
  */
 import cron from 'node-cron';
+import { dispatchDueCampaigns } from './campaigns/dispatch';
 import { prisma } from '../lib/prisma';
 import { sharedTryLock } from '../lib/sharedState';
 import { defineQueue, enqueue, queuesEnabled } from '../lib/queue';
@@ -249,6 +250,13 @@ export function startScheduler(): void {
     runExclusive('purge', async () => {
       await runPurge();
     }).catch((err) => console.error('[scheduler] runPurge:', err));
+  });
+
+  // Campañas programadas: cada minuto envía las `scheduled` con fecha vencida.
+  // No usa runExclusive (que es por día): el lock es por minuto dentro de
+  // dispatchDueCampaigns y el claim atómico de sendCampaign evita dobles envíos.
+  cron.schedule('* * * * *', () => {
+    dispatchDueCampaigns().catch((err) => console.error('[scheduler] dispatchDueCampaigns:', err));
   });
 
   console.log('[scheduler] Jobs de superpoderes programados (reporte 20:00, recordatorios 09:00, no-shows 21:00, post-venta 11:00, purga 04:00)');

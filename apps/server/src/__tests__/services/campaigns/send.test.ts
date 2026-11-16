@@ -56,6 +56,22 @@ describe('services/campaigns/send', () => {
     expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('el claim manual excluye sent, sending y cancelled', async () => {
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    await sendCampaign(BIZ, 'c1');
+    expect(mock(prisma.campaign.updateMany).mock.calls[0][0].where).toEqual({
+      id: 'c1', businessId: BIZ, status: { notIn: ['sent', 'sending', 'cancelled'] },
+    });
+  });
+
+  it('el claim del scheduler exige status scheduled con fecha vencida', async () => {
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    await sendCampaign(BIZ, 'c1', undefined, { scheduledOnly: true });
+    const where = mock(prisma.campaign.updateMany).mock.calls[0][0].where;
+    expect(where).toMatchObject({ id: 'c1', businessId: BIZ, status: 'scheduled' });
+    expect(where.scheduledAt.lte).toBeInstanceOf(Date);
+  });
+
   it('envía a todos y deja la campaña en sent con el conteo', async () => {
     mock(prisma.user.findMany).mockResolvedValue(users);
     const res = await sendCampaign(BIZ, 'c1');

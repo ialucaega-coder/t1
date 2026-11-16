@@ -197,8 +197,10 @@ describe('routes/campaigns', () => {
 
   describe('PATCH /api/campaigns/:id', () => {
     it('actualiza una campana existente', async () => {
+      mock(prisma.campaign.findFirst)
+        .mockResolvedValueOnce({ status: 'draft' })
+        .mockResolvedValueOnce({ id: 'c1', name: 'Nuevo' });
       mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
-      mock(prisma.campaign.findFirst).mockResolvedValue({ id: 'c1', name: 'Nuevo' });
 
       const res = await request(app)
         .patch('/api/campaigns/c1')
@@ -210,7 +212,7 @@ describe('routes/campaigns', () => {
     });
 
     it('devuelve 404 si la campana no existe (o es de otro negocio)', async () => {
-      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 0 });
+      mock(prisma.campaign.findFirst).mockResolvedValue(null);
 
       const res = await request(app)
         .patch('/api/campaigns/no-existe')
@@ -218,7 +220,56 @@ describe('routes/campaigns', () => {
         .send({ name: 'Nuevo' });
 
       expect(res.status).toBe(404);
-      expect(prisma.campaign.findFirst).not.toHaveBeenCalled();
+      expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('una fecha futura deja la campana en scheduled', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValueOnce({ status: 'draft' }).mockResolvedValueOnce({ id: 'c1' });
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
+      const when = new Date(Date.now() + 3_600_000).toISOString();
+
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ scheduledAt: when });
+
+      expect(res.status).toBe(200);
+      const arg = mock(prisma.campaign.updateMany).mock.calls[0][0];
+      expect(arg.data.status).toBe('scheduled');
+      expect(arg.data.scheduledAt).toEqual(new Date(when));
+    });
+
+    it('rechaza programar en el pasado', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({ status: 'draft' });
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ scheduledAt: new Date(Date.now() - 3_600_000).toISOString() });
+      expect(res.status).toBe(400);
+      expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('scheduledAt null desprograma y vuelve a draft', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValueOnce({ status: 'scheduled' }).mockResolvedValueOnce({ id: 'c1' });
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ scheduledAt: null });
+      expect(res.status).toBe(200);
+      const arg = mock(prisma.campaign.updateMany).mock.calls[0][0];
+      expect(arg.data.status).toBe('draft');
+      expect(arg.data.scheduledAt).toBeNull();
+    });
+
+    it('no deja editar una campana ya enviada', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({ status: 'sent' });
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'x' });
+      expect(res.status).toBe(400);
+      expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
     });
   });
 

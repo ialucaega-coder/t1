@@ -54,8 +54,22 @@ interface Cursor {
 
 const cursorKey = (businessId: string, id: string) => `campaign:${businessId}:${id}:cursor`;
 
-/** Resultado del último envío inline (sin Redis) para devolverlo al caller. */
+/**
+ * Resultado del último envío inline (sin Redis) para devolverlo al caller.
+ * Solo se guarda si `sendCampaign` lo está esperando (`inlineWanted`): antes el
+ * worker lo escribía SIEMPRE y con colas reales nadie lo borraba (el Map crecía
+ * una entrada por campaña enviada).
+ */
 const inlineResults = new Map<string, SendCampaignResult>();
+const inlineWanted = new Set<string>();
+
+export interface SendCampaignOptions {
+  /**
+   * Disparo por el scheduler: el claim exige status 'scheduled' (no pisa una
+   * campaña cancelada/editada entre el listado y el claim) y `scheduledAt` vencido.
+   */
+  scheduledOnly?: boolean;
+}
 
 /**
  * Envía la campaña `id` del negocio. Lanza AppError(404) si no existe y
@@ -67,10 +81,15 @@ export async function sendCampaign(
   businessId: string,
   id: string,
   message?: string,
+  options: SendCampaignOptions = {},
 ): Promise<SendCampaignResult> {
-  // Claim ATÓMICO: pasa a 'sending' solo si NO estaba ya 'sent' ni 'sending'.
+  // Claim ATÓMICO: pasa a 'sending' solo si NO estaba ya 'sent' ni 'sending'
+  // (ni 'cancelled': una campaña cancelada no se envía; el scheduler además exige
+  // 'scheduled' con fecha vencida).
   const claim = await prisma.campaign.updateMany({
-    where: { id, businessId, status: { notIn: ['sent', 'sending'] } },
+    where: options.scheduledOnly
+      ? { id, businessId, status: 'scheduled', scheduledAt: { lte: new Date() } }
+      : { id, businessId, status: { notIn: ['sent', 'sending', 'cancelled'] } },
     data: { status: 'sending' },
   });
   if (claim.count === 0) {
@@ -83,6 +102,7 @@ export async function sendCampaign(
 
   await sharedDel(cursorKey(businessId, id)); // envío nuevo: sin progreso previo
 
+  inlineWanted.add(id);
   const how = await enqueue<CampaignJob>(
     CAMPAIGN_QUEUE,
     { businessId, id, message },
@@ -93,7 +113,9 @@ export async function sendCampaign(
     { jobId: `campaign_${id}_${Date.now()}`, attempts: MAX_ATTEMPTS, backoffMs: 5000 },
   );
 
+  inlineWanted.delete(id);
   if (how === 'queued') {
+    inlineResults.delete(id); // el worker (otro proceso o este) no debe dejar basura
     return {
       ...campaign,
       status: 'sending',
@@ -130,7 +152,7 @@ async function runCampaignJob({ businessId, id, message }: CampaignJob): Promise
 
   try {
     const result = await deliverCampaign(businessId, id, message, cursor);
-    inlineResults.set(id, result);
+    if (inlineWanted.has(id)) inlineResults.set(id, result);
     await sharedDel(key);
   } catch (err) {
     console.error(`[Campaigns] envío de ${id} falló (intento ${cursor.tries}/${MAX_ATTEMPTS}):`, describeError(err));

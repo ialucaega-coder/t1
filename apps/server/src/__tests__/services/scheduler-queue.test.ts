@@ -48,9 +48,11 @@ beforeEach(() => {
 
 describe('scheduler por negocio en cola', () => {
   it('registra la cola scheduler-business con su handler al cargar el módulo', () => {
-    expect(registeredQueues).toHaveLength(1);
-    expect(registeredQueues[0][0]).toBe('scheduler-business');
-    expect(registeredQueues[0][1]).toBe(processSchedulerJob);
+    // scheduler.ts importa el despacho de campañas, que registra su propia cola
+    // ('campaign-send'): acá solo nos importa la del scheduler.
+    const mine = registeredQueues.filter((q) => q[0] === 'scheduler-business');
+    expect(mine).toHaveLength(1);
+    expect(mine[0][1]).toBe(processSchedulerJob);
   });
 
   it('el reparto encola un trabajo por negocio, sin ejecutar nada en el cron', async () => {
