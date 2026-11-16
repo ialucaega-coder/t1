@@ -14,6 +14,7 @@ import {
   cuidCutoffId,
   purgeExpiredOtps,
   purgeOldIdempotencyKeys,
+  purgeOldMercadoPagoRows,
   runPurge,
 } from '../../services/maintenance/purge';
 
@@ -88,12 +89,76 @@ describe('purgeOldIdempotencyKeys', () => {
   });
 });
 
+describe('purgeOldMercadoPagoRows', () => {
+  /**
+   * Emula el DELETE con filas en memoria: aplica los mismos criterios que el SQL
+   * (type = ANY(tipos), isActive=false, id con formato cuid, id < corte), tomando
+   * los parámetros en el orden en que se interpolan en la consulta.
+   */
+  function fakeTable(rows: { id: string; type: string; isActive: boolean; businessId: string }[]) {
+    exec.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      expect(strings.join('?')).toContain('"isActive" = false');
+      const [types, cutoff] = values as [string[], string];
+      const doomed = rows.filter(
+        (r) => types.includes(r.type) && !r.isActive && /^c[0-9a-z]{24}$/.test(r.id) && r.id < cutoff,
+      );
+      for (const r of doomed) rows.splice(rows.indexOf(r), 1);
+      return doomed.length;
+    });
+    return rows;
+  }
+  const now = Date.UTC(2026, 10, 15);
+  const idAt = (ms: number, tail = 'a') => 'c' + Math.floor(ms).toString(36).padStart(8, '0') + tail.repeat(16);
+  const row = (id: string, type: string, extra: Partial<{ isActive: boolean; businessId: string }> = {}) =>
+    ({ id, type, isActive: false, businessId: 'biz_1', ...extra });
+
+  it('borra cobros y claves de pago de más de 180 días y conserva los recientes', async () => {
+    const rows = fakeTable([
+      row(idAt(now - 200 * DAY, 'a'), 'MERCADOPAGO_COBRO'),
+      row(idAt(now - 200 * DAY, 'b'), 'MERCADOPAGO_PAYMENT'),
+      row(idAt(now - 100 * DAY, 'c'), 'MERCADOPAGO_COBRO'), // un link pagado semanas después sigue reconocible
+      row(idAt(now - 100 * DAY, 'd'), 'MERCADOPAGO_PAYMENT'),
+      row(idAt(now - 1 * DAY, 'e'), 'MERCADOPAGO_COBRO'),
+    ]);
+    expect(await purgeOldMercadoPagoRows(now)).toBe(2);
+    expect(rows.map((r) => r.id.slice(-1))).toEqual(['c', 'd', 'e']);
+  });
+
+  it('no toca otros tipos (ni la conexión real de MercadoPago ni otras idempotencias) aunque sean viejos', async () => {
+    const rows = fakeTable([
+      row(idAt(now - 400 * DAY, 'a'), 'MERCADOPAGO'), // la configuración real del negocio
+      row(idAt(now - 400 * DAY, 'b'), 'ORDER_IDEMPOTENCY'),
+      row(idAt(now - 400 * DAY, 'c'), 'MERCADOPAGO_COBRO', { isActive: true }),
+      row('id-con-otro-formato', 'MERCADOPAGO_COBRO'),
+    ]);
+    expect(await purgeOldMercadoPagoRows(now)).toBe(0);
+    expect(rows).toHaveLength(4);
+  });
+
+  it('aplica a todos los negocios por igual (la purga es global por TTL)', async () => {
+    const rows = fakeTable([
+      row(idAt(now - 300 * DAY, 'a'), 'MERCADOPAGO_COBRO', { businessId: 'biz_1' }),
+      row(idAt(now - 300 * DAY, 'b'), 'MERCADOPAGO_COBRO', { businessId: 'biz_2' }),
+      row(idAt(now - 10 * DAY, 'c'), 'MERCADOPAGO_COBRO', { businessId: 'biz_2' }),
+    ]);
+    expect(await purgeOldMercadoPagoRows(now)).toBe(2);
+    expect(rows.map((r) => r.businessId)).toEqual(['biz_2']);
+  });
+
+  it('el corte es exactamente 180 días y solo toca los dos scopes de MercadoPago', async () => {
+    await purgeOldMercadoPagoRows(now);
+    const params = exec.mock.calls[0].slice(1) as unknown[];
+    expect(params).toContainEqual(['MERCADOPAGO_COBRO', 'MERCADOPAGO_PAYMENT']);
+    expect(params).toContain(cuidCutoffId(now - 180 * DAY));
+  });
+});
+
 describe('runPurge', () => {
   it('si una purga falla, la otra igual corre', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     exec.mockRejectedValueOnce(new Error('db')).mockResolvedValueOnce(3);
     const out = await runPurge();
-    expect(out).toEqual({ otps: 0, idempotency: 3 });
+    expect(out).toEqual({ otps: 0, idempotency: 3, mercadopago: 0 });
     expect(err).toHaveBeenCalled();
     err.mockRestore();
   });

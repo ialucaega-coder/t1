@@ -361,6 +361,34 @@ export default function ConversacionesPage() {
     }
   }
 
+  // Tomar / devolver al bot: pausa o reactiva el bot SOLO en esta conversación
+  // (metadata.botPaused). Responder como humano también pausa al bot.
+  const [togglingBot, setTogglingBot] = useState(false);
+
+  async function handleToggleBot(pause: boolean, force = false) {
+    if (!selectedId || togglingBot) return;
+    setTogglingBot(true);
+    try {
+      if (pause) await (force ? conversationsApi.take(selectedId, true) : conversationsApi.take(selectedId));
+      else await conversationsApi.release(selectedId);
+      toast({
+        type: 'success',
+        message: pause ? 'Tomaste la conversación: el bot dejó de responder.' : 'Devuelta al bot: vuelve a responder automáticamente.',
+      });
+      refetchDetail();
+      refetch();
+    } catch (err) {
+      console.error('Error toggling bot:', err);
+      // El server explica el motivo (p. ej. "Ya la está atendiendo Ana"); si solo hay
+      // un error de red/HTTP genérico mostramos el mensaje fijo.
+      const detailMsg = err instanceof Error && err.message && !err.message.startsWith('HTTP ') ? err.message : '';
+      const base = pause ? 'No se pudo tomar la conversación.' : 'No se pudo devolver al bot.';
+      toast({ type: 'error', message: detailMsg ? `${base} ${detailMsg}` : base });
+    } finally {
+      setTogglingBot(false);
+    }
+  }
+
   async function handleClose(id: string) {
     await closeConversation(id);
     if (selectedId === id) setSelectedId(null);
@@ -774,6 +802,71 @@ export default function ConversacionesPage() {
                       <Flame className="h-3 w-3" /> {TEMP_STYLE[detail.metadata.leadScore.temperature].label} · {detail.metadata.leadScore.score}
                     </span>
                   )}
+                  {detail.status !== 'CLOSED' && (() => {
+                    // Estados de atención (ver server services/conversationState.ts):
+                    // HUMANO (botPaused) / ESPERANDO (derivada, nadie la tomó) / BOT.
+                    const paused = detail.metadata?.botPaused === true;
+                    const waiting = !paused && detail.status === 'HANDOFF';
+                    const heldByOther = paused && !!detail.metadata?.pausedBy && detail.metadata.pausedBy !== user?.id;
+                    return (
+                      <>
+                        {paused ? (
+                          <span
+                            className="badge border text-[9px] bg-violet-500/10 text-violet-400 border-violet-500/20"
+                            title="El bot está pausado en esta conversación"
+                          >
+                            <User className="h-3 w-3" /> Atendida por {detail.metadata?.pausedByName || 'un agente'}
+                          </span>
+                        ) : waiting ? (
+                          <span
+                            className="badge border text-[9px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+                            title="El cliente pidió una persona y el bot está callado hasta que alguien la tome"
+                          >
+                            <AlertTriangle className="h-3 w-3" /> Esperando agente
+                          </span>
+                        ) : (
+                          <span
+                            className="badge border text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                            title="El bot responde automáticamente"
+                          >
+                            <Bot className="h-3 w-3" /> Bot activo
+                          </span>
+                        )}
+                        {!paused && (
+                          <button
+                            onClick={() => handleToggleBot(true)}
+                            disabled={togglingBot}
+                            className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Pausar al bot y atender vos"
+                          >
+                            {togglingBot ? <Loader2 className="h-3 w-3 animate-spin" /> : <User className="h-3 w-3" />}
+                            Tomar conversación
+                          </button>
+                        )}
+                        {heldByOther && user?.role === 'ADMIN' && (
+                          <button
+                            onClick={() => handleToggleBot(true, true)}
+                            disabled={togglingBot}
+                            className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Quitarle la conversación al agente que la tiene (solo administradores)"
+                          >
+                            <User className="h-3 w-3" /> Tomar igual
+                          </button>
+                        )}
+                        {(paused || waiting) && (
+                          <button
+                            onClick={() => handleToggleBot(false)}
+                            disabled={togglingBot}
+                            className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Reactivar las respuestas automáticas del bot"
+                          >
+                            {togglingBot ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3 text-emerald-400" />}
+                            Devolver al bot
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                   <button
                     onClick={handleLeadScore}
                     disabled={scoring}

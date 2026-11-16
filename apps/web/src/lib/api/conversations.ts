@@ -37,7 +37,7 @@ export interface ConversationMeta {
   lastReadAt?: string | null;
   /** Canal real cuando no tiene enum propio (ej: 'MESSENGER'/'VOICE' sobre WEBCHAT). */
   realChannel?: string;
-  /** Bot pausado en esta conversación (un agente la tomó). */
+  /** Bot pausado en esta conversación (un agente la tomó o respondió). */
   botPaused?: boolean;
   pausedBy?: string | null;
   pausedByName?: string | null;
@@ -208,9 +208,13 @@ export function leadScore(id: string) {
   return httpClient.post<LeadScore>(`/conversations/${id}/lead-score`, {});
 }
 
-// Toma la conversación: pausa el bot en esta conversación para responder como humano.
-export function take(id: string) {
-  return httpClient.post<{ metadata: ConversationMeta }>(`/conversations/${id}/take`, {});
+// Toma la conversación: el bot se calla y queda "Atendida por <vos>". Si ya la
+// tiene OTRO agente el server responde 409 (salvo `force`, que solo vale para ADMIN).
+export function take(id: string, force?: boolean) {
+  return httpClient.post<{ metadata: ConversationMeta; status?: Conversation['status'] }>(
+    `/conversations/${id}/take${force ? '?force=true' : ''}`,
+    {},
+  );
 }
 
 // Reactiva el bot en la conversación (opuesto a take).

@@ -11,7 +11,9 @@ import jwt from 'jsonwebtoken';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    conversation: { findFirst: vi.fn(), update: vi.fn() },
+    $transaction: vi.fn(),
+    $queryRaw: vi.fn(),
+    conversation: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     message: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
     user: { findFirst: vi.fn() },
     business: { findFirst: vi.fn() },
@@ -76,7 +78,11 @@ describe('POST /api/conversations/:id/reply', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m(prisma.conversation.findFirst).mockResolvedValue(waConversation);
-    m(prisma.conversation.update).mockResolvedValue({});
+    m(prisma.conversation.update).mockImplementation(async ({ data }: { data: { metadata?: unknown } }) => ({ metadata: data.metadata }));
+    // Escrituras de metadata: transacción con lock FOR UPDATE (la fila existe).
+    m(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    m(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+    m(prisma.conversation.findUnique).mockResolvedValue({ metadata: null });
     m(prisma.user.findFirst).mockResolvedValue({ name: 'Ana Agente' });
     m(prisma.business.findFirst).mockResolvedValue({ whatsappNumber: '+14155550100', phone: null });
     m(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -156,13 +162,51 @@ describe('POST /api/conversations/:id/reply', () => {
     expect(sendMeta).not.toHaveBeenCalled();
   });
 
-  it('una conversación derivada (HANDOFF) vuelve a OPEN al responder', async () => {
+  it('una conversación derivada (HANDOFF) pasa a OPEN + botPaused en UNA sola escritura atómica', async () => {
     m(prisma.conversation.findFirst).mockResolvedValue({ ...waConversation, status: 'HANDOFF' });
+    m(prisma.conversation.findUnique).mockResolvedValue({ status: 'HANDOFF', metadata: { waitingSince: '2026-01-01T00:00:00.000Z' } });
     m(sendWhatsApp).mockResolvedValue('SM1');
 
     await post('/api/conversations/c1/reply', { text: 'Hola' });
 
-    expect(m(prisma.conversation.update).mock.calls[0][0].data).toMatchObject({ status: 'OPEN' });
+    // status y metadata viajan en el MISMO update (no puede quedar pausada + HANDOFF).
+    expect(prisma.conversation.update).toHaveBeenCalledTimes(1);
+    const data = m(prisma.conversation.update).mock.calls[0][0].data;
+    expect(data.status).toBe('OPEN');
+    expect(data.metadata).toMatchObject({ botPaused: true, pausedBy: 'user_1' });
+    expect(data.metadata.waitingSince).toBeUndefined();
+  });
+
+  it('sobre una conversación CERRADA responde 409 y no guarda ni envía nada', async () => {
+    m(prisma.conversation.findFirst).mockResolvedValue({ ...waConversation, status: 'CLOSED' });
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CONVERSATION_CLOSED');
+    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it('si se cerró justo entre la lectura y la transición también se rechaza (409) sin guardar', async () => {
+    m(prisma.conversation.findUnique).mockResolvedValue({ status: 'CLOSED', metadata: null });
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(409);
+    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it('aunque la entrega falle, el bot queda pausado (el humano ya la tomó) y la respuesta marca el fallo', async () => {
+    m(sendWhatsApp).mockRejectedValue(new Error('boom'));
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deliveryStatus).toBe('failed');
+    const data = m(prisma.conversation.update).mock.calls[0][0].data;
+    expect(data.metadata).toMatchObject({ botPaused: true, pausedBy: 'user_1' });
   });
 
   describe('Idempotency-Key', () => {
@@ -343,5 +387,273 @@ describe('rate limit por negocio en reply y retry', () => {
 
     expect(res.status).toBe(429);
     expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+});
+
+describe('pausa del bot al responder / tomar / devolver', () => {
+  const metaWrites = () =>
+    m(prisma.conversation.update).mock.calls.map((c) => c[0].data.metadata).filter(Boolean) as Record<string, unknown>[];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m(prisma.conversation.findFirst).mockResolvedValue(waConversation);
+    m(prisma.conversation.update).mockImplementation(async ({ data }: { data: { metadata?: unknown } }) => ({ metadata: data.metadata }));
+    m(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    m(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+    m(prisma.conversation.findUnique).mockResolvedValue({ metadata: null });
+    m(prisma.user.findFirst).mockResolvedValue({ name: 'Ana Agente' });
+    m(prisma.business.findFirst).mockResolvedValue({ whatsappNumber: '+14155550100', phone: null });
+    m(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'm1', ...data }));
+    m(prisma.message.update).mockImplementation(async ({ data }: { data: { metadata: unknown } }) => ({ metadata: data.metadata }));
+    m(sendWhatsApp).mockResolvedValue('SM1');
+  });
+
+  it('/reply pausa el bot y guarda quién y cuándo', async () => {
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(200);
+    expect(metaWrites()[0]).toMatchObject({ botPaused: true, pausedBy: 'user_1', pausedByName: 'Ana Agente' });
+    expect(typeof metaWrites()[0].pausedAt).toBe('string');
+  });
+
+  it('/reply no pisa quién había tomado la conversación', async () => {
+    m(prisma.conversation.findUnique).mockResolvedValue({
+      metadata: { botPaused: true, pausedBy: 'user_9', pausedByName: 'Otro agente', pausedAt: '2026-01-01T00:00:00.000Z', tags: ['vip'] },
+    });
+
+    await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(metaWrites()[0]).toMatchObject({ botPaused: true, pausedBy: 'user_9', pausedByName: 'Otro agente', tags: ['vip'] });
+  });
+
+  it('si falla la transición de atención no se guarda ni se envía nada (500) y se libera la clave', async () => {
+    m(prisma.$transaction).mockRejectedValue(new Error('db caída'));
+    m(claimIdempotentKey).mockResolvedValue(true);
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' }, { 'Idempotency-Key': 'k-9' });
+
+    expect(res.status).toBe(500);
+    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(releaseIdempotentKey).toHaveBeenCalledWith(prisma, 'biz_1', expect.any(String), 'conv-reply:c1:k-9');
+  });
+
+  it('/take pausa el bot de esa conversación', async () => {
+    const res = await post('/api/conversations/c1/take');
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata).toMatchObject({ botPaused: true, pausedBy: 'user_1', pausedByName: 'Ana Agente' });
+  });
+
+  it('/release devuelve la conversación al bot (OPEN) y limpia todo el rastro de atención', async () => {
+    m(prisma.conversation.findUnique).mockResolvedValue({
+      status: 'OPEN',
+      metadata: { botPaused: true, pausedBy: 'user_1', pausedByName: 'Ana Agente', pausedAt: '2026-01-01T00:00:00.000Z', lastHumanAt: '2026-01-01T00:00:00.000Z', tags: ['vip'] },
+    });
+
+    const res = await post('/api/conversations/c1/release');
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata).toEqual({ tags: ['vip'] });
+    expect(res.body.status).toBe('OPEN');
+  });
+
+  it('multi-tenant: /take y /release de una conversación ajena dan 404 sin escribir; el lock se scopea por negocio', async () => {
+    m(prisma.$queryRaw).mockResolvedValue([]); // no existe para biz_1
+
+    const take = await post('/api/conversations/c_ajena/take');
+    const release = await post('/api/conversations/c_ajena/release');
+
+    expect(take.status).toBe(404);
+    expect(release.status).toBe(404);
+    expect(prisma.conversation.update).not.toHaveBeenCalled();
+    // $queryRaw es un template tag: (strings, id, businessId)
+    expect(m(prisma.$queryRaw).mock.calls[0].slice(1)).toEqual(['c_ajena', 'biz_1']);
+  });
+
+  it('multi-tenant: /reply a una conversación ajena no pausa nada', async () => {
+    m(prisma.conversation.findFirst).mockResolvedValue(null);
+
+    const res = await post('/api/conversations/c_ajena/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(404);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.conversation.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('atención: /take, /close y reintentos (estados atómicos)', () => {
+  const proToken = jwt.sign({ userId: 'user_2', businessId: 'biz_1', role: 'PROFESSIONAL' }, JWT_SECRET);
+  const proAuth = { Authorization: `Bearer ${proToken}` };
+  const lastUpdate = () => m(prisma.conversation.update).mock.calls.at(-1)?.[0].data;
+  const closeReq = (id: string) =>
+    request(buildApp()).patch(`/api/conversations/${id}/close`).set('Authorization', `Bearer ${token}`);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    m(prisma.conversation.findFirst).mockResolvedValue(waConversation);
+    m(prisma.conversation.update).mockImplementation(async ({ data }: { data: { status?: string; metadata?: unknown } }) => ({ status: data.status ?? 'OPEN', metadata: data.metadata }));
+    m(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    m(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+    m(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: null });
+    m(prisma.user.findFirst).mockResolvedValue({ name: 'Ana Agente' });
+    m(prisma.business.findFirst).mockResolvedValue({ whatsappNumber: '+14155550100', phone: null });
+    m(sendWhatsApp).mockResolvedValue('SM1');
+  });
+
+  describe('/take', () => {
+    it('saca la conversación de HANDOFF ("Te necesitan") y la deja OPEN + botPaused en la misma escritura', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({ status: 'HANDOFF', metadata: { waitingSince: '2026-01-01T00:00:00.000Z', handoffAckAt: '2026-01-01T00:00:00.000Z' } });
+
+      const res = await post('/api/conversations/c1/take');
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('OPEN');
+      expect(lastUpdate().status).toBe('OPEN');
+      expect(res.body.metadata).toMatchObject({ botPaused: true, pausedBy: 'user_1' });
+      expect(res.body.metadata.waitingSince).toBeUndefined();
+      expect(res.body.metadata.handoffAckAt).toBeUndefined();
+    });
+
+    it('si ya la tiene OTRO agente responde 409 TAKEN_BY_OTHER y no escribe', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: { botPaused: true, pausedBy: 'user_9', pausedByName: 'Beto' } });
+
+      const res = await post('/api/conversations/c1/take');
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('TAKEN_BY_OTHER');
+      expect(res.body.takenBy).toEqual({ id: 'user_9', name: 'Beto' });
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
+    });
+
+    it('?force=true de un ADMIN le saca la conversación al otro agente', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: { botPaused: true, pausedBy: 'user_9', pausedByName: 'Beto' } });
+
+      const res = await post('/api/conversations/c1/take?force=true');
+
+      expect(res.status).toBe(200);
+      expect(res.body.metadata).toMatchObject({ pausedBy: 'user_1' });
+    });
+
+    it('?force=true de un NO admin se ignora (409)', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: { botPaused: true, pausedBy: 'user_9', pausedByName: 'Beto' } });
+
+      const res = await post('/api/conversations/c1/take?force=true', {}, proAuth);
+
+      expect(res.status).toBe(409);
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
+    });
+
+    it('tomar una conversación CERRADA da 409', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({ status: 'CLOSED', metadata: null });
+
+      const res = await post('/api/conversations/c1/take');
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('CONVERSATION_CLOSED');
+    });
+  });
+
+  describe('/reply conserva al primero que la tomó', () => {
+    it('otro agente que responde no cambia pausedBy pero sí refresca lastHumanAt', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({
+        status: 'OPEN',
+        metadata: { botPaused: true, pausedBy: 'user_9', pausedByName: 'Beto', pausedAt: '2026-01-01T00:00:00.000Z', lastHumanAt: '2026-01-01T00:00:00.000Z' },
+      });
+      m(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'm1', createdAt: new Date(), ...data }));
+      m(prisma.message.update).mockResolvedValue({ metadata: {} });
+
+      await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+      const meta = lastUpdate().metadata;
+      expect(meta).toMatchObject({ pausedBy: 'user_9', pausedByName: 'Beto', pausedAt: '2026-01-01T00:00:00.000Z' });
+      expect(Date.parse(meta.lastHumanAt)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00.000Z'));
+    });
+  });
+
+  describe('/close', () => {
+    it('cierra una conversación HANDOFF (antes daba 404) y limpia botPaused/pausedBy/...', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({
+        status: 'HANDOFF',
+        metadata: { botPaused: true, pausedBy: 'user_9', pausedByName: 'Beto', pausedAt: 'x', lastHumanAt: 'x', waitingSince: 'x', tags: ['vip'] },
+      });
+
+      const res = await closeReq('c1');
+
+      expect(res.status).toBe(200);
+      const data = lastUpdate();
+      expect(data.status).toBe('CLOSED');
+      expect(data.metadata).toEqual({ tags: ['vip'] });
+    });
+
+    it('una conversación ya cerrada da 404 y no escribe', async () => {
+      m(prisma.conversation.findUnique).mockResolvedValue({ status: 'CLOSED', metadata: null });
+
+      const res = await closeReq('c1');
+
+      expect(res.status).toBe(404);
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
+    });
+
+    it('multi-tenant: una conversación ajena da 404', async () => {
+      m(prisma.$queryRaw).mockResolvedValue([]);
+
+      const res = await closeReq('c_ajena');
+
+      expect(res.status).toBe(404);
+      expect(m(prisma.$queryRaw).mock.calls[0].slice(1)).toEqual(['c_ajena', 'biz_1']);
+      expect(prisma.conversation.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('/retry de un pending colgado', () => {
+    const humanMsg = (over: Record<string, unknown>) => ({
+      id: 'm1', conversationId: 'c1', role: 'BOT', text: 'Hola', createdAt: new Date('2026-01-01T10:00:00Z'),
+      metadata: { sender: 'human', userId: 'user_1', deliveryAttempts: 1, ...over },
+    });
+
+    beforeEach(() => {
+      m(prisma.message.updateMany).mockResolvedValue({ count: 1 });
+      m(prisma.message.update).mockImplementation(async ({ data }: { data: { metadata: unknown } }) => ({ metadata: data.metadata }));
+    });
+
+    it('un pending de más de 60 s se trata como failed y se reintenta', async () => {
+      const old = new Date(Date.now() - 120_000).toISOString();
+      m(prisma.message.findFirst).mockResolvedValue(humanMsg({ deliveryStatus: 'pending', deliveryStartedAt: old }));
+
+      const res = await post('/api/conversations/c1/reply/m1/retry');
+
+      expect(res.status).toBe(200);
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      // La reserva atómica parte de 'pending' (no de 'failed').
+      expect(m(prisma.message.updateMany).mock.calls[0][0].where.metadata).toEqual({ path: ['deliveryStatus'], equals: 'pending' });
+    });
+
+    it('un pending reciente (< 60 s) todavía se está enviando: 409 y no reenvía', async () => {
+      m(prisma.message.findFirst).mockResolvedValue(humanMsg({ deliveryStatus: 'pending', deliveryStartedAt: new Date().toISOString() }));
+
+      const res = await post('/api/conversations/c1/reply/m1/retry');
+
+      expect(res.status).toBe(409);
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    });
+
+    it('sin deliveryStartedAt usa la fecha del mensaje para decidir si está colgado', async () => {
+      m(prisma.message.findFirst).mockResolvedValue(humanMsg({ deliveryStatus: 'pending' })); // createdAt 2026-01-01: viejo
+
+      const res = await post('/api/conversations/c1/reply/m1/retry');
+
+      expect(res.status).toBe(200);
+    });
+
+    it('reintentar sobre una conversación CERRADA da 409', async () => {
+      m(prisma.conversation.findFirst).mockResolvedValue({ ...waConversation, status: 'CLOSED' });
+
+      const res = await post('/api/conversations/c1/reply/m1/retry');
+
+      expect(res.status).toBe(409);
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    });
   });
 });

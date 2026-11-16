@@ -17,6 +17,13 @@ import { loadSystemPrompt } from './ai/system-prompt';
 import { getMessageQuota } from './billing/quota';
 import { dispatchEvent } from './workflows';
 import type { ConversationAttribution } from './whatsapp/attribution';
+import {
+  isBotSilenced,
+  isAttentionExpired,
+  isPauseNoticeDue,
+  stampPauseNotice,
+  transitionAttention,
+} from './conversationState';
 
 /**
  * Lee si el negocio superó el cupo de mensajes, SIN romper el flujo del bot: si
@@ -81,7 +88,42 @@ export interface ChatbotResponse {
   text: string;
   intent: ChatIntent;
   actions: ChatAction[];
+  /**
+   * true cuando el bot está silenciado (un humano atiende o se espera a uno, ver
+   * services/conversationState.ts): el mensaje del cliente se guardó pero el bot
+   * NO respondió ni gastó IA/cuota. `text` es, como mucho una vez cada 10 min, un
+   * aviso de cortesía para los canales SÍNCRONOS (widget, voz, ManyChat); si no,
+   * va vacío. Los canales asíncronos (WhatsApp, Instagram, Messenger) NO envían nada.
+   */
+  botPaused?: boolean;
 }
+
+/** Aviso que ven los canales síncronos mientras un humano atiende la conversación. */
+export const BOT_PAUSED_NOTICE = 'Una persona del equipo está atendiendo tu consulta y te va a responder en breve.';
+
+/**
+ * Respuesta cuando el bot está silenciado (un humano atiende o se espera a uno):
+ * el mensaje del cliente ya se guardó y NO se genera nada. El aviso de cortesía
+ * (para canales síncronos) sale como máximo una vez cada PAUSE_NOTICE_INTERVAL_MS
+ * por conversación; el resto de las veces `text` va vacío.
+ */
+async function silencedResponse(
+  conversationId: string,
+  businessId: string,
+  metadata: unknown,
+  intent: ChatIntent,
+): Promise<ChatbotResponse & { conversationId: string }> {
+  let text = '';
+  try {
+    if (isPauseNoticeDue(metadata, Date.now()) && (await stampPauseNotice(conversationId, businessId))) {
+      text = BOT_PAUSED_NOTICE;
+    }
+  } catch (err) {
+    console.error('No se pudo registrar el aviso de pausa:', (err as Error).message);
+  }
+  return { text, intent, actions: [], conversationId, botPaused: true };
+}
+
 
 /** Input para procesar un mensaje, incluye historial opcional de la charla. */
 export interface ProcessMessageOptions {
@@ -382,6 +424,22 @@ export async function processMessage(
     },
   });
 
+  // Un humano tomó la conversación (o está esperando que alguien la tome): el
+  // mensaje ya quedó guardado y avisado al panel, pero el bot NO responde (ni
+  // llama a la IA, ni cuenta cuota, ni deriva). El estado vive en la conversación
+  // de ESTE negocio (se leyó con businessId) y solo un agente autenticado lo
+  // cambia (/take, /release, /reply, /close): el cliente no puede reactivar al bot.
+  // Plazos lazy: si la atención venció (humano inactivo / nadie tomó la derivación)
+  // la conversación vuelve al bot y este mensaje se responde normal.
+  let current: { status: string; metadata: unknown } = conversation;
+  if (isBotSilenced(current) && isAttentionExpired(current, Date.now())) {
+    const expired = await transitionAttention(conversation.id, businessId, { type: 'expire' });
+    if (expired.ok) current = { status: expired.status, metadata: expired.metadata };
+  }
+  if (isBotSilenced(current)) {
+    return silencedResponse(conversation.id, businessId, current.metadata, intent);
+  }
+
   const dbHistory = options.history || await loadHistory(conversation.id);
 
   // Superpoderes del negocio: se consultan UNA sola vez por mensaje y se reusan
@@ -395,28 +453,44 @@ export async function processMessage(
   let usage: TokenUsage | undefined;
   let aiLatencyMs: number | undefined;
 
+  // La derivación la hace el propio bot en este turno: el acuse al cliente es esta
+  // misma respuesta (queda marcado en metadata para no repetirlo).
+  let handedOffNow = false;
+
   if (intent === 'HUMAN') {
     responseText = 'Entendido, en breve te va a contactar una persona del equipo. Gracias por tu paciencia.';
     actions = [{ type: 'escalateToHuman', payload: { channel } }];
 
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { status: 'HANDOFF' },
-    });
-
-    const adminId = (await prisma.user.findFirst({ where: { businessId, role: 'ADMIN' }, select: { id: true } }))?.id;
-    if (adminId) {
-      await prisma.notification.create({
-        data: {
-          userId: adminId,
-          type: 'GENERAL',
-          channel: 'PUSH',
-          title: 'Handoff solicitado',
-          body: `Un cliente pidió hablar con un humano en el chat (${channel}).`,
-          businessId,
-        },
-      }).catch(() => {});
+    // BOT -> ESPERANDO en una transacción. Si alguien la tomó justo antes (changed
+    // = false) no se pisa ni se acusa recibo: el bot se queda callado.
+    const handoff = await transitionAttention(conversation.id, businessId, { type: 'handoff', ack: true });
+    if (handoff.ok && !handoff.changed) {
+      return silencedResponse(conversation.id, businessId, handoff.metadata, intent);
     }
+    handedOffNow = true;
+
+    // Aviso a TODOS los admins activos (no solo al primero). Sin admin: se loguea.
+    const admins = await prisma.user.findMany({
+      where: { businessId, role: 'ADMIN', isActive: true },
+      select: { id: true },
+    });
+    if (admins.length === 0) {
+      console.warn('Handoff solicitado pero el negocio no tiene ADMIN activo para avisar', { businessId, conversationId: conversation.id });
+    }
+    await Promise.all(
+      admins.map((admin) =>
+        prisma.notification.create({
+          data: {
+            userId: admin.id,
+            type: 'GENERAL',
+            channel: 'PUSH',
+            title: 'Handoff solicitado',
+            body: `Un cliente pidió hablar con un humano en el chat (${channel}).`,
+            businessId,
+          },
+        }).catch(() => {}),
+      ),
+    );
   } else if (intent === 'BOOKING') {
     const result = await handleBookingIntent(businessId);
     responseText = result.text;
@@ -490,6 +564,19 @@ export async function processMessage(
       console.error('Error generando respuesta de IA:', error);
       responseText = 'Disculpá, en este momento no puedo responder automáticamente. ¿Querés que te derive con una persona del equipo?';
       actions = [{ type: 'escalateToHuman' }];
+    }
+  }
+
+  // CARRERA bot vs humano: la IA tarda segundos. Si mientras tanto un humano tomó o
+  // respondió (o se derivó), la respuesta del bot se DESCARTA: no se guarda ni se
+  // envía. Se relee solo status+metadata (liviano) justo antes de persistir.
+  if (!handedOffNow) {
+    const fresh = await prisma.conversation.findFirst({
+      where: { id: conversation.id, businessId },
+      select: { status: true, metadata: true },
+    });
+    if (fresh && isBotSilenced(fresh)) {
+      return silencedResponse(conversation.id, businessId, fresh.metadata, intent);
     }
   }
 
@@ -652,20 +739,24 @@ async function getOrCreateConversation(
   options: ProcessMessageOptions,
 ) {
   if (options.conversationId) {
+    // Solo se reusa una conversación ACTIVA de este negocio. Una CLOSED (o de otro
+    // negocio) no se reutiliza: se abre una nueva con el bot activo, igual que los
+    // lookups de WhatsApp/Meta/voz (OPEN o HANDOFF).
     const existing = await prisma.conversation.findFirst({
-      where: { id: options.conversationId, businessId },
+      where: { id: options.conversationId, businessId, status: { in: ['OPEN', 'HANDOFF'] } },
     });
     if (existing) return existing;
   }
 
   // Continuidad por suscriptor (canales externos tipo ManyChat): si no vino un
   // conversationId explícito pero sí un subscriberId, reusamos su conversación
-  // OPEN más reciente en vez de abrir una nueva en cada mensaje.
+  // activa (OPEN o HANDOFF) más reciente en vez de abrir una nueva en cada mensaje:
+  // una derivada a humano sigue siendo la misma charla.
   if (!options.conversationId && options.subscriberId) {
     const prev = await prisma.conversation.findFirst({
       where: {
         businessId,
-        status: 'OPEN',
+        status: { in: ['OPEN', 'HANDOFF'] },
         metadata: { path: ['subscriberId'], equals: options.subscriberId },
       },
       orderBy: { updatedAt: 'desc' },

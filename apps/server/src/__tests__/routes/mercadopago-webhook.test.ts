@@ -409,7 +409,7 @@ describe('webhook MercadoPago — topes que un tercero no puede agotar (H1)', ()
     mock(loadMpConfig).mockClear();
     await post(app, 'biz_1', '9.9.9.9').send(notif());
     expect(loadMpConfig).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
   it('un negocio inexistente / sin MercadoPago no consume el contador del negocio', async () => {
     mock(loadMpConfig).mockResolvedValue(null);

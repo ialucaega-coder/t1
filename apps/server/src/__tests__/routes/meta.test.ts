@@ -116,6 +116,24 @@ describe('routes/meta', () => {
       expect(mock(sendMessage)).toHaveBeenCalledWith('tok', 'U9', 'respuesta');
     });
 
+    it('si un humano tomó la conversación (botPaused) NO se le contesta al cliente y el lookup incluye HANDOFF', async () => {
+      mock(parseMetaEvents).mockReturnValue([
+        { platform: 'instagram', recipientId: 'IG_1', senderId: 'U9', text: 'hola', images: [], audios: [] },
+      ]);
+      mock(resolveBusinessByRecipient).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1', pageAccessToken: 'tok' });
+      mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'c1' });
+      mock(processMessage).mockResolvedValue({ text: 'aviso', conversationId: 'c1', intent: 'FAQ', actions: [], botPaused: true });
+
+      await request(app).post('/api/meta/webhook').send({ object: 'instagram', entry: [] });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(mock(prisma.conversation.findFirst).mock.calls[0][0].where).toMatchObject({
+        businessId: 'biz_1', contactPhone: 'U9', status: { in: ['OPEN', 'HANDOFF'] },
+      });
+      expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'hola', 'INSTAGRAM', expect.objectContaining({ conversationId: 'c1' }));
+      expect(mock(sendMessage)).not.toHaveBeenCalled();
+    });
+
     it('no llama al cerebro si no se resuelve el negocio', async () => {
       mock(parseMetaEvents).mockReturnValue([
         { platform: 'messenger', recipientId: 'PAGE_X', senderId: 'U', text: 'hi', images: [], audios: [] },

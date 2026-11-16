@@ -124,6 +124,32 @@ describe('routes/whatsapp — webhook', () => {
     expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'quiero reservar', 'WHATSAPP', expect.anything());
   });
 
+  it('si un humano tomó la conversación (botPaused) NO le contesta al cliente', async () => {
+    mock(resolveBusinessByNumber).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1' });
+    mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(processMessage).mockResolvedValue({
+      text: 'Una persona del equipo está atendiendo…', conversationId: 'c1', intent: 'FAQ', actions: [], botPaused: true,
+    });
+
+    const res = await request(app).post('/api/whatsapp/webhook').send({ From: 'whatsapp:+549', To: '+1', Body: 'hola' });
+
+    expect(res.status).toBe(200);
+    // El mensaje igual se procesa (se guarda en processMessage), pero no sale nada.
+    expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'hola', 'WHATSAPP', expect.objectContaining({ conversationId: 'c1' }));
+    expect(mock(sendMessage)).not.toHaveBeenCalled();
+  });
+
+  it('una conversación derivada (HANDOFF) se reusa: el lookup acepta OPEN y HANDOFF', async () => {
+    mock(resolveBusinessByNumber).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1' });
+    mock(prisma.conversation.findFirst).mockResolvedValue(null);
+    mock(processMessage).mockResolvedValue({ text: 'ok', conversationId: 'c1', intent: 'FAQ', actions: [] });
+
+    await request(app).post('/api/whatsapp/webhook').send({ From: 'whatsapp:+549', To: '+1', Body: 'hola' });
+
+    const where = mock(prisma.conversation.findFirst).mock.calls[0][0].where;
+    expect(where).toMatchObject({ businessId: 'biz_1', channel: 'WHATSAPP', contactPhone: '+549', status: { in: ['OPEN', 'HANDOFF'] } });
+  });
+
   it('responde 200 aunque processMessage lance (Twilio no debe reintentar)', async () => {
     mock(resolveBusinessByNumber).mockResolvedValue({ businessId: 'biz_1', botId: 'bot_1' });
     mock(prisma.conversation.findFirst).mockResolvedValue(null);

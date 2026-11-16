@@ -150,6 +150,20 @@ describe('routes/manychat — webhook entrante', () => {
     expect(processMessage).toHaveBeenCalledWith('biz_1', 'hola', 'MESSENGER', expect.objectContaining({ contactName: 'Ana' }));
   });
 
+  it('con un humano atendiendo y el aviso ya enviado (texto vacío) responde sin mensajes, no un texto vacío', async () => {
+    mock(verifyMcWebhookToken).mockResolvedValue(true);
+    mock(processMessage).mockResolvedValue({ text: '', intent: 'FAQ', actions: [], conversationId: 'conv_9', botPaused: true });
+
+    const res = await request(app)
+      .post('/api/manychat/webhook/biz_1')
+      .set('x-webhook-token', 'tok_ok')
+      .send({ text: 'hola?', subscriberId: 'sub_1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.content.messages).toEqual([]);
+    expect(res.body.conversationId).toBe('conv_9');
+  });
+
   it('extrae last_input_text y user_id numérico (header)', async () => {
     mock(verifyMcWebhookToken).mockResolvedValue(true);
     mock(processMessage).mockResolvedValue({ text: 'ok', intent: 'FAQ', actions: [], conversationId: 'c1' });

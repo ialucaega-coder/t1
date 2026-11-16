@@ -91,7 +91,7 @@ async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
         botId,
         channel: 'WHATSAPP',
         contactPhone: from,
-        status: 'OPEN',
+        status: { in: ['OPEN', 'HANDOFF'] }, // una derivada a humano sigue siendo la misma charla
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -104,6 +104,9 @@ async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
       ...(visionImages.length ? { images: visionImages } : {}),
       ...(attribution ? { attribution } : {}),
     });
+
+    // Un humano tomó la conversación: el mensaje ya se guardó, el bot no contesta.
+    if (result.botPaused) return;
 
     // Responde DESDE el número del negocio (el `To` al que escribió el
     // cliente), no desde el número global, para respetar el multi-tenant.

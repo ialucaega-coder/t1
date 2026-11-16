@@ -54,7 +54,8 @@ const webhookSchema = z.object({
 function dynamicBlock(text: string, conversationId?: string) {
   return {
     version: 'v2',
-    content: { messages: [{ type: 'text', text }] },
+    // Texto vacío (bot silenciado y aviso ya enviado hace poco): sin mensajes.
+    content: { messages: text ? [{ type: 'text', text }] : [] },
     // Campo extra (ManyChat lo ignora en el render, pero las configuraciones
     // con "External Request" pueden mapearlo a un campo del suscriptor para
     // mantener la continuidad de la conversación en el próximo mensaje).

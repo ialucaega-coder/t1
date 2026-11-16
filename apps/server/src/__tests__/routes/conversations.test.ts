@@ -103,6 +103,51 @@ describe('routes/conversations (inbox)', () => {
     });
   });
 
+  describe('chatTokenHash no viaja al panel', () => {
+    const SECRET_HASH = 'a'.repeat(64);
+
+    it('GET / lo saca de la metadata de cada conversación y conserva el resto', async () => {
+      (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: 'c1', channel: 'WEBCHAT', metadata: { chatTokenHash: SECRET_HASH, tags: ['vip'] } },
+      ]);
+      (prisma.conversation.count as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+
+      const res = await request(app).get('/api/conversations').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].metadata).toEqual({ tags: ['vip'] });
+      expect(JSON.stringify(res.body)).not.toContain(SECRET_HASH);
+    });
+
+    it('GET /:id lo saca del detalle', async () => {
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 'c1', channel: 'WEBCHAT', metadata: { chatTokenHash: SECRET_HASH, realChannel: 'VOICE' }, messages: [],
+      });
+
+      const res = await request(app).get('/api/conversations/c1').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.metadata).toEqual({ realChannel: 'VOICE' });
+      expect(JSON.stringify(res.body)).not.toContain(SECRET_HASH);
+    });
+
+    it('las mutaciones de metadata (etiquetas) tampoco lo devuelven', async () => {
+      (prisma.conversation.update as ReturnType<typeof vi.fn>).mockImplementation(
+        async ({ data }: { data: { metadata: unknown } }) => ({ metadata: { ...(data.metadata as object), chatTokenHash: SECRET_HASH } }),
+      );
+      (prisma.conversation.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({ status: 'OPEN', metadata: {} });
+
+      const res = await request(app)
+        .patch('/api/conversations/c1/tags')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ tags: ['a'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.metadata.chatTokenHash).toBeUndefined();
+      expect(res.body.metadata.tags).toEqual(['a']);
+    });
+  });
+
   describe('GET /api/conversations (search en servidor)', () => {
     it('filtra por nombre/teléfono/email del contacto, scopeado al negocio', async () => {
       (prisma.conversation.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);

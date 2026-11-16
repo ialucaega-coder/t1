@@ -31,11 +31,13 @@
 import crypto from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { createNotification } from '../notifications';
+import { transitionAttention } from '../conversationState';
 import * as whatsapp from '../whatsapp/client';
 import { setClientStage, isLifecycleStage } from '../clients/lifecycle';
 import { hashPassword } from '../../lib/password';
 import { loadMpConfig } from '../mercadopago/config';
 import { createPaymentPreference } from '../mercadopago/client';
+import { buildExternalReference, buildNotificationUrl, recordCobro } from '../mercadopago/cobros';
 import { sendCampaign } from '../campaigns/send';
 import { createBooking } from '../bookings/create';
 import { AppError } from '../../middleware/errorHandler';
@@ -286,8 +288,30 @@ const generarLinkPago: ActionHandler = {
     const cfg = await loadMpConfig(businessId);
     if (!cfg || !cfg.enabled) return { ok: false, status: 'omitido', detail: 'MercadoPago no está conectado' };
 
-    const pref = await createPaymentPreference(cfg.accessToken, { title, amount, currency: cfg.currency });
-    return { ok: true, status: 'ejecutado', detail: 'link de pago generado', data: { url: pref.initPoint, id: pref.id } };
+    // Mismo criterio que POST /mercadopago/payment-link: referencia propia + URL del
+    // webhook, y el cobro guardado, para que el pago se registre solo al aprobarse.
+    const externalReference = buildExternalReference(businessId);
+    const notificationUrl = buildNotificationUrl(businessId);
+    const pref = await createPaymentPreference(cfg.accessToken, {
+      title,
+      amount,
+      currency: cfg.currency,
+      externalReference,
+      notificationUrl,
+    });
+    await recordCobro(businessId, externalReference, {
+      preferenceId: pref.id,
+      amount,
+      currency: cfg.currency,
+      description: title,
+    });
+    return {
+      ok: true,
+      status: 'ejecutado',
+      detail: 'link de pago generado',
+      // `autoRegister` false = sin URL pública para el aviso de MercadoPago: el pago no se registra solo.
+      data: { url: pref.initPoint, id: pref.id, autoRegister: Boolean(notificationUrl) },
+    };
   },
 };
 
@@ -378,11 +402,19 @@ const asignarAgente: ActionHandler = {
     const conversationId = str(params, 'conversationId', 'conversacionId', 'conversacion');
     if (!conversationId) return { ok: false, status: 'omitido', detail: 'falta la conversación a derivar' };
 
-    // Scope multi-tenant: la conversación tiene que ser de ESTE negocio.
-    const conv = await prisma.conversation.findFirst({ where: { id: conversationId, businessId }, select: { id: true } });
-    if (!conv) return { ok: false, status: 'omitido', detail: 'conversación no encontrada en el negocio' };
-
-    await prisma.conversation.update({ where: { id: conversationId }, data: { status: 'HANDOFF' } });
+    // Transición atómica BOT -> ESPERANDO (status + metadata, FOR UPDATE, scopeada
+    // por negocio). No resucita una CERRADA ni pisa una que un humano ya atiende.
+    const handoff = await transitionAttention(conversationId, businessId, { type: 'handoff' });
+    if (!handoff.ok) {
+      return {
+        ok: false,
+        status: 'omitido',
+        detail: handoff.reason === 'closed' ? 'la conversación está cerrada' : 'conversación no encontrada en el negocio',
+      };
+    }
+    if (!handoff.changed) {
+      return { ok: true, status: 'ejecutado', detail: 'la conversación ya estaba derivada o atendida por una persona', data: { conversationId } };
+    }
 
     const admins = await prisma.user.findMany({ where: { businessId, role: 'ADMIN' }, select: { id: true } });
     await Promise.all(

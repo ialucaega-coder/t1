@@ -107,7 +107,7 @@ async function processMetaInbound(msg: MetaIncomingMessage): Promise<void> {
       businessId,
       botId,
       contactPhone: msg.senderId,
-      status: 'OPEN',
+      status: { in: ['OPEN', 'HANDOFF'] }, // una derivada a humano sigue siendo la misma charla
     },
     orderBy: { updatedAt: 'desc' },
   });
@@ -133,6 +133,8 @@ async function processMetaInbound(msg: MetaIncomingMessage): Promise<void> {
       ...(images.length ? { images } : {}),
     });
 
+    // Un humano tomó la conversación: el mensaje ya se guardó, el bot no contesta.
+    if (result.botPaused) return;
     await sendMessage(pageAccessToken, msg.senderId, result.text);
   } catch (error) {
     console.error('Error procesando mensaje de Meta:', error);

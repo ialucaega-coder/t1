@@ -18,6 +18,11 @@ vi.mock('../../services/voice/client', () => {
   // Se define DENTRO del factory porque vi.mock se iza al tope del archivo y
   // no puede referenciar variables del scope externo.
   class FakeVoiceResponse {
+    // Última instancia creada: los tests inspeccionan qué se dijo/colgó.
+    static last: FakeVoiceResponse | null = null;
+    constructor() {
+      FakeVoiceResponse.last = this;
+    }
     say = vi.fn();
     hangup = vi.fn();
     redirect = vi.fn();
@@ -51,7 +56,7 @@ vi.mock('../../lib/prisma', () => ({
   },
 }));
 
-import { isVoiceConfigured, resolveBusinessByNumber } from '../../services/voice/client';
+import { isVoiceConfigured, resolveBusinessByNumber, VoiceResponse } from '../../services/voice/client';
 import { loadVoiceSettings, saveVoiceSettings } from '../../services/voice/config';
 import { processMessage } from '../../services/chatbot';
 import { prisma } from '../../lib/prisma';
@@ -207,6 +212,46 @@ describe('routes/voice', () => {
         'VOICE',
         expect.objectContaining({ contactPhone: '+5491111111111' })
       );
+    });
+
+    it('con un humano a cargo (botPaused) avisa y corta la llamada; el lookup incluye HANDOFF', async () => {
+      (loadVoiceSettings as ReturnType<typeof vi.fn>).mockResolvedValue(CFG);
+      (resolveBusinessByNumber as ReturnType<typeof vi.fn>).mockResolvedValue('biz_1');
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+      (processMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        text: 'Una persona del equipo te va a atender', actions: [], botPaused: true,
+      });
+
+      const res = await request(app)
+        .post('/api/voice/respond')
+        .type('form')
+        .send({ To: '+5491100000000', From: '+5491111111111', SpeechResult: 'hola' });
+
+      expect(res.status).toBe(200);
+      expect((prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mock.calls[0][0].where).toMatchObject({
+        businessId: 'biz_1', status: { in: ['OPEN', 'HANDOFF'] },
+      });
+      const twiml = (VoiceResponse as unknown as { last: { say: ReturnType<typeof vi.fn>; hangup: ReturnType<typeof vi.fn>; gather: ReturnType<typeof vi.fn> } }).last;
+      expect(twiml.say).toHaveBeenCalledWith(expect.anything(), 'Una persona del equipo te va a atender');
+      expect(twiml.hangup).toHaveBeenCalled();
+      // No vuelve a pedir otro turno de voz.
+      expect(twiml.gather).not.toHaveBeenCalled();
+    });
+
+    it('con un humano a cargo y el aviso ya dado (texto vacío) igual le dice algo a quien llama antes de cortar', async () => {
+      (resolveBusinessByNumber as ReturnType<typeof vi.fn>).mockResolvedValue('biz_1');
+      (loadVoiceSettings as ReturnType<typeof vi.fn>).mockResolvedValue(CFG);
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+      (processMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ text: '', actions: [], botPaused: true });
+
+      await request(app)
+        .post('/api/voice/respond')
+        .type('form')
+        .send({ To: '+5491100000000', From: '+5491111111111', SpeechResult: 'hola' });
+
+      const twiml = (VoiceResponse as unknown as { last: { say: ReturnType<typeof vi.fn>; hangup: ReturnType<typeof vi.fn> } }).last;
+      expect(twiml.say).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/persona del equipo/));
+      expect(twiml.hangup).toHaveBeenCalled();
     });
 
     it('repregunta cuando no hubo transcripción (SpeechResult vacío)', async () => {

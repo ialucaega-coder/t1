@@ -25,8 +25,14 @@ vi.mock('../../../lib/password', () => ({ hashPassword: vi.fn(async () => 'hashe
 
 vi.mock('../../../services/mercadopago/config', () => ({ loadMpConfig: vi.fn() }));
 vi.mock('../../../services/mercadopago/client', () => ({ createPaymentPreference: vi.fn() }));
+vi.mock('../../../services/mercadopago/cobros', () => ({
+  buildExternalReference: vi.fn(() => 'cobro:biz_x:11111111-1111-4111-8111-111111111111'),
+  buildNotificationUrl: vi.fn(),
+  recordCobro: vi.fn(),
+}));
 vi.mock('../../../services/campaigns/send', () => ({ sendCampaign: vi.fn() }));
 vi.mock('../../../services/bookings/create', () => ({ createBooking: vi.fn() }));
+vi.mock('../../../services/conversationState', () => ({ transitionAttention: vi.fn() }));
 
 vi.mock('../../../services/notifications', () => ({
   createNotification: vi.fn(async () => ({ id: 'notif_1' })),
@@ -50,8 +56,10 @@ import * as whatsapp from '../../../services/whatsapp/client';
 import { setClientStage } from '../../../services/clients/lifecycle';
 import { loadMpConfig } from '../../../services/mercadopago/config';
 import { createPaymentPreference } from '../../../services/mercadopago/client';
+import { buildNotificationUrl, recordCobro } from '../../../services/mercadopago/cobros';
 import { sendCampaign } from '../../../services/campaigns/send';
 import { createBooking } from '../../../services/bookings/create';
+import { transitionAttention } from '../../../services/conversationState';
 import { AppError } from '../../../middleware/errorHandler';
 import { executeAction, isExecutableAction } from '../../../services/actions/executor';
 
@@ -243,6 +251,41 @@ describe('executeAction — generar_link_pago (externo, gated)', () => {
     expect(createPaymentPreference).toHaveBeenCalledWith('tok', expect.objectContaining({ amount: 1500, currency: 'ARS' }));
   });
 
+  it('en live manda external_reference y notification_url propios y guarda el cobro (el pago se registra solo)', async () => {
+    mock(loadMpConfig).mockResolvedValue({ accessToken: 'tok', enabled: true, currency: 'ARS' });
+    mock(buildNotificationUrl).mockReturnValue('https://api.test/api/mercadopago/webhook/' + BIZ);
+    mock(createPaymentPreference).mockResolvedValue({ id: 'pref_1', initPoint: 'https://mp/checkout/1' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 1500, titulo: 'Seña' }, mode: 'live' });
+
+    expect(createPaymentPreference).toHaveBeenCalledWith('tok', expect.objectContaining({
+      externalReference: 'cobro:biz_x:11111111-1111-4111-8111-111111111111',
+      notificationUrl: 'https://api.test/api/mercadopago/webhook/' + BIZ,
+    }));
+    expect(recordCobro).toHaveBeenCalledWith(BIZ, 'cobro:biz_x:11111111-1111-4111-8111-111111111111', {
+      preferenceId: 'pref_1', amount: 1500, currency: 'ARS', description: 'Seña',
+    });
+    expect(r.data).toMatchObject({ url: 'https://mp/checkout/1', id: 'pref_1', autoRegister: true });
+  });
+
+  it('en live sin base pública no manda notification_url y avisa autoRegister=false (sigue devolviendo el link)', async () => {
+    mock(loadMpConfig).mockResolvedValue({ accessToken: 'tok', enabled: true, currency: 'ARS' });
+    mock(buildNotificationUrl).mockReturnValue(undefined);
+    mock(createPaymentPreference).mockResolvedValue({ id: 'pref_1', initPoint: 'https://mp/checkout/1' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 10 }, mode: 'live' });
+
+    expect(r.status).toBe('ejecutado');
+    expect(r.data).toMatchObject({ url: 'https://mp/checkout/1', autoRegister: false });
+    expect(mock(createPaymentPreference).mock.calls[0][1].notificationUrl).toBeUndefined();
+    expect(recordCobro).toHaveBeenCalled();
+  });
+
+  it('en dry_run no guarda ningún cobro', async () => {
+    await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 1500 }, mode: 'dry_run' });
+    expect(recordCobro).not.toHaveBeenCalled();
+  });
+
   it('en live omite si MercadoPago no está conectado', async () => {
     mock(loadMpConfig).mockResolvedValue(null);
     const r = await executeAction({ businessId: BIZ, action: 'generar_link_pago', params: { monto: 1500 }, mode: 'live' });
@@ -332,24 +375,43 @@ describe('executeAction — asignar_agente (interno)', () => {
   it('omite si falta la conversación', async () => {
     const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: {} });
     expect(r.status).toBe('omitido');
+    expect(transitionAttention).not.toHaveBeenCalled();
   });
 
-  it('omite si la conversación no es del negocio', async () => {
-    mock(prisma.conversation.findFirst).mockResolvedValue(null);
+  it('omite si la conversación no es del negocio (la transición va scopeada por negocio)', async () => {
+    mock(transitionAttention).mockResolvedValue({ ok: false, reason: 'not_found' });
     const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_ajena' } });
     expect(r.status).toBe('omitido');
+    expect(transitionAttention).toHaveBeenCalledWith('conv_ajena', BIZ, { type: 'handoff' });
+    expect(createNotification).not.toHaveBeenCalled();
+  });
+
+  it('NO resucita una conversación CERRADA ni avisa a los admins', async () => {
+    mock(transitionAttention).mockResolvedValue({ ok: false, reason: 'closed' });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe('omitido');
+    expect(r.detail).toMatch(/cerrada/);
+    expect(createNotification).not.toHaveBeenCalled();
     expect(prisma.conversation.update).not.toHaveBeenCalled();
   });
 
-  it('deriva la conversación (HANDOFF) y notifica a los admins', async () => {
-    mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'conv_1' });
+  it('deriva la conversación por la transición atómica (HANDOFF) y notifica a los admins', async () => {
+    mock(transitionAttention).mockResolvedValue({ ok: true, changed: true, state: 'ESPERANDO', status: 'HANDOFF', metadata: {} });
     mock(prisma.user.findMany).mockResolvedValue([{ id: 'a1' }]);
     const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
     expect(r.status).toBe('ejecutado');
-    expect(prisma.conversation.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'conv_1' }, data: { status: 'HANDOFF' } }),
-    );
+    expect(transitionAttention).toHaveBeenCalledWith('conv_1', BIZ, { type: 'handoff' });
+    // Ya no escribe el status "a mano": todo pasa por la máquina de estados.
+    expect(prisma.conversation.update).not.toHaveBeenCalled();
     expect(createNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('si ya estaba derivada o la atiende una persona no cambia nada ni re-notifica', async () => {
+    mock(transitionAttention).mockResolvedValue({ ok: true, changed: false, state: 'HUMANO', status: 'OPEN', metadata: {} });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
+    expect(r.ok).toBe(true);
+    expect(createNotification).not.toHaveBeenCalled();
   });
 });
 

@@ -218,7 +218,7 @@ router.post(
     // Reutilizamos la conversación de voz abierta con este número (continuidad
     // entre turnos de la misma llamada / llamadas recientes).
     const existing = await prisma.conversation.findFirst({
-      where: { businessId, contactPhone: from, status: 'OPEN' },
+      where: { businessId, contactPhone: from, status: { in: ['OPEN', 'HANDOFF'] } },
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -231,8 +231,11 @@ router.post(
         contactPhone: from,
         systemPromptExtra: cfg.persona,
       });
-      responseText = result.text;
-      escalate = result.actions.some((a) => a.type === 'escalateToHuman');
+      // Con un humano a cargo el aviso se throttlea (puede venir vacío): en una
+      // llamada siempre hay que decirle algo al que habla antes de cortar.
+      responseText = result.text || (result.botPaused ? 'Una persona del equipo te va a atender en breve.' : result.text);
+      // Si un humano tomó la conversación, avisamos y cortamos igual que una derivación.
+      escalate = result.botPaused === true || result.actions.some((a) => a.type === 'escalateToHuman');
     } catch (error) {
       console.error('Voice respond error:', error);
     }

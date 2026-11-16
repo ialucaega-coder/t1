@@ -11,7 +11,14 @@ import { generateCopilot } from '../services/ai/copilot';
 import { generateLeadScore, type LeadScore } from '../services/ai/lead-score';
 import type { ConversationAttribution } from '../services/whatsapp/attribution';
 import { deliverToChannel, type DeliveryStatus } from '../services/channels/deliver';
+import { mutateConversation, transitionAttention } from '../services/conversationState';
 import { IDEMP_TYPE_MRGO, readIdempotencyKey, claimIdempotentKey, releaseIdempotentKey } from '../lib/idempotency';
+
+/** Respuesta para acciones que no aplican a una conversación cerrada. */
+const CLOSED_CONVERSATION_ERROR = {
+  error: 'La conversación está cerrada: no se puede responder ni tomar.',
+  code: 'CONVERSATION_CLOSED',
+} as const;
 
 /** Tope de intentos de envío por mensaje (el primero + reintentos manuales). */
 const MAX_DELIVERY_ATTEMPTS = 5;
@@ -142,26 +149,25 @@ async function mutateConversationMeta<T>(
   businessId: string,
   mutate: (meta: ConversationMeta) => { meta: ConversationMeta; result: T },
 ): Promise<{ ok: true; result: T; metadata: Prisma.JsonValue } | { ok: false }> {
-  return prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "conversations"
-      WHERE id = ${conversationId} AND "businessId" = ${businessId}
-      FOR UPDATE`;
-    if (locked.length === 0) return { ok: false as const };
-
-    const fresh = await tx.conversation.findUnique({
-      where: { id: conversationId },
-      select: { metadata: true },
-    });
-    const { meta: nextMeta, result } = mutate(readMeta(fresh?.metadata));
-
-    const updated = await tx.conversation.update({
-      where: { id: conversationId },
-      data: { metadata: nextMeta as Prisma.InputJsonValue },
-      select: { metadata: true },
-    });
-    return { ok: true as const, result, metadata: updated.metadata };
+  // Solo metadata: el status NO se toca (los cambios de atención van por
+  // `transitionAttention`, que escribe status + metadata juntos).
+  const out = await mutateConversation<T>(conversationId, businessId, (cur) => {
+    const { meta, result } = mutate(cur.meta as ConversationMeta);
+    return { meta, result };
   });
+  return out.ok ? { ok: true, result: out.result, metadata: out.metadata } : { ok: false };
+}
+
+/**
+ * Metadata apta para el panel: saca secretos internos que NO deben viajar al
+ * navegador del equipo (hoy `chatTokenHash`, el hash del token del widget web).
+ */
+function publicMetadata<T extends Prisma.JsonValue | null | undefined>(value: T): T {
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'chatTokenHash' in (value as object)) {
+    const { chatTokenHash: _hidden, ...rest } = value as Record<string, unknown>;
+    return rest as unknown as T;
+  }
+  return value;
 }
 
 const router = Router();
@@ -232,6 +238,7 @@ router.get(
     // romper a los consumidores actuales que leen el enum directamente.
     const data = conversations.map((c) => ({
       ...c,
+      metadata: publicMetadata(c.metadata),
       displayChannel: displayChannelFor(c.channel, c.metadata),
     }));
 
@@ -273,6 +280,7 @@ router.get(
     }
     res.json({
       ...conversation,
+      metadata: publicMetadata(conversation.metadata),
       messages,
       ...(limit ? { hasMoreMessages } : {}),
       displayChannel: displayChannelFor(conversation.channel, conversation.metadata),
@@ -293,6 +301,8 @@ interface HumanReplyMeta {
   deliveryError?: string;
   providerMessageId?: string;
   deliveryAttempts: number;
+  /** ISO de cuándo arrancó el intento (sirve para detectar un `pending` colgado). */
+  deliveryStartedAt?: string;
   [key: string]: unknown;
 }
 
@@ -341,6 +351,11 @@ async function deliverAndRecord(
 // conversación. Si el envío falla el mensaje queda guardado igual (el humano no
 // pierde su texto): se responde 200 con deliveryStatus='failed' y el motivo.
 // `Idempotency-Key` (opcional) evita el doble envío por doble click/reintento.
+//
+// Atención: responder PAUSA al bot (estado HUMANO) y saca la conversación de
+// HANDOFF en la MISMA transacción (ver services/conversationState.ts). Pausa
+// aunque la entrega falle: el humano ya la tomó; la UI marca que el cliente NO
+// recibió el mensaje. Sobre una conversación CERRADA se rechaza con 409.
 router.post(
   '/:id/reply',
   requireAuth,
@@ -355,6 +370,7 @@ router.post(
       where: { id: req.params.id as string, businessId },
     });
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    if (conversation.status === 'CLOSED') return res.status(409).json(CLOSED_CONVERSATION_ERROR);
 
     // At-most-once: la clave se reserva ANTES de guardar/enviar. Un duplicado no
     // vuelve a mandar nada; la UI ya tiene la respuesta del primer request.
@@ -373,12 +389,27 @@ router.post(
         select: { name: true },
       });
 
+      // Estado + metadata de la conversación en una sola transacción (HUMANO).
+      // Si se cerró justo ahora, se rechaza ANTES de guardar nada.
+      const attention = await transitionAttention(conversation.id, businessId, {
+        type: 'reply',
+        userId,
+        userName: author?.name ?? null,
+      });
+      if (!attention.ok) {
+        if (idemScope) await releaseIdempotentKey(prisma, businessId, IDEMP_TYPE_MRGO, idemScope);
+        return attention.reason === 'closed'
+          ? res.status(409).json(CLOSED_CONVERSATION_ERROR)
+          : res.status(404).json({ error: 'Conversation not found' });
+      }
+
       baseMeta = {
         sender: 'human',
         userId,
         ...(author?.name ? { userName: author.name } : {}),
         deliveryStatus: 'pending',
         deliveryAttempts: 1,
+        deliveryStartedAt: new Date().toISOString(),
       };
 
       message = await prisma.message.create({
@@ -396,12 +427,6 @@ router.post(
       throw err;
     }
 
-    // Una respuesta humana reabre la conversación derivada; una sola escritura.
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { updatedAt: new Date(), ...(conversation.status === 'HANDOFF' ? { status: 'OPEN' as const } : {}) },
-    });
-
     getIO()?.to(`business:${conversation.businessId}`).emit('conversation:new-message', {
       conversationId: conversation.id,
       message,
@@ -418,9 +443,13 @@ router.post(
   })
 );
 
+/** Un `pending` más viejo que esto se considera colgado (el envío tiene tope de 15 s). */
+const STALE_PENDING_MS = 60_000;
+
 // Reintenta el envío de una respuesta humana cuya entrega falló (no crea otro
 // mensaje: reusa el existente). El paso failed -> pending es atómico, así que un
-// doble click no manda dos veces.
+// doble click no manda dos veces. Un `pending` de más de 60 s se trata como
+// `failed` (el proceso murió a mitad del envío).
 router.post(
   '/:id/reply/:messageId/retry',
   requireAuth,
@@ -432,14 +461,28 @@ router.post(
       where: { id: req.params.id as string, businessId },
     });
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    if (conversation.status === 'CLOSED') return res.status(409).json(CLOSED_CONVERSATION_ERROR);
 
     const message = await prisma.message.findFirst({
       where: { id: req.params.messageId as string, conversationId: conversation.id, role: 'BOT' },
     });
     const prev = readMeta(message?.metadata) as Partial<HumanReplyMeta>;
     if (!message || prev.sender !== 'human') return res.status(404).json({ error: 'Message not found' });
-    if (prev.deliveryStatus !== 'failed') {
-      return res.status(409).json({ error: 'Este mensaje no tiene un envío fallido para reintentar.', code: 'NOT_FAILED' });
+
+    // ¿Desde qué estado se puede reintentar? failed, o pending colgado (lazy).
+    let retryFrom: 'failed' | 'pending' | null = null;
+    if (prev.deliveryStatus === 'failed') {
+      retryFrom = 'failed';
+    } else if (prev.deliveryStatus === 'pending') {
+      const startedAt = Date.parse(prev.deliveryStartedAt ?? '') || message.createdAt.getTime();
+      if (Date.now() - startedAt > STALE_PENDING_MS) retryFrom = 'pending';
+    }
+    if (!retryFrom) {
+      const sending = prev.deliveryStatus === 'pending';
+      return res.status(409).json({
+        error: sending ? 'Este mensaje todavía se está enviando.' : 'Este mensaje no tiene un envío fallido para reintentar.',
+        code: 'NOT_FAILED',
+      });
     }
 
     // Tope de intentos: evita que un cliente que no responde (o un loop) dispare
@@ -458,11 +501,12 @@ router.post(
       ...(typeof prev.userName === 'string' ? { userName: prev.userName } : {}),
       deliveryStatus: 'pending',
       deliveryAttempts: attemptsSoFar + 1,
+      deliveryStartedAt: new Date().toISOString(),
     };
 
-    // Reserva atómica: solo UNA llamada concurrente logra pasar de failed a pending.
+    // Reserva atómica: solo UNA llamada concurrente logra tomar el reintento.
     const claimed = await prisma.message.updateMany({
-      where: { id: message.id, conversationId: conversation.id, metadata: { path: ['deliveryStatus'], equals: 'failed' } },
+      where: { id: message.id, conversationId: conversation.id, metadata: { path: ['deliveryStatus'], equals: retryFrom } },
       data: { metadata: baseMeta as unknown as Prisma.InputJsonObject },
     });
     if (claimed.count === 0) {
@@ -480,15 +524,14 @@ router.post(
   })
 );
 
+// Cierra la conversación (OPEN o HANDOFF) y limpia el rastro de atención
+// (botPaused / pausedBy / ...): una cerrada no queda "atendida" ni "esperando".
 router.patch(
   '/:id/close',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const result = await prisma.conversation.updateMany({
-      where: { id: req.params.id as string, businessId: req.auth!.businessId, status: 'OPEN' },
-      data: { status: 'CLOSED' },
-    });
-    if (result.count === 0) return res.status(404).json({ error: 'Conversation not found or already closed' });
+    const outcome = await transitionAttention(req.params.id as string, req.auth!.businessId, { type: 'close' });
+    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found or already closed' });
 
     getIO()?.to(`business:${req.auth!.businessId}`).emit('conversation:closed', {
       conversationId: req.params.id,
@@ -535,7 +578,7 @@ router.patch(
       conversationId,
     });
 
-    res.json({ metadata: outcome.metadata });
+    res.json({ metadata: publicMetadata(outcome.metadata) });
   })
 );
 
@@ -571,7 +614,7 @@ router.patch(
       conversationId,
     });
 
-    res.json({ metadata: outcome.metadata });
+    res.json({ metadata: publicMetadata(outcome.metadata) });
   })
 );
 
@@ -609,7 +652,7 @@ router.post(
       conversationId,
     });
 
-    res.json({ note, metadata: outcome.metadata });
+    res.json({ note, metadata: publicMetadata(outcome.metadata) });
   })
 );
 
@@ -631,45 +674,53 @@ router.patch(
     });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    res.json({ metadata: outcome.metadata });
+    res.json({ metadata: publicMetadata(outcome.metadata) });
   })
 );
 
-// Un agente "toma" la conversación: pausa el bot en ESTA conversación para
-// responder como humano. Guarda botPaused=true + quién la tomó, en metadata.
-// (El motor de chatbot debe chequear metadata.botPaused antes de autorespoder;
-// ese consumo vive en el dominio del chatbot, fuera de esta ruta.)
+// Un agente "toma" la conversación: pasa a HUMANO (bot callado), saca la
+// conversación de HANDOFF ("Te necesitan") y guarda quién la tomó y cuándo. Si ya
+// la tiene OTRO agente responde 409 (TAKEN_BY_OTHER), salvo `?force=true` hecho
+// por un ADMIN. Sobre una conversación cerrada responde 409.
 router.post(
   '/:id/take',
   requireAuth,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const conversationId = req.params.id as string;
+    // `force` solo cuenta para ADMIN: un agente común no le saca el chat a otro.
+    const force = req.query.force === 'true' && req.auth!.role === 'ADMIN';
 
     const agent = await prisma.user.findFirst({
       where: { id: req.auth!.userId, businessId },
       select: { name: true },
     });
 
-    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
-      meta.botPaused = true;
-      meta.pausedBy = req.auth!.userId;
-      meta.pausedByName = agent?.name ?? undefined;
-      meta.pausedAt = new Date().toISOString();
-      return { meta, result: null };
+    const outcome = await transitionAttention(conversationId, businessId, {
+      type: 'take',
+      userId: req.auth!.userId,
+      userName: agent?.name ?? null,
+      force,
     });
-    if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
+    if (!outcome.ok) {
+      if (outcome.reason === 'closed') return res.status(409).json(CLOSED_CONVERSATION_ERROR);
+      if (outcome.reason === 'taken_by_other') {
+        const who = outcome.takenBy.name || 'otro agente';
+        return res.status(409).json({
+          error: `Ya la está atendiendo ${who}.`,
+          code: 'TAKEN_BY_OTHER',
+          takenBy: outcome.takenBy,
+        });
+      }
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
 
-    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
-      conversationId,
-    });
-
-    res.json({ metadata: outcome.metadata });
+    res.json({ metadata: publicMetadata(outcome.metadata), status: outcome.status });
   })
 );
 
-// Reactiva el bot en la conversación (lo opuesto a /take): botPaused=false y
-// limpia el rastro de quién la tenía tomada.
+// Devuelve la conversación al bot (lo opuesto a /take): BOT, sin rastro de quién
+// la tenía ni de la espera. Una conversación cerrada no se reabre.
 router.post(
   '/:id/release',
   requireAuth,
@@ -677,20 +728,10 @@ router.post(
     const businessId = req.auth!.businessId;
     const conversationId = req.params.id as string;
 
-    const outcome = await mutateConversationMeta(conversationId, businessId, (meta) => {
-      meta.botPaused = false;
-      meta.pausedBy = null;
-      meta.pausedByName = null;
-      meta.pausedAt = null;
-      return { meta, result: null };
-    });
+    const outcome = await transitionAttention(conversationId, businessId, { type: 'release' });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
-      conversationId,
-    });
-
-    res.json({ metadata: outcome.metadata });
+    res.json({ metadata: publicMetadata(outcome.metadata), status: outcome.status });
   })
 );
 
