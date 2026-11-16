@@ -119,4 +119,24 @@ describe('hooks/use-campaigns', () => {
     expect(mockSend).toHaveBeenCalledWith('c1');
     await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2));
   });
+
+  it('refreshSilently recarga la lista sin pasar por el estado de carga y tolera errores', async () => {
+    mockList.mockResolvedValueOnce([{ id: 'c1' }]);
+    const { result } = renderHook(() => useCampaigns());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    mockList.mockResolvedValueOnce([{ id: 'c1' }, { id: 'c2' }]);
+    await act(async () => {
+      await result.current.refreshSilently();
+    });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.campaigns).toHaveLength(2);
+
+    mockList.mockRejectedValueOnce(new Error('boom'));
+    await act(async () => {
+      await result.current.refreshSilently();
+    });
+    expect(result.current.campaigns).toHaveLength(2);
+    expect(result.current.error).toBeNull();
+  });
 });

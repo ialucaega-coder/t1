@@ -8,6 +8,9 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 const toastMock = vi.fn();
 vi.mock('@/components/common/Toast', () => ({ useToast: () => ({ toast: toastMock }) }));
 
+vi.mock('@/lib/auth-context', () => ({ useAuth: () => ({ business: { id: 'biz1' } }) }));
+vi.mock('@/hooks/use-socket', () => ({ useSocket: vi.fn(), useSocketEvent: vi.fn() }));
+
 const sendCampaign = vi.fn().mockResolvedValue(undefined);
 const deleteCampaign = vi.fn().mockResolvedValue(undefined);
 const campaign = {
@@ -48,18 +51,19 @@ beforeEach(() => {
 describe('campanas: acciones irreversibles', () => {
   it('Enviar no dispara el envío hasta confirmar y muestra la cantidad de destinatarios', async () => {
     render(<CampanasPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^Enviar$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar ahora' }));
 
     expect(sendCampaign).not.toHaveBeenCalled();
     expect(await screen.findByText(/a 42 clientes/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enviar ahora' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Enviar ahora' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
     await waitFor(() => expect(sendCampaign).toHaveBeenCalledWith('c1'));
   });
 
   it('cancelar el diálogo de envío no envía nada', async () => {
     render(<CampanasPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^Enviar$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar ahora' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cancelar' }));
     expect(sendCampaign).not.toHaveBeenCalled();
   });
