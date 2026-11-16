@@ -8,12 +8,32 @@ const isValidImageUrl = (url: string) => /^https?:\/\//i.test(url.trim());
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api').replace(/\/api\/?$/, '');
 
+// Polling de respuestas humanas: cada ~4 s mientras el chat esté abierto y visible.
+export const POLL_INTERVAL_MS = 4000;
+/** Tope del backoff cuando el endpoint falla. */
+export const POLL_MAX_BACKOFF_MS = 60000;
+/** Mínimo entre páginas cuando hay más mensajes pendientes (no pegarle al rate limit). */
+export const POLL_PAGE_GAP_MS = 1000;
+/** Sin actividad (el visitante no escribe ni vuelve a la pestaña ni llegan mensajes) el polling se detiene. */
+export const POLL_IDLE_MS = 15 * 60 * 1000;
+
+/** Mensaje tal como lo devuelve GET /api/public/chat/:botId/messages. */
+interface PolledMessage {
+  id: string;
+  role: string;
+  text: string;
+  createdAt: string;
+  fromHuman: boolean;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   timestamp: Date;
   images?: string[];
+  /** Respondió una persona del equipo desde el inbox (llega por polling). */
+  fromHuman?: boolean;
 }
 
 interface BotInfo {
@@ -33,6 +53,8 @@ interface ChatResponse {
   intent: string;
   actions: ChatAction[];
   conversationId: string;
+  /** Token de lectura (solo al abrirse la conversación) para consultar respuestas humanas. */
+  chatToken?: string;
 }
 
 export function PublicChat({ botId }: { botId: string }) {
@@ -43,12 +65,16 @@ export function PublicChat({ botId }: { botId: string }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [chatToken, setChatToken] = useState<string | null>(null);
   const [images, setImages] = useState<string[]>([]);
   const [showImageInput, setShowImageInput] = useState(false);
   const [imageUrlDraft, setImageUrlDraft] = useState('');
   const [imageError, setImageError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Polling: última actividad (para frenar por inactividad) y "despertador" del loop.
+  const lastActivityRef = useRef(Date.now());
+  const wakePollRef = useRef<(() => void) | null>(null);
 
   const addImage = useCallback(() => {
     const url = imageUrlDraft.trim();
@@ -90,6 +116,94 @@ export function PublicChat({ botId }: { botId: string }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Polling de respuestas humanas. Nunca rompe el chat: cualquier falla solo
+  // espacia las consultas (backoff); si el server dice 404/400 (token inválido) se frena.
+  useEffect(() => {
+    if (!conversationId || !chatToken) return;
+    let stopped = false;
+    let inFlight = false;
+    let fails = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let after: string | undefined;
+    const seen = new Set<string>();
+    const ctrl = new AbortController();
+
+    const schedule = (ms: number) => {
+      if (timer) clearTimeout(timer);
+      if (!stopped) timer = setTimeout(tick, ms);
+    };
+
+    async function tick() {
+      if (stopped || inFlight) return;
+      // Pestaña oculta o sin actividad: se pausa; wake() lo reanuda.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (Date.now() - lastActivityRef.current > POLL_IDLE_MS) return;
+      inFlight = true;
+      try {
+        // El token viaja por header (la query queda en logs de acceso).
+        const qs = new URLSearchParams({ conversationId: conversationId as string });
+        if (after) qs.set('after', after);
+        const res = await fetch(`${API_BASE}/api/public/chat/${botId}/messages?${qs}`, {
+          signal: ctrl.signal,
+          headers: { 'X-Chat-Token': chatToken as string },
+        });
+        if (stopped) return;
+        if (res.status === 404 || res.status === 400) {
+          stopped = true; // token/conversación inválidos: no insistir
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: { messages: PolledMessage[]; hasMore?: boolean } = await res.json();
+        if (stopped) return;
+        fails = 0;
+        const fresh: ChatMessage[] = [];
+        for (const m of data.messages ?? []) {
+          after = m.createdAt;
+          if (seen.has(m.id)) continue;
+          seen.add(m.id);
+          // Lo que dice el bot ya se mostró con la respuesta del POST: acá solo se
+          // agregan las respuestas de una persona (sin duplicar).
+          if (m.fromHuman) {
+            fresh.push({ id: `srv-${m.id}`, role: 'assistant', text: m.text, timestamp: new Date(m.createdAt), fromHuman: true });
+          }
+        }
+        if (fresh.length > 0) {
+          lastActivityRef.current = Date.now();
+          setMessages((prev) => [...prev, ...fresh.filter((f) => !prev.some((p) => p.id === f.id))]);
+        }
+        schedule(data.hasMore ? POLL_PAGE_GAP_MS : POLL_INTERVAL_MS);
+      } catch {
+        if (stopped || ctrl.signal.aborted) return;
+        fails += 1;
+        schedule(Math.min(POLL_INTERVAL_MS * 2 ** fails, POLL_MAX_BACKOFF_MS));
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    const wake = () => {
+      if (stopped || inFlight) return;
+      schedule(0);
+    };
+    wakePollRef.current = wake;
+    const onVisibility = () => {
+      if (!document.hidden) {
+        lastActivityRef.current = Date.now(); // volver a la pestaña cuenta como actividad
+        wake();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    schedule(POLL_INTERVAL_MS);
+
+    return () => {
+      stopped = true;
+      ctrl.abort();
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (wakePollRef.current === wake) wakePollRef.current = null;
+    };
+  }, [conversationId, chatToken, botId]);
+
   const sendMessage = useCallback(async (text?: string) => {
     const msg = (text || input).trim();
     // Cuando llega texto por parámetro (sugerencias) no adjuntamos imágenes.
@@ -104,6 +218,8 @@ export function PublicChat({ botId }: { botId: string }) {
       ...(attachedImages.length > 0 && { images: attachedImages }),
     };
     setMessages((prev) => [...prev, userMsg]);
+    lastActivityRef.current = Date.now();
+    wakePollRef.current?.(); // si el polling estaba dormido por inactividad, se reanuda
     setInput('');
     if (attachedImages.length > 0) {
       setImages([]);
@@ -116,7 +232,11 @@ export function PublicChat({ botId }: { botId: string }) {
     try {
       const res = await fetch(`${API_BASE}/api/public/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Continuar una conversación exige su token; sin él el server abre una nueva.
+          ...(conversationId && chatToken && { 'X-Chat-Token': chatToken }),
+        },
         body: JSON.stringify({
           message: msg,
           botId,
@@ -126,15 +246,23 @@ export function PublicChat({ botId }: { botId: string }) {
       });
       const data: ChatResponse = await res.json();
       if (data.conversationId) setConversationId(data.conversationId);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `bot-${Date.now()}`,
-          role: 'assistant',
-          text: data.text,
-          timestamp: new Date(),
-        },
-      ]);
+      // Si el server abrió otra conversación, el token viejo ya no sirve.
+      if (data.conversationId && data.conversationId !== conversationId) setChatToken(data.chatToken ?? null);
+      else if (data.chatToken) setChatToken(data.chatToken);
+      // Con la conversación atendida por una persona, el server puede devolver un texto
+      // vacío (el aviso de pausa sale como máximo una vez cada 10 min): no dibujar una
+      // burbuja en blanco. Las respuestas humanas llegan por el polling.
+      if (typeof data.text === 'string' && data.text.trim() !== '') {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `bot-${Date.now()}`,
+            role: 'assistant',
+            text: data.text,
+            timestamp: new Date(),
+          },
+        ]);
+      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -149,7 +277,7 @@ export function PublicChat({ botId }: { botId: string }) {
       setSending(false);
       inputRef.current?.focus();
     }
-  }, [input, sending, conversationId, botId, images]);
+  }, [input, sending, conversationId, chatToken, botId, images]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -256,6 +384,7 @@ export function PublicChat({ botId }: { botId: string }) {
               )}
               {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
               <p className={`text-[9px] mt-1 ${msg.role === 'user' ? 'text-white/50' : 'text-slate-500'}`}>
+                {msg.fromHuman && <span className="mr-1.5 text-emerald-400/80">Atendido por una persona ·</span>}
                 {msg.timestamp.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
               </p>
             </div>

@@ -29,7 +29,7 @@ function warnOnce(err: unknown): void {
   console.error('[sharedState] Redis no disponible; se usa memoria local:', (err as Error).message);
 }
 
-/** Suma 1 a un contador con TTL (la ventana arranca en el primer incremento) y devuelve el total. */
+/** Suma 1 a un contador con TTL (ventana fija: arranca en el primer incremento y no se extiende) y devuelve el total. */
 export async function sharedIncr(key: string, ttlMs: number): Promise<number> {
   const redis = getRedis();
   if (redis) {
@@ -39,11 +39,21 @@ export async function sharedIncr(key: string, ttlMs: number): Promise<number> {
       warnOnce(err);
     }
   }
-  // `cache` no expone el vencimiento, así que cada incremento renueva el TTL: el
-  // fallback es best-effort (una sola instancia) y una ventana algo más larga es
-  // aceptable.
-  const next = (cache.get<number>(PREFIX + key) ?? 0) + 1;
-  cache.set(PREFIX + key, next, ttlMs);
+  // Ventana FIJA, igual que en Redis (el TTL se pone al crear la clave y no se
+  // extiende). El vencimiento se guarda aparte porque `cache` no lo expone; el
+  // contador sigue siendo un número en `PREFIX + key` (sharedGet lo lee tal cual).
+  const k = PREFIX + key;
+  const expKey = `${PREFIX}exp:${key}`;
+  const now = Date.now();
+  const current = cache.get<number>(k);
+  const resetAt = cache.get<number>(expKey);
+  if (current === undefined || resetAt === undefined) {
+    cache.set(k, 1, ttlMs);
+    cache.set(expKey, now + ttlMs, ttlMs);
+    return 1;
+  }
+  const next = current + 1;
+  cache.set(k, next, Math.max(1, resetAt - now));
   return next;
 }
 

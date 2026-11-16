@@ -118,3 +118,38 @@ setInterval(() => {
     if (now > entry.resetAt) hits.delete(key);
   }
 }, 60_000).unref?.();
+
+/**
+ * Rutas que quedan FUERA del límite global por IP:
+ *  - Webhooks de terceros: llegan desde IPs compartidas por todos los negocios y
+ *    ya están protegidos por su propia firma/token.
+ *  - El polling del chat público (GET /api/public/chat/:botId/messages): un visitante
+ *    consulta cada ~4 s (~225 req en 15 min), así que con el tope global dos
+ *    visitantes detrás de una misma IP (NAT) se cortarían entre sí y harían fallar
+ *    también el POST /chat. Ese endpoint tiene sus propios límites (por IP y por
+ *    conversación, ver routes/publicChat.ts). El POST /chat y el resto de las rutas
+ *    públicas SÍ cuentan.
+ */
+export const RATE_LIMIT_EXEMPT_PREFIXES = [
+  '/api/manychat/webhook',
+  '/api/telegram/webhook',
+  '/api/meta/webhook',
+  '/api/whatsapp/webhook',
+  '/api/billing/webhook',
+  '/api/voice/incoming',
+  '/api/voice/respond',
+];
+
+const PUBLIC_CHAT_POLL_RE = /^\/api\/public\/chat\/[^/]+\/messages\/?$/;
+
+/** ¿Esta request está exenta del límite global por IP? */
+export function isRateLimitExempt(method: string, path: string): boolean {
+  if (RATE_LIMIT_EXEMPT_PREFIXES.some((p) => path.startsWith(p))) return true;
+  return method === 'GET' && PUBLIC_CHAT_POLL_RE.test(path);
+}
+
+/** Límite global por IP de la API, con las exenciones de arriba. */
+export function globalRateLimit(req: Request, res: Response, next: NextFunction) {
+  if (isRateLimitExempt(req.method, req.path)) return next();
+  return apiRateLimit(req, res, next);
+}

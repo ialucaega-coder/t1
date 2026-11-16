@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
@@ -63,6 +64,8 @@ const chatSchema = z.object({
   message: z.string().min(1).max(2000),
   botId: z.string(),
   conversationId: z.string().optional(),
+  // Token de lectura de esa conversación (también se acepta en el header X-Chat-Token).
+  chatToken: z.string().max(128).optional(),
   contactName: z.string().max(100).optional(),
   contactPhone: z.string().max(30).optional(),
   // Una sola URL de imagen o un arreglo (máximo 4). Ambos campos son opcionales.
@@ -84,6 +87,113 @@ const bookSchema = z.object({
   email: z.string().email().max(200).optional().or(z.literal('')),
   otp: z.string().max(10).optional(),
 });
+
+// ─── Lectura de respuestas (polling del widget) ─────────────────────────
+//
+// El widget solo hace POST /chat; para que el visitante vea lo que le responde un
+// humano desde el inbox, consulta GET /chat/:botId/messages. Es un endpoint
+// público de LECTURA, así que la conversationId sola no alcanza: el POST /chat
+// devuelve un token de lectura aleatorio al abrir la conversación (solo su hash
+// SHA-256 queda en Conversation.metadata.chatTokenHash) y el GET lo exige.
+
+/** Mensajes máximos por respuesta de polling. */
+const MAX_POLL_MESSAGES = 50;
+/** Rate limit del polling: ventana y topes (el widget consulta cada ~4 s = ~15/min). */
+const POLL_WINDOW_MS = 60 * 1000;
+const POLL_MAX_PER_IP = 60;
+const POLL_MAX_PER_CONVERSATION = 30;
+
+const hashChatToken = (token: string): string =>
+  crypto.createHash('sha256').update(token).digest('hex');
+
+/** Comparación en tiempo constante de dos hashes hex (mismo largo o falso). */
+function safeEqualHex(a: string, b: string): boolean {
+  const ba = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+/**
+ * Genera y guarda el token de lectura de una conversación recién creada. Solo
+ * persiste el hash. Devuelve el token en claro (única vez que existe), o undefined
+ * si la conversación ya tenía token o falló (el chat sigue andando sin polling).
+ * Serializa con SELECT ... FOR UPDATE, igual que el resto de las escrituras de
+ * Conversation.metadata (conversations.ts), para no pisar otros cambios.
+ */
+async function issueChatToken(
+  businessId: string,
+  botId: string,
+  conversationId: string,
+): Promise<string | undefined> {
+  try {
+    const token = crypto.randomBytes(32).toString('base64url');
+    const issued = await prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "conversations"
+        WHERE id = ${conversationId} AND "businessId" = ${businessId} AND "botId" = ${botId}
+        FOR UPDATE`;
+      if (locked.length === 0) return false;
+      const fresh = await tx.conversation.findUnique({ where: { id: conversationId }, select: { metadata: true } });
+      const meta =
+        fresh?.metadata && typeof fresh.metadata === 'object' && !Array.isArray(fresh.metadata)
+          ? { ...(fresh.metadata as Record<string, unknown>) }
+          : {};
+      if (typeof meta.chatTokenHash === 'string') return false; // ya tiene: no se rota ni se re-emite
+      meta.chatTokenHash = hashChatToken(token);
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { metadata: meta as Prisma.InputJsonValue },
+      });
+      return true;
+    });
+    return issued ? token : undefined;
+  } catch (err) {
+    console.error('[PublicChat] no se pudo emitir el token de lectura:', err instanceof Error ? err.name : 'error');
+    return undefined;
+  }
+}
+
+const CHAT_TOKEN_RE = /^[A-Za-z0-9_-]{20,128}$/;
+
+const pollQuerySchema = z.object({
+  conversationId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  // Solo por compatibilidad: el token viaja preferentemente en el header X-Chat-Token
+  // (la query queda en logs de acceso/proxies).
+  token: z.string().regex(CHAT_TOKEN_RE).optional(),
+  // ISO 8601 o id de un mensaje ya recibido.
+  after: z.string().max(64).optional(),
+});
+
+/** Token de lectura de la request: header X-Chat-Token (preferido) o, si no, el candidato de query/body. */
+function readChatToken(req: { get(name: string): string | undefined }, fallback?: string): string | undefined {
+  const header = req.get('x-chat-token');
+  const candidate = header || fallback;
+  return candidate && CHAT_TOKEN_RE.test(candidate) ? candidate : undefined;
+}
+
+/**
+ * ¿`token` da acceso a esta conversación? Exige que la conversación sea de ESTE
+ * bot y de SU negocio y que el hash del token coincida (tiempo constante). Se
+ * compara siempre (con un hash vacío si no hay) para no abrir un canal de tiempo.
+ */
+async function conversationAccessible(
+  bot: { id: string; businessId: string },
+  conversationId: string,
+  token: string | undefined,
+): Promise<boolean> {
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, botId: bot.id, businessId: bot.businessId },
+    select: { metadata: true },
+  });
+  const meta =
+    conversation?.metadata && typeof conversation.metadata === 'object' && !Array.isArray(conversation.metadata)
+      ? (conversation.metadata as Record<string, unknown>)
+      : {};
+  const storedHash = typeof meta.chatTokenHash === 'string' ? meta.chatTokenHash : '';
+  const tokenOk = safeEqualHex(hashChatToken(token ?? ''), storedHash || '0'.repeat(64));
+  return !!conversation && !!storedHash && !!token && tokenOk;
+}
 
 router.get('/bot/demo', asyncHandler(async (_req, res) => {
   const bot = await prisma.bot.findFirst({
@@ -191,15 +301,119 @@ router.post('/chat', asyncHandler(async (req, res) => {
     return;
   }
 
+  // Continuar una conversación existente exige su token de lectura: sin él (o con
+  // el de otra conversación/otro bot) el id se IGNORA y se abre una conversación
+  // nueva, sin revelar nada. Chats viejos (anteriores al token) abren uno nuevo.
+  const acceptedConversationId =
+    data.conversationId &&
+    (await conversationAccessible(bot, data.conversationId, readChatToken(req, data.chatToken)))
+      ? data.conversationId
+      : undefined;
+
   const response = await processMessage(bot.businessId, data.message, 'WEB', {
-    conversationId: data.conversationId,
+    conversationId: acceptedConversationId,
     botId: data.botId,
     contactName: data.contactName,
     contactPhone: data.contactPhone,
     ...(images ? { images } : {}),
   });
 
-  res.json(response);
+  // Conversación NUEVA (el cliente no mandó id o el server abrió otra): le damos el
+  // token de lectura. Si el cliente mandó el id de una existente NO se emite (si no,
+  // cualquiera que conozca un id podría obtener acceso de lectura).
+  const isNewConversation = !!response.conversationId && response.conversationId !== acceptedConversationId;
+  const chatToken = isNewConversation
+    ? await issueChatToken(bot.businessId, bot.id, response.conversationId)
+    : undefined;
+
+  res.json(chatToken ? { ...response, chatToken } : response);
+}));
+
+// Respuestas nuevas de la conversación (humanas y del bot) para el polling del
+// widget. Todos los fallos de acceso devuelven el MISMO 404 genérico: no se puede
+// distinguir "no existe" de "token inválido" de "es de otro bot" (sin enumeración).
+const NOT_FOUND = { error: 'No encontrado' };
+
+router.get('/chat/:botId/messages', asyncHandler(async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  const query = pollQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    res.status(400).json({ error: 'Parámetros inválidos' });
+    return;
+  }
+  const { conversationId, after } = query.data;
+  const token = readChatToken(req, query.data.token);
+
+  // Rate limit por IP antes de tocar la base (frena la fuerza bruta de tokens/ids).
+  const tooMany = () => {
+    res.setHeader('Retry-After', String(Math.ceil(POLL_WINDOW_MS / 1000)));
+    res.status(429).json({ error: 'Demasiadas consultas. Probá en un momento.' });
+  };
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  if ((await sharedIncr(`chat-poll:ip:${ip}`, POLL_WINDOW_MS)) > POLL_MAX_PER_IP) return tooMany();
+
+  const bot = await prisma.bot.findUnique({
+    where: { id: String(req.params.botId) },
+    select: { id: true, status: true, businessId: true },
+  });
+  if (!bot || bot.status !== 'ACTIVE') {
+    res.status(404).json(NOT_FOUND);
+    return;
+  }
+
+  // La conversación tiene que ser de ESTE bot y de SU negocio, con el token correcto.
+  if (!(await conversationAccessible(bot, conversationId, token))) {
+    res.status(404).json(NOT_FOUND);
+    return;
+  }
+
+  // Rate limit por conversación: recién con el token válido, así quien solo conoce
+  // un id no puede agotarle el cupo al visitante real.
+  if ((await sharedIncr(`chat-poll:conv:${conversationId}`, POLL_WINDOW_MS)) > POLL_MAX_PER_CONVERSATION) {
+    return tooMany();
+  }
+
+  // Cursor: ISO 8601 (createdAt) o id de mensaje (desempata por id).
+  let cursor: Prisma.MessageWhereInput = {};
+  if (after) {
+    if (/^\d{4}-\d{2}-\d{2}T/.test(after) && !Number.isNaN(Date.parse(after))) {
+      cursor = { createdAt: { gt: new Date(after) } };
+    } else {
+      const ref = await prisma.message.findFirst({
+        where: { id: after, conversationId },
+        select: { createdAt: true },
+      });
+      if (!ref) {
+        res.status(400).json({ error: 'Parámetros inválidos' });
+        return;
+      }
+      cursor = { OR: [{ createdAt: { gt: ref.createdAt } }, { createdAt: ref.createdAt, id: { gt: after } }] };
+    }
+  }
+
+  const rows = await prisma.message.findMany({
+    where: { conversationId, role: 'BOT', ...cursor },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: MAX_POLL_MESSAGES,
+    select: { id: true, role: true, text: true, createdAt: true, metadata: true },
+  });
+
+  // Solo campos públicos: la metadata interna (userId, deliveryError, usage...) nunca sale.
+  const messages = rows.map((m) => {
+    const md = m.metadata && typeof m.metadata === 'object' && !Array.isArray(m.metadata)
+      ? (m.metadata as Record<string, unknown>)
+      : {};
+    return {
+      id: m.id,
+      role: m.role,
+      text: m.text,
+      createdAt: m.createdAt.toISOString(),
+      fromHuman: md.sender === 'human',
+    };
+  });
+
+  res.json({ messages, hasMore: rows.length === MAX_POLL_MESSAGES });
 }));
 
 // ─── Public Booking Endpoints ───────────────────────────────────────

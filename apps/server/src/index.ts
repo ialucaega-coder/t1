@@ -3,7 +3,6 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -71,7 +70,8 @@ import { platformRouter } from './routes/platform';
 import { restoreActiveBots } from './services/telegram/bot';
 import { startWorkers, closeQueues } from './lib/queue';
 import { startScheduler } from './services/scheduler';
-import { apiRateLimit } from './middleware/rateLimit';
+import { globalRateLimit } from './middleware/rateLimit';
+import { accessLogger } from './middleware/accessLog';
 import {
   extraSecurityHeaders,
   sanitizeRequest,
@@ -207,12 +207,13 @@ app.use(helmet({
 // (OPTIONS); si no, el CORS global restrictivo respondía el preflight sin
 // cabeceras y el navegador bloqueaba el widget. El router real se monta más
 // abajo y conserva json/sanitize/rate-limit.
-app.use('/api/public', cors({ origin: true, credentials: false }));
+// maxAge: el preflight del polling (header X-Chat-Token) se cachea y no hay uno por consulta.
+app.use('/api/public', cors({ origin: true, credentials: false, maxAge: 7200 }));
 app.use(cors({
   origin: corsOrigin,
   credentials: true,
 }));
-app.use(morgan('dev'));
+app.use(accessLogger); // morgan 'dev' SIN tokens de query (ver middleware/accessLog.ts)
 app.use(cookieParser());
 
 // Middlewares de seguridad propios (ver src/middleware/security.ts)
@@ -245,19 +246,8 @@ app.use('/api/mercadopago/webhook', mercadopagoWebhookRouter);
 // Stripe, Twilio), así que el límite global POR IP los cortaría para todos los
 // negocios. Quedan fuera del límite global — ya están protegidos por su propia
 // firma/token (y ManyChat tiene además su rate limit por negocio/suscriptor).
-const RATE_LIMIT_EXEMPT_PREFIXES = [
-  '/api/manychat/webhook',
-  '/api/telegram/webhook',
-  '/api/meta/webhook',
-  '/api/whatsapp/webhook',
-  '/api/billing/webhook',
-  '/api/voice/incoming',
-  '/api/voice/respond',
-];
-app.use((req, res, next) => {
-  if (RATE_LIMIT_EXEMPT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
-  return apiRateLimit(req, res, next);
-});
+// (las exenciones viven en middleware/rateLimit.ts: webhooks y polling del chat público)
+app.use(globalRateLimit);
 app.use(auditRateLimitViolations);
 app.use(auditDataMutations);
 

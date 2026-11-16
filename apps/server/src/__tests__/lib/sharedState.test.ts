@@ -97,3 +97,30 @@ describe('lib/sharedState — con Redis', () => {
     expect(await sharedTryLock('job', 1000)).toBe(true);
   });
 });
+
+describe('lib/sharedState — sharedIncr sin Redis usa ventana FIJA', () => {
+  it('el contador vence a los ttl del primer incremento aunque se siga incrementando (no se extiende)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Un poller legítimo: 1 hit cada 4 s durante 70 s con ventana de 60 s.
+      const counts: number[] = [];
+      for (let t = 0; t <= 68_000; t += 4_000) {
+        vi.setSystemTime(new Date(1_700_000_000_000 + t));
+        counts.push(await sharedIncr('poll', 60_000));
+      }
+      // Antes (TTL deslizante) el contador no vencía nunca y seguía creciendo.
+      const resetIdx = counts.findIndex((c, i) => i > 0 && c === 1);
+      expect(resetIdx).toBeGreaterThan(0);
+      expect(counts[resetIdx - 1]).toBeLessThanOrEqual(16); // ~15 hits por ventana
+      expect(Math.max(...counts)).toBeLessThan(30);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sharedGet sigue leyendo el contador como número', async () => {
+    await sharedIncr('c', 1000);
+    await sharedIncr('c', 1000);
+    expect(await sharedGet<number>('c')).toBe(2);
+  });
+});
