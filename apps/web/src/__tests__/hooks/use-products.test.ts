@@ -98,6 +98,21 @@ describe('hooks/use-products', () => {
     expect(result.current.error).toBe('Nombre duplicado');
   });
 
+  it('con throwOnError relanza el error real y no lo guarda en error (create/update/delete)', async () => {
+    mockGet.mockResolvedValue([]);
+    mockCreate.mockRejectedValue(new Error('Validation failed'));
+    mockUpdate.mockRejectedValue(new Error('La categoría no existe'));
+    mockDelete.mockRejectedValue(new Error('En uso'));
+
+    const { result } = renderHook(() => useProducts());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await expect(result.current.createProduct({ name: 'x' }, { throwOnError: true })).rejects.toThrow('Validation failed');
+    await expect(result.current.updateProduct('p1', {}, { throwOnError: true })).rejects.toThrow('La categoría no existe');
+    await expect(result.current.deleteProduct('p1', { throwOnError: true })).rejects.toThrow('En uso');
+    expect(result.current.error).toBeNull();
+  });
+
   it('updateProduct reemplaza el producto por id', async () => {
     mockGet.mockResolvedValue([{ id: 'p1', name: 'Shampoo' }]);
     mockUpdate.mockResolvedValue({ id: 'p1', name: 'Shampoo Pro' });

@@ -12,6 +12,7 @@ import type { Request, Response, NextFunction } from 'express';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    category: { findFirst: vi.fn() },
     service: {
       findMany: vi.fn(),
       create: vi.fn(),
@@ -148,6 +149,47 @@ describe('routes/services', () => {
       const res = await request(app).put('/api/services/no-existe').send({ name: 'X' });
 
       expect(res.status).toBe(500);
+    });
+  });
+
+  describe('image, sortOrder y categoria', () => {
+    const payload = { name: 'Corte', duration: 30, price: 5000 };
+
+    it('POST acepta image https y sortOrder y los guarda', async () => {
+      (prisma.service.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 's1' });
+
+      const res = await request(app)
+        .post('/api/services')
+        .send({ ...payload, image: 'https://cdn.example.com/c.jpg', sortOrder: 2 });
+
+      expect(res.status).toBe(201);
+      expect(prisma.service.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ image: 'https://cdn.example.com/c.jpg', sortOrder: 2 }),
+        })
+      );
+    });
+
+    it('POST rechaza image data: o javascript:', async () => {
+      for (const image of ['data:image/svg+xml;base64,AAAA', 'javascript:alert(1)']) {
+        const res = await request(app).post('/api/services').send({ ...payload, image });
+        expect(res.status).toBe(400);
+      }
+      expect(prisma.service.create).not.toHaveBeenCalled();
+    });
+
+    it('POST rechaza una categoria de otro negocio', async () => {
+      (prisma.category.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const res = await request(app).post('/api/services').send({ ...payload, categoryId: 'cat_ajena' });
+      expect(res.status).toBe(400);
+      expect(prisma.service.create).not.toHaveBeenCalled();
+    });
+
+    it('PUT rechaza una categoria de otro negocio', async () => {
+      (prisma.category.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const res = await request(app).put('/api/services/s1').send({ categoryId: 'cat_ajena' });
+      expect(res.status).toBe(400);
+      expect(prisma.service.update).not.toHaveBeenCalled();
     });
   });
 });

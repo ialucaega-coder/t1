@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { categoryBelongsToBusiness } from '../lib/catalog-category';
 import { createServiceSchema, updateServiceSchema, CreateServiceInput, UpdateServiceInput } from '../validators/services';
 
 const router = Router();
@@ -27,6 +28,9 @@ router.post(
   validate(createServiceSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateServiceInput;
+    if (data.categoryId && !(await categoryBelongsToBusiness(req.auth!.businessId, data.categoryId))) {
+      return res.status(400).json({ error: 'La categoría no existe' });
+    }
     const service = await prisma.service.create({
       data: { ...data, businessId: req.auth!.businessId },
     });
@@ -41,6 +45,9 @@ router.put(
   validate(updateServiceSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as UpdateServiceInput;
+    if (data.categoryId && !(await categoryBelongsToBusiness(req.auth!.businessId, data.categoryId))) {
+      return res.status(400).json({ error: 'La categoría no existe' });
+    }
     const service = await prisma.service.update({
       where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data,

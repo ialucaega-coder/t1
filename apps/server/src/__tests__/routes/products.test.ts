@@ -13,6 +13,7 @@ import type { Request, Response, NextFunction } from 'express';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
+    category: { findFirst: vi.fn() },
     product: {
       findMany: vi.fn(),
       count: vi.fn(),
@@ -117,6 +118,73 @@ describe('routes/products', () => {
 
       expect(res.status).toBe(400);
       expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('image, sortOrder y categoria', () => {
+    it('POST acepta image https y sortOrder entero y los guarda', async () => {
+      mock(prisma.product.create).mockResolvedValue({ id: 'p1' });
+
+      const res = await request(app)
+        .post('/api/products')
+        .send({ name: 'Shampoo', price: 1500, image: 'https://cdn.example.com/a.png', sortOrder: 3 });
+
+      expect(res.status).toBe(201);
+      expect(prisma.product.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ image: 'https://cdn.example.com/a.png', sortOrder: 3 }),
+        })
+      );
+    });
+
+    it.each(['javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://x.com/a.png', 'ftp://x.com/a.png'])(
+      'POST rechaza image %s',
+      async (image) => {
+        const res = await request(app).post('/api/products').send({ name: 'Shampoo', price: 1500, image });
+        expect(res.status).toBe(400);
+        expect(prisma.product.create).not.toHaveBeenCalled();
+      }
+    );
+
+    it('POST rechaza sortOrder no entero', async () => {
+      const res = await request(app).post('/api/products').send({ name: 'Shampoo', price: 1500, sortOrder: 1.5 });
+      expect(res.status).toBe(400);
+    });
+
+    it('POST rechaza una categoria de otro negocio (multi-tenant)', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue(null);
+
+      const res = await request(app).post('/api/products').send({ name: 'Shampoo', price: 1500, categoryId: 'cat_ajena' });
+
+      expect(res.status).toBe(400);
+      expect(prisma.category.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'cat_ajena', businessId: 'biz_1' } })
+      );
+      expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+
+    it('PUT permite quitar la imagen y la categoria con null', async () => {
+      mock(prisma.product.update).mockResolvedValue({ id: 'p1' });
+
+      const res = await request(app).put('/api/products/p1').send({ image: null, categoryId: null });
+
+      expect(res.status).toBe(200);
+      expect(prisma.product.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { image: null, categoryId: null } })
+      );
+    });
+
+    it('PUT rechaza una imagen javascript:', async () => {
+      const res = await request(app).put('/api/products/p1').send({ image: 'javascript:alert(1)' });
+      expect(res.status).toBe(400);
+      expect(prisma.product.update).not.toHaveBeenCalled();
+    });
+
+    it('PUT rechaza una categoria de otro negocio', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue(null);
+      const res = await request(app).put('/api/products/p1').send({ categoryId: 'cat_ajena' });
+      expect(res.status).toBe(400);
+      expect(prisma.product.update).not.toHaveBeenCalled();
     });
   });
 

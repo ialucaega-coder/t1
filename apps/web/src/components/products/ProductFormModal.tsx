@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Modal } from '@/components/ui/Modal';
+import { ImageUrlField, isHttpsImageUrl } from './ImageUrlField';
 
 interface ProductFormData {
   name: string;
@@ -9,6 +10,9 @@ interface ProductFormData {
   price: number;
   stock: number;
   categoryId: string;
+  /** URL https de la imagen; '' = sin imagen. */
+  image: string;
+  sortOrder: number;
 }
 
 interface ProductFormModalProps {
@@ -26,6 +30,8 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, categories 
   const [price, setPrice] = useState(0);
   const [stock, setStock] = useState(0);
   const [categoryId, setCategoryId] = useState('');
+  const [image, setImage] = useState('');
+  const [sortOrder, setSortOrder] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -34,8 +40,9 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, categories 
       setName(initial.name ?? ''); setDescription(initial.description ?? '');
       setPrice(initial.price ?? 0); setStock(initial.stock ?? 0);
       setCategoryId(initial.categoryId ?? '');
+      setImage(initial.image ?? ''); setSortOrder(initial.sortOrder ?? 0);
     } else if (isOpen) {
-      setName(''); setDescription(''); setPrice(0); setStock(0); setCategoryId('');
+      setName(''); setDescription(''); setPrice(0); setStock(0); setCategoryId(''); setImage(''); setSortOrder(0);
     }
     setError('');
   }, [isOpen, initial]);
@@ -44,11 +51,13 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, categories 
     e.preventDefault();
     if (!name.trim()) { setError('El nombre es obligatorio'); return; }
     if (price <= 0) { setError('El precio debe ser mayor a 0'); return; }
+    if (image.trim() && !isHttpsImageUrl(image)) { setError('La imagen debe ser una URL https válida'); return; }
+    if (!Number.isInteger(sortOrder) || sortOrder < 0) { setError('El orden debe ser un número entero mayor o igual a 0'); return; }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, price, stock, categoryId });
+      await onSave({ name: name.trim(), description, price, stock, categoryId, image: image.trim(), sortOrder });
       onClose();
-    } catch { setError('Error al guardar'); } finally { setSaving(false); }
+    } catch (err) { setError(err instanceof Error && err.message ? err.message : 'Error al guardar'); } finally { setSaving(false); }
   };
 
   return (
@@ -79,6 +88,12 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, categories 
             <option value="">Sin categoría</option>
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+        </div>
+        <ImageUrlField value={image} onChange={setImage} />
+        <div>
+          <label htmlFor="product-sort-order" className="text-xs text-slate-500 mb-1 block">Orden en el listado</label>
+          <input id="product-sort-order" type="number" value={sortOrder} onChange={(e) => setSortOrder(Number(e.target.value))} className="input" min={0} step={1} />
+          <p className="mt-1 text-[11px] text-slate-600">Los números más bajos aparecen primero.</p>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="btn-secondary text-xs">Cancelar</button>

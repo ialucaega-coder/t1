@@ -13,8 +13,8 @@ vi.mock('@/hooks/use-services', () => ({
     createService: vi.fn(), updateService: vi.fn(), deleteService: vi.fn(),
   }),
 }));
-vi.mock('@/lib/api/index', () => ({
-  categoriesApi: { getCategories: () => Promise.resolve([]) },
+vi.mock('@/lib/api/categories', () => ({
+  getCategories: () => Promise.resolve([]),
 }));
 vi.mock('@/components/common/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock('@/components/products/ProductFormModal', () => ({

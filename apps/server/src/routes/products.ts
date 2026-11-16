@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { categoryBelongsToBusiness } from '../lib/catalog-category';
 import { createProductSchema, updateProductSchema, CreateProductInput, UpdateProductInput } from '../validators/products';
 import { isPaginationRequested, parsePagination, buildPaginatedResponse } from '../lib/pagination';
 
@@ -42,6 +43,9 @@ router.post(
   validate(createProductSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateProductInput;
+    if (data.categoryId && !(await categoryBelongsToBusiness(req.auth!.businessId, data.categoryId))) {
+      return res.status(400).json({ error: 'La categoría no existe' });
+    }
     const product = await prisma.product.create({
       data: { ...data, businessId: req.auth!.businessId },
     });
@@ -56,6 +60,9 @@ router.put(
   validate(updateProductSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as UpdateProductInput;
+    if (data.categoryId && !(await categoryBelongsToBusiness(req.auth!.businessId, data.categoryId))) {
+      return res.status(400).json({ error: 'La categoría no existe' });
+    }
     const product = await prisma.product.update({
       where: { id: String(req.params.id), businessId: req.auth!.businessId },
       data,

@@ -14,10 +14,14 @@ vi.mock('../../lib/prisma', () => ({
   prisma: {
     category: {
       findMany: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
-      delete: vi.fn(),
+      deleteMany: vi.fn(),
     },
+    product: { updateMany: vi.fn() },
+    service: { updateMany: vi.fn() },
+    $transaction: vi.fn(),
   },
 }));
 
@@ -141,18 +145,101 @@ describe('routes/categories', () => {
     });
   });
 
+  describe('POST/PUT: nombre duplicado', () => {
+    it('POST devuelve 409 si ya existe una categoria con ese nombre en el negocio', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue({ id: 'cat_x' });
+
+      const res = await request(app)
+        .post('/api/categories')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'cortes' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('Ya existe una categoría con ese nombre');
+      expect(prisma.category.create).not.toHaveBeenCalled();
+      expect(prisma.category.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ businessId: 'biz_1', name: { equals: 'cortes', mode: 'insensitive' } }),
+        })
+      );
+    });
+
+    it('PUT devuelve 409 si renombra a un nombre que ya usa otra categoria', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue({ id: 'cat_2' });
+
+      const res = await request(app)
+        .put('/api/categories/cat_1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Color' });
+
+      expect(res.status).toBe(409);
+      expect(prisma.category.update).not.toHaveBeenCalled();
+      expect(prisma.category.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ NOT: { id: 'cat_1' } }) })
+      );
+    });
+  });
+
   describe('DELETE /api/categories/:id', () => {
-    it('elimina una categoria existente', async () => {
-      mock(prisma.category.delete).mockResolvedValue({});
+    it('devuelve 404 si la categoria no es del negocio', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .delete('/api/categories/cat_ajena')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(404);
+      expect(prisma.category.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'cat_ajena', businessId: 'biz_1' } })
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('elimina una categoria vacia (204) con scope por negocio', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue({ id: 'cat_1', _count: { services: 0, products: 0 } });
+      mock(prisma.$transaction).mockResolvedValue([]);
 
       const res = await request(app)
         .delete('/api/categories/cat_1')
         .set('Authorization', `Bearer ${adminToken}`);
 
       expect(res.status).toBe(204);
-      expect(prisma.category.delete).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'cat_1', businessId: 'biz_1' } })
-      );
+      expect(prisma.category.deleteMany).toHaveBeenCalledWith({ where: { id: 'cat_1', businessId: 'biz_1' } });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('devuelve 409 con los conteos y no borra nada si tiene productos/servicios', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue({ id: 'cat_1', _count: { services: 2, products: 3 } });
+
+      const res = await request(app)
+        .delete('/api/categories/cat_1')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ code: 'CATEGORY_IN_USE', products: 3, services: 2 });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.category.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('con ?detach=true deja los items sin categoria y borra, todo en una transaccion', async () => {
+      mock(prisma.category.findFirst).mockResolvedValue({ id: 'cat_1', _count: { services: 2, products: 3 } });
+      mock(prisma.$transaction).mockResolvedValue([]);
+
+      const res = await request(app)
+        .delete('/api/categories/cat_1?detach=true')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(204);
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { categoryId: 'cat_1', businessId: 'biz_1' },
+        data: { categoryId: null },
+      });
+      expect(prisma.service.updateMany).toHaveBeenCalledWith({
+        where: { categoryId: 'cat_1', businessId: 'biz_1' },
+        data: { categoryId: null },
+      });
+      expect(prisma.category.deleteMany).toHaveBeenCalledWith({ where: { id: 'cat_1', businessId: 'biz_1' } });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
     it('devuelve 403 para rol no ADMIN', async () => {
@@ -161,7 +248,7 @@ describe('routes/categories', () => {
         .set('Authorization', `Bearer ${clientToken}`);
 
       expect(res.status).toBe(403);
-      expect(prisma.category.delete).not.toHaveBeenCalled();
+      expect(prisma.category.deleteMany).not.toHaveBeenCalled();
     });
   });
 });
