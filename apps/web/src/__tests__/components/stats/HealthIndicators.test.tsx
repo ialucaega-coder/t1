@@ -4,7 +4,7 @@
  *  - umbral de visibilidad del cambio (|change| >= 0.1),
  *  - indicadores "inversos" (no-show/cancelación): bajar es BUENO (verde),
  *  - indicadores normales: subir es bueno (verde).
- * También cubre el estado de carga y el fallback silencioso si la API falla.
+ * También cubre el estado de carga y el aviso de error si la API falla.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -46,11 +46,12 @@ describe('components/stats/HealthIndicators', () => {
     expect(screen.queryByText('0.1')).toBeNull();
   });
 
-  it('cae al fallback silencioso cuando la API falla (sin romper)', async () => {
+  it('si la API falla avisa con un error (sin inventar indicadores ni guiones)', async () => {
     getHealthIndicators.mockRejectedValue(new Error('boom'));
     render(<HealthIndicators />);
-    await waitFor(() => expect(screen.getByText('Tasa de confirmación')).toBeInTheDocument());
-    // Los valores de fallback muestran el guion largo.
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(screen.getByRole('alert').textContent).toMatch(/No se pudieron calcular/);
+    expect(screen.queryByText('Tasa de confirmación')).toBeNull();
+    expect(screen.queryByText('—')).toBeNull();
   });
 });

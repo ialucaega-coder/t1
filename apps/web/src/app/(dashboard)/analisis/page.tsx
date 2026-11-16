@@ -9,6 +9,10 @@ import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { DateRangeBar } from '@/components/common/DateRangeBar';
+import { DEFAULT_RANGE, rangeKey, todayLocalKey, type RangeSelection } from '@/lib/date-range';
+import { downloadCsv } from '@/lib/csv';
+import { buildAnalyticsRows, exportFilename } from '@/lib/export-rows';
 
 // Clave de localStorage para recordar qué mejoras se aplicaron/ignoraron. Son
 // sugerencias heurísticas con id posicional (no estable), así que las guardamos
@@ -35,21 +39,26 @@ const severityColors = {
 function BarChart({ data }: { data: { day: string; count: number }[] }) {
   const max = Math.max(...data.map((d) => d.count), 1);
   const chartH = 160;
-  const barW = 36;
-  const gap = 16;
+  // Con muchos días (rango elegido) las barras se afinan, y los números y etiquetas se espacian.
+  const dense = data.length > 14;
+  const barW = dense ? 10 : 36;
+  const gap = dense ? 4 : 16;
+  const labelEvery = dense ? Math.ceil(data.length / 12) : 1;
   const totalW = data.length * (barW + gap) - gap;
 
   return (
-    <svg viewBox={`0 0 ${totalW + 20} ${chartH + 30}`} className="w-full max-w-md">
+    <svg viewBox={`0 0 ${totalW + 20} ${chartH + 30}`} className={dense ? 'w-full' : 'w-full max-w-md'}>
       {data.map((d, i) => {
         const barH = (d.count / max) * chartH;
         const x = i * (barW + gap) + 10;
         const y = chartH - barH;
         return (
-          <g key={d.day}>
+          <g key={`${d.day}-${i}`}>
             <rect x={x} y={y} width={barW} height={barH} rx={4} fill="#38BDF8" opacity={0.8} />
-            <text x={x + barW / 2} y={y - 6} textAnchor="middle" className="text-[10px]" fill="#94A3B8">{d.count}</text>
-            <text x={x + barW / 2} y={chartH + 16} textAnchor="middle" className="text-[10px]" fill="#64748B">{d.day}</text>
+            {!dense && <text x={x + barW / 2} y={y - 6} textAnchor="middle" className="text-[10px]" fill="#94A3B8">{d.count}</text>}
+            {i % labelEvery === 0 && (
+              <text x={x + barW / 2} y={chartH + 16} textAnchor="middle" className="text-[10px]" fill="#64748B">{d.day}</text>
+            )}
           </g>
         );
       })}
@@ -98,13 +107,13 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
 const FUNNEL_COLORS = ['#38BDF8', '#818CF8', '#F59E0B', '#10B981'];
 
 /**
- * Serie temporal de 14 días: mensajes como barras + conversaciones nuevas como
+ * Serie temporal (14 días por defecto, o el rango elegido): mensajes como barras + conversaciones nuevas como
  * línea, ambas en la misma escala (máximo combinado) para que la comparación sea
  * honesta. Colores vía clases/currentColor para legibilidad en claro y oscuro.
  */
 function TimeSeriesChart({ data }: { data: AnalyticsTimeseriesPoint[] }) {
   if (data.length === 0) {
-    return <p className="text-xs text-slate-500">Sin datos en los últimos 14 días.</p>;
+    return <p className="text-xs text-slate-500">Sin datos en el período elegido.</p>;
   }
 
   const max = Math.max(...data.map((d) => Math.max(d.messages, d.conversations)), 1);
@@ -131,7 +140,7 @@ function TimeSeriesChart({ data }: { data: AnalyticsTimeseriesPoint[] }) {
         </span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img"
-        aria-label="Serie temporal de mensajes y conversaciones nuevas de los últimos 14 días">
+        aria-label={`Serie temporal de mensajes y conversaciones nuevas de los últimos ${n} días`}>
         {ticks.map((t) => (
           <g key={t}>
             <line x1={padL} y1={cy(t)} x2={W - padR} y2={cy(t)} stroke="currentColor" className="text-slate-700/40" strokeWidth={1} />
@@ -151,8 +160,8 @@ function TimeSeriesChart({ data }: { data: AnalyticsTimeseriesPoint[] }) {
           <circle key={d.date} cx={cx(i)} cy={cy(d.conversations)} r={2.5} className="fill-emerald-400" />
         ))}
         {data.map((d, i) => (
-          // Mostramos 1 de cada 2 etiquetas para no amontonar en 14 días.
-          i % 2 === 0 ? (
+          // Etiquetas espaciadas para no amontonar (1 de cada 2 con 14 días; menos con rangos largos).
+          i % Math.max(2, Math.ceil(n / 8)) === 0 ? (
             <text key={d.date} x={cx(i)} y={H - 8} textAnchor="middle" className="fill-slate-500 text-[8px]">{d.label}</text>
           ) : null
         ))}
@@ -261,10 +270,23 @@ function AttributionPanel({ attribution }: { attribution: AnalyticsAttribution |
 }
 
 export default function AnalisisPage() {
-  const { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, attribution, isLoading, error, refetch } = useAnalytics();
+  const [range, setRange] = useState<RangeSelection>(DEFAULT_RANGE);
+  const { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, attribution, isLoading, error, refetch } = useAnalytics(range);
   const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
+
+  // Exporta lo que se ve en la pestaña activa (datos ya cargados, sin pedidos extra).
+  const handleExport = () => {
+    downloadCsv(
+      exportFilename(`analisis-${activeTab}`, rangeKey(range), todayLocalKey()),
+      buildAnalyticsRows({ tab: activeTab, range, kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, attribution }),
+    );
+  };
+  const rangeBar = (
+    <DateRangeBar value={range} onChange={setRange} onExport={handleExport} exportDisabled={isLoading || activeTab === 'campanas'} />
+  );
+  const vsLabel = kpi.range?.custom ? 'vs período ant.' : 'vs mes ant.';
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [campaignName, setCampaignName] = useState('');
   const [campaignDesc, setCampaignDesc] = useState('');
@@ -293,10 +315,19 @@ export default function AnalisisPage() {
 
   const visibleImprovements = improvements.filter((i) => !resolved[i.title]);
 
-  if (isLoading) return <LoadingSpinner label="Cargando análisis..." />;
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        {rangeBar}
+        <LoadingSpinner label="Cargando análisis..." />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
+      {rangeBar}
+
       {error && <ErrorAlert message={error} onRetry={refetch} />}
 
       <p className="text-sm text-slate-400 max-w-2xl">
@@ -309,14 +340,14 @@ export default function AnalisisPage() {
           <div className="flex items-center gap-2 mb-1"><MessageCircle className="h-4 w-4 text-brand-400" /><span className="text-[10px] text-slate-500">CONVERSACIONES</span></div>
           <p className="text-2xl font-bold text-white">{kpi.totalConversations}</p>
           <p className={`text-[10px] ${kpi.conversationsChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {kpi.conversationsChange >= 0 ? '+' : ''}{kpi.conversationsChange}% vs mes ant.
+            {kpi.conversationsChange >= 0 ? '+' : ''}{kpi.conversationsChange}% {vsLabel}
           </p>
         </div>
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><Star className="h-4 w-4 text-yellow-400" /><span className="text-[10px] text-slate-500">SATISFACCIÓN</span></div>
           <p className="text-2xl font-bold text-white">{kpi.avgSatisfaction}<span className="text-sm text-slate-500">/5</span></p>
           <p className={`text-[10px] ${kpi.satisfactionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {kpi.satisfactionChange >= 0 ? '+' : ''}{kpi.satisfactionChange} vs mes ant.
+            {kpi.satisfactionChange >= 0 ? '+' : ''}{kpi.satisfactionChange} {vsLabel}
           </p>
         </div>
         <div className="card-accent">
@@ -328,7 +359,7 @@ export default function AnalisisPage() {
           <div className="flex items-center gap-2 mb-1"><Zap className="h-4 w-4 text-purple-400" /><span className="text-[10px] text-slate-500">CONVERSIÓN</span></div>
           <p className="text-2xl font-bold text-white">{kpi.conversionRate}%</p>
           <p className={`text-[10px] ${kpi.conversionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {kpi.conversionChange >= 0 ? '+' : ''}{kpi.conversionChange}% vs mes ant.
+            {kpi.conversionChange >= 0 ? '+' : ''}{kpi.conversionChange}% {vsLabel}
           </p>
         </div>
       </div>
@@ -408,7 +439,7 @@ export default function AnalisisPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="card-accent">
               <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
-                <LineChart className="h-4 w-4 text-brand-400" /> Actividad últimos 14 días
+                <LineChart className="h-4 w-4 text-brand-400" /> Actividad últimos {timeseries.length || 14} días
               </h3>
               <p className="mono-label mb-4">MENSAJES Y CONVERSACIONES NUEVAS POR DÍA</p>
               <TimeSeriesChart data={timeseries} />

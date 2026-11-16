@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { analyticsApi } from '@/lib/api/index';
-import type { AnalyticsTimeseriesPoint, AnalyticsFunnel, AnalyticsAttribution } from '@/types/analytics';
+import { DEFAULT_RANGE, rangeParams, type RangeSelection } from '@/lib/date-range';
+import type { AnalyticsKpi, AnalyticsTimeseriesPoint, AnalyticsFunnel, AnalyticsAttribution } from '@/types/analytics';
 import {
   DAILY_CONVERSATIONS,
   SATISFACTION_DISTRIBUTION,
@@ -17,7 +18,7 @@ export interface MetricItem {
 }
 
 export interface UseAnalyticsResult {
-  kpi: typeof KPI_SUMMARY;
+  kpi: AnalyticsKpi;
   conversations: typeof DAILY_CONVERSATIONS;
   satisfaction: typeof SATISFACTION_DISTRIBUTION;
   improvements: typeof SUGGESTED_IMPROVEMENTS;
@@ -34,7 +35,7 @@ export interface UseAnalyticsResult {
 // Valores vacíos/en cero: son el estado honesto antes de cargar y ante un error
 // de la API. Antes el hook arrancaba (y caía) con datos de ejemplo, que hacían
 // ver números inventados como si fueran reales.
-const EMPTY_KPI: typeof KPI_SUMMARY = {
+const EMPTY_KPI: AnalyticsKpi = {
   totalConversations: 0,
   conversationsChange: 0,
   avgSatisfaction: 0,
@@ -46,8 +47,9 @@ const EMPTY_KPI: typeof KPI_SUMMARY = {
   monthlyBudget: KPI_SUMMARY.monthlyBudget,
 };
 
-export function useAnalytics(): UseAnalyticsResult {
-  const [kpi, setKpi] = useState<typeof KPI_SUMMARY>(EMPTY_KPI);
+/** @param range rango elegido; sin él el server usa su ventana histórica (30 días). Cambiarlo recarga los datos. */
+export function useAnalytics(range: RangeSelection = DEFAULT_RANGE): UseAnalyticsResult {
+  const [kpi, setKpi] = useState<AnalyticsKpi>(EMPTY_KPI);
   const [conversations, setConversations] = useState<typeof DAILY_CONVERSATIONS>([]);
   const [satisfaction, setSatisfaction] = useState<typeof SATISFACTION_DISTRIBUTION>([]);
   const [improvements, setImprovements] = useState<typeof SUGGESTED_IMPROVEMENTS>([]);
@@ -67,16 +69,17 @@ export function useAnalytics(): UseAnalyticsResult {
       setIsLoading(true);
       setError(null);
       try {
+        const params = rangeParams(range);
         const [kpiRes, convRes, satRes, impRes, costRes, metricsRes, tsRes, funnelRes, attrRes] = await Promise.all([
-          analyticsApi.getKpi(),
-          analyticsApi.getConversations(),
-          analyticsApi.getSatisfaction(),
-          analyticsApi.getImprovements(),
-          analyticsApi.getCosts(),
-          analyticsApi.getMetrics(),
-          analyticsApi.getTimeseries(),
+          analyticsApi.getKpi(params),
+          analyticsApi.getConversations(params),
+          analyticsApi.getSatisfaction(params),
+          analyticsApi.getImprovements(params),
+          analyticsApi.getCosts(params),
+          analyticsApi.getMetrics(params),
+          analyticsApi.getTimeseries(params),
           analyticsApi.getFunnel(),
-          analyticsApi.getAttribution(),
+          analyticsApi.getAttribution(params),
         ]);
         if (!cancelled) {
           setKpi(kpiRes);
@@ -111,7 +114,7 @@ export function useAnalytics(): UseAnalyticsResult {
 
     load();
     return () => { cancelled = true; };
-  }, [reloadToken]);
+  }, [reloadToken, range]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 

@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { cache, cacheKey } from '../lib/cache';
+import { validateQuery } from '../middleware/validate';
+import { dateRangeQuerySchema, type DateRangeQuery } from '../validators/dateRange';
+import { resolveRange, windowFilter, prevWindowFilter, type ResolvedRange } from '../services/analytics/range';
+import { ANALYTICS_TZ, arDayMonthLabel, arWeekdayLabel } from '../services/analytics/time';
 
 const router = Router();
 
@@ -20,13 +25,23 @@ const router = Router();
  */
 const STATS_TTL_MS = 30_000;
 
+/** Rango pedido por query (?days= | ?from=&to=), ya validado; sin él se mantiene el comportamiento histórico. */
+const rangeQuery = validateQuery(dateRangeQuerySchema);
+const rangeOf = (req: { validatedQuery?: Record<string, unknown> }, defaultDays: number): ResolvedRange =>
+  resolveRange(req.validatedQuery as DateRangeQuery | undefined, defaultDays);
+/** Sufijo de la clave de caché: el rango pedido (la caché es por negocio + rango). */
+const rangeSig = (range: ResolvedRange): string =>
+  range.custom ? `${range.keys[0]}_${range.keys[range.keys.length - 1]}` : 'default';
+
 router.get(
   '/overview',
   requireAuth,
+  rangeQuery,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
-    const key = cacheKey(businessId, 'stats', 'overview');
+    const range = rangeOf(req, 30);
+    const key = cacheKey(businessId, 'stats', 'overview', rangeSig(range));
     const cached = cache.get(key);
     if (cached) return res.json(cached);
 
@@ -34,6 +49,9 @@ router.get(
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    // Sin rango: este mes vs el mes pasado (histórico). Con rango: la ventana pedida vs la anterior de igual largo.
+    const curWin = range.custom ? windowFilter(range) : { gte: startOfMonth };
+    const prevWin = range.custom ? prevWindowFilter(range) : { gte: startOfLastMonth, lt: startOfMonth };
 
     const [
       todayBookings,
@@ -48,15 +66,15 @@ router.get(
       lastMonthNoShows,
     ] = await Promise.all([
       prisma.booking.count({ where: { businessId, date: { gte: startOfDay } } }),
-      prisma.booking.count({ where: { businessId, date: { gte: startOfMonth } } }),
-      prisma.booking.count({ where: { businessId, date: { gte: startOfLastMonth, lt: startOfMonth } } }),
+      prisma.booking.count({ where: { businessId, date: curWin } }),
+      prisma.booking.count({ where: { businessId, date: prevWin } }),
       prisma.user.count({ where: { businessId, role: 'CLIENT' } }),
-      prisma.transaction.aggregate({ where: { businessId, createdAt: { gte: startOfMonth }, type: 'SALE' }, _sum: { amount: true } }),
-      prisma.transaction.aggregate({ where: { businessId, createdAt: { gte: startOfLastMonth, lt: startOfMonth }, type: 'SALE' }, _sum: { amount: true } }),
+      prisma.transaction.aggregate({ where: { businessId, createdAt: curWin, type: 'SALE' }, _sum: { amount: true } }),
+      prisma.transaction.aggregate({ where: { businessId, createdAt: prevWin, type: 'SALE' }, _sum: { amount: true } }),
       prisma.service.count({ where: { businessId, isActive: true } }),
       prisma.product.count({ where: { businessId } }),
-      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: { gte: startOfMonth } } }),
-      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: { gte: startOfLastMonth, lt: startOfMonth } } }),
+      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: curWin } }),
+      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: prevWin } }),
     ]);
 
     const currentRevenue = Number(monthRevenue._sum.amount || 0);
@@ -77,6 +95,7 @@ router.get(
       totalProducts,
       noShowRate: `${noShowRate}%`,
       noShowChange: `${Number(noShowRate) <= Number(lastNoShowRate) ? '-' : '+'}${Math.abs(Number(noShowRate) - Number(lastNoShowRate)).toFixed(1)}%`,
+      range: { from: range.keys[0], to: range.keys[range.keys.length - 1], days: range.days, custom: range.custom },
     };
 
     cache.set(key, payload, STATS_TTL_MS);
@@ -87,12 +106,45 @@ router.get(
 router.get(
   '/weekly',
   requireAuth,
+  rangeQuery,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
-    const key = cacheKey(businessId, 'stats', 'weekly');
+    const range = rangeOf(req, 7);
+    const key = cacheKey(businessId, 'stats', 'weekly', rangeSig(range));
     const cached = cache.get(key);
     if (cached) return res.json(cached);
+
+    // Con rango pedido: una sola consulta SQL por tabla agrupada por día de Argentina
+    // (a lo sumo 366 filas). El camino sin rango (7 días) queda como estaba.
+    if (range.custom) {
+      const [bookingRows, revenueRows] = await Promise.all([
+        prisma.$queryRaw<{ day: string; n: number }[]>`
+          SELECT to_char(("date" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
+                 COUNT(*)::int AS n
+          FROM "bookings"
+          WHERE "businessId" = ${businessId} AND "date" >= ${range.since} AND "date" < ${range.until}
+          GROUP BY 1`,
+        prisma.$queryRaw<{ day: string; total: Prisma.Decimal | number | string | null }[]>`
+          SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
+                 COALESCE(SUM("amount"), 0) AS total
+          FROM "transactions"
+          WHERE "businessId" = ${businessId} AND "type" = 'SALE'::"TransactionType"
+            AND "createdAt" >= ${range.since} AND "createdAt" < ${range.until}
+          GROUP BY 1`,
+      ]);
+      const bookingsByKey = new Map(bookingRows.map((r) => [r.day, Number(r.n)]));
+      const revenueByKey = new Map(revenueRows.map((r) => [r.day, Number(r.total ?? 0)]));
+      const label = range.keys.length > 7 ? arDayMonthLabel : arWeekdayLabel;
+      const series = range.keys.map((k) => ({
+        date: k,
+        day: label(k),
+        bookings: bookingsByKey.get(k) ?? 0,
+        revenue: revenueByKey.get(k) ?? 0,
+      }));
+      cache.set(key, series, STATS_TTL_MS);
+      return res.json(series);
+    }
 
     const now = new Date();
 
@@ -140,10 +192,12 @@ router.get(
 router.get(
   '/top-services',
   requireAuth,
+  rangeQuery,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
-    const key = cacheKey(businessId, 'stats', 'top-services');
+    const range = rangeOf(req, 30);
+    const key = cacheKey(businessId, 'stats', 'top-services', rangeSig(range));
     const cached = cache.get(key);
     if (cached) return res.json(cached);
 
@@ -151,7 +205,7 @@ router.get(
 
     const services = await prisma.booking.groupBy({
       by: ['serviceId'],
-      where: { businessId, date: { gte: startOfMonth } },
+      where: { businessId, date: range.custom ? windowFilter(range) : { gte: startOfMonth } },
       _count: { id: true },
       orderBy: { _count: { id: 'desc' } },
       take: 5,

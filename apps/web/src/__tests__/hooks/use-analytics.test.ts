@@ -22,6 +22,7 @@ vi.mock('@/lib/api/index', () => ({
 
 import { useAnalytics } from '@/hooks/use-analytics';
 import { analyticsApi } from '@/lib/api/index';
+import type { RangeSelection } from '@/lib/date-range';
 
 const mockKpi = analyticsApi.getKpi as ReturnType<typeof vi.fn>;
 const mockConv = analyticsApi.getConversations as ReturnType<typeof vi.fn>;
@@ -107,5 +108,21 @@ describe('hooks/use-analytics', () => {
 
     act(() => result.current.refetch());
     await waitFor(() => expect(mockKpi).toHaveBeenCalledTimes(2));
+  });
+
+  it('al cambiar el rango recarga todos los endpoints con el rango (el embudo CRM no lo usa)', async () => {
+    resolveAll();
+    const { result, rerender } = renderHook(({ range }) => useAnalytics(range), {
+      initialProps: { range: { kind: 'default' } as RangeSelection },
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(mockKpi).toHaveBeenLastCalledWith(undefined);
+
+    rerender({ range: { kind: 'preset', days: 90 } });
+    await waitFor(() => expect(mockKpi).toHaveBeenCalledTimes(2));
+    for (const m of [mockKpi, mockConv, mockSat, mockImp, mockCosts, mockMetrics, mockTimeseries, mockAttribution]) {
+      expect(m).toHaveBeenLastCalledWith({ days: 90 });
+    }
+    expect(mockFunnel).toHaveBeenLastCalledWith();
   });
 });

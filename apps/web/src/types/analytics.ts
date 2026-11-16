@@ -8,10 +8,14 @@ export interface AnalyticsKpi {
   conversionRate: number;
   conversionChange: number;
   monthlyBudget: number;
+  /** Período que cubren los números (días calendario en hora de Argentina). */
+  range?: { from: string; to: string; days: number; custom: boolean };
 }
 
 export interface AnalyticsConversation {
   day: string;
+  /** Fecha ISO del día (YYYY-MM-DD); el server la manda siempre. */
+  date?: string;
   count: number;
 }
 

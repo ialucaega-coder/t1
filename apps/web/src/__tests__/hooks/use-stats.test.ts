@@ -16,6 +16,7 @@ vi.mock('@/lib/api/index', () => ({
 
 import { useStats } from '@/hooks/use-stats';
 import { statsApi } from '@/lib/api/index';
+import type { RangeSelection } from '@/lib/date-range';
 
 const mockOverview = statsApi.getOverview as ReturnType<typeof vi.fn>;
 const mockWeekly = statsApi.getWeeklyStats as ReturnType<typeof vi.fn>;
@@ -73,6 +74,28 @@ describe('hooks/use-stats', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.error).toBe('Error al cargar estadísticas');
+  });
+
+  it('sin rango pide todo sin parámetros; al cambiar el rango recarga con los parámetros nuevos', async () => {
+    mockOverview.mockResolvedValue({ revenue: 1 });
+    mockWeekly.mockResolvedValue([]);
+    mockTop.mockResolvedValue([]);
+
+    const { result, rerender } = renderHook(({ range }) => useStats(range), {
+      initialProps: { range: { kind: 'default' } as RangeSelection },
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(mockOverview).toHaveBeenLastCalledWith(undefined);
+
+    rerender({ range: { kind: 'preset', days: 30 } });
+    await waitFor(() => expect(mockOverview).toHaveBeenCalledTimes(2));
+    expect(mockOverview).toHaveBeenLastCalledWith({ days: 30 });
+    expect(mockWeekly).toHaveBeenLastCalledWith({ days: 30 });
+    expect(mockTop).toHaveBeenLastCalledWith({ days: 30 });
+
+    rerender({ range: { kind: 'custom', from: '2026-10-01', to: '2026-10-31' } });
+    await waitFor(() => expect(mockOverview).toHaveBeenCalledTimes(3));
+    expect(mockOverview).toHaveBeenLastCalledWith({ from: '2026-10-01', to: '2026-10-31' });
   });
 
   it('refetch vuelve a pedir las estadísticas', async () => {

@@ -3,17 +3,28 @@ import { Prisma } from '@prisma/client';
 import { requireAuth } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { cacheResponse } from '../middleware/cacheResponse';
+import { validateQuery } from '../middleware/validate';
+import { dateRangeQuerySchema, type DateRangeQuery } from '../validators/dateRange';
 import { prisma } from '../lib/prisma';
 import { getFunnel, type LifecycleStage } from '../services/clients/lifecycle';
 import {
   ANALYTICS_TZ,
-  arDayKeys,
   arDayMonthLabel,
   arDayStartUtc,
   arWeekdayLabel,
 } from '../services/analytics/time';
+import { resolveRange, windowFilter, prevWindowFilter, type ResolvedRange } from '../services/analytics/range';
 
 const router = Router();
+
+/** Rango pedido por query (?days= | ?from=&to=), ya validado; undefined = comportamiento histórico. */
+const rangeQuery = validateQuery(dateRangeQuerySchema);
+const rangeOf = (req: { validatedQuery?: Record<string, unknown> }, defaultDays: number): ResolvedRange =>
+  resolveRange(req.validatedQuery as DateRangeQuery | undefined, defaultDays);
+
+/** Condición SQL de fecha (createdAt) para una ventana; vacía si no hay tope superior. */
+const untilSql = (column: Prisma.Sql, range: ResolvedRange): Prisma.Sql =>
+  range.until ? Prisma.sql`AND ${column} < ${range.until}` : Prisma.empty;
 
 // Los endpoints de analytics agregan muchas filas por request: se cachean unos
 // segundos por negocio (mismo criterio que /api/stats).
@@ -29,7 +40,12 @@ const ANALYTICS_TTL_MS = 30_000;
 export function attributionBase(
   businessId: string,
   source: Prisma.Sql = Prisma.raw('"conversations"'),
+  range?: ResolvedRange,
 ): Prisma.Sql {
+  // Solo se filtra por fecha si el cliente pidió un rango; sin rango cuenta todo el historial.
+  const dateCond = range?.custom
+    ? Prisma.sql`AND c."createdAt" >= ${range.since} ${untilSql(Prisma.raw('c."createdAt"'), range)}`
+    : Prisma.empty;
   // Un campo vale solo si metadata y metadata.attribution son objetos y el campo es
   // un string no vacío tras recortar espacios (igual que la lectura tolerante previa).
   // `->` sobre algo que no es objeto devuelve NULL (no error), así que el CASE alcanza.
@@ -44,7 +60,7 @@ export function attributionBase(
              ${field('sourceId')} AS source_id,
              ${field('headline')} AS headline
       FROM ${source} c
-      WHERE c."businessId" = ${businessId}
+      WHERE c."businessId" = ${businessId} ${dateCond}
     )`;
 }
 
@@ -62,33 +78,34 @@ const AVG_TOKENS_PER_MESSAGE = 150;
 router.get(
   '/kpi',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const now = new Date();
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+    const range = rangeOf(req, 30);
+    const inRange = windowFilter(range);
+    const inPrev = prevWindowFilter(range);
 
     const [
       totalConversations, totalBookings, completedBookings, closedConvos, botMessages, avgResponseTime,
       prevConversations, prevBookings, prevCompleted, prevClosed, prevBotMessages, prevAvgResp,
     ] = await Promise.all([
-      prisma.conversation.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.booking.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.booking.count({ where: { businessId, status: 'COMPLETED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.message.count({ where: { role: 'BOT', createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } } }),
+      prisma.conversation.count({ where: { businessId, createdAt: inRange } }),
+      prisma.booking.count({ where: { businessId, createdAt: inRange } }),
+      prisma.booking.count({ where: { businessId, status: 'COMPLETED', createdAt: inRange } }),
+      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: inRange } }),
+      prisma.message.count({ where: { role: 'BOT', createdAt: inRange, conversation: { businessId } } }),
       prisma.message.aggregate({
-        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: inRange, conversation: { businessId } },
         _avg: { responseTime: true },
       }),
-      prisma.conversation.count({ where: { businessId, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
-      prisma.booking.count({ where: { businessId, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
-      prisma.booking.count({ where: { businessId, status: 'COMPLETED', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } } }),
-      prisma.message.count({ where: { role: 'BOT', createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, conversation: { businessId } } }),
+      prisma.conversation.count({ where: { businessId, createdAt: inPrev } }),
+      prisma.booking.count({ where: { businessId, createdAt: inPrev } }),
+      prisma.booking.count({ where: { businessId, status: 'COMPLETED', createdAt: inPrev } }),
+      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: inPrev } }),
+      prisma.message.count({ where: { role: 'BOT', createdAt: inPrev, conversation: { businessId } } }),
       prisma.message.aggregate({
-        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, conversation: { businessId } },
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: inPrev, conversation: { businessId } },
         _avg: { responseTime: true },
       }),
     ]);
@@ -125,6 +142,7 @@ router.get(
       conversionRate,
       conversionChange: parseFloat((conversionRate - prevConversionRate).toFixed(1)),
       monthlyBudget: 50,
+      range: { from: range.keys[0], to: range.keys[range.keys.length - 1], days: range.days, custom: range.custom },
     });
   })
 );
@@ -132,6 +150,7 @@ router.get(
 router.get(
   '/conversations',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
@@ -139,36 +158,43 @@ router.get(
     // Últimos 7 días calendario en hora de Argentina, agrupados EN LA DB: una
     // consulta que devuelve a lo sumo 7 filas (antes se traían todas las
     // conversaciones de la ventana a memoria).
-    const keys = arDayKeys(7);
+    // Con ?days / ?from&to la ventana es la pedida (a lo sumo 366 filas); si no, 7 días.
+    const range = rangeOf(req, 7);
+    const keys = range.keys;
     const rows = await prisma.$queryRaw<{ day: string; n: number }[]>`
       SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
              COUNT(*)::int AS n
       FROM "conversations"
       WHERE "businessId" = ${businessId} AND "createdAt" >= ${arDayStartUtc(keys[0])}
+        ${untilSql(Prisma.raw('"createdAt"'), range)}
       GROUP BY 1`;
     const counts = new Map(rows.map((r) => [r.day, Number(r.n)]));
 
-    res.json(keys.map((k) => ({ day: arWeekdayLabel(k), count: counts.get(k) ?? 0 })));
+    // Con más de una semana el día de la semana se repite: ahí se rotula dd/mm (y la fecha ISO va en `date`).
+    const label = keys.length > 7 ? arDayMonthLabel : arWeekdayLabel;
+    res.json(keys.map((k) => ({ day: label(k), date: k, count: counts.get(k) ?? 0 })));
   })
 );
 
 router.get(
   '/satisfaction',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const range = rangeOf(req, 30);
+    const inRange = windowFilter(range);
 
     const [closed, handoff, open, totalWithResponse, avgResp] = await Promise.all([
-      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, status: 'OPEN', createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: inRange } }),
+      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: inRange } }),
+      prisma.conversation.count({ where: { businessId, status: 'OPEN', createdAt: inRange } }),
       prisma.message.count({
-        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: inRange, conversation: { businessId } },
       }),
       prisma.message.aggregate({
-        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: inRange, conversation: { businessId } },
         _avg: { responseTime: true },
       }),
     ]);
@@ -203,22 +229,24 @@ router.get(
 router.get(
   '/improvements',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const range = rangeOf(req, 30);
+    const inRange = windowFilter(range);
 
     const [handoffCount, totalConvos, avgResp, botMsgCount, totalMsgCount, pendingBookings, totalBookings] = await Promise.all([
-      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: inRange } }),
+      prisma.conversation.count({ where: { businessId, createdAt: inRange } }),
       prisma.message.aggregate({
-        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: inRange, conversation: { businessId } },
         _avg: { responseTime: true },
       }),
-      prisma.message.count({ where: { role: 'BOT', createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } } }),
-      prisma.message.count({ where: { createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } } }),
-      prisma.booking.count({ where: { businessId, status: 'PENDING', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.booking.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.message.count({ where: { role: 'BOT', createdAt: inRange, conversation: { businessId } } }),
+      prisma.message.count({ where: { createdAt: inRange, conversation: { businessId } } }),
+      prisma.booking.count({ where: { businessId, status: 'PENDING', createdAt: inRange } }),
+      prisma.booking.count({ where: { businessId, createdAt: inRange } }),
     ]);
 
     const improvements: { id: string; title: string; category: string; severity: string; description: string }[] = [];
@@ -284,7 +312,7 @@ router.get(
         title: 'Todo en orden',
         category: 'Info',
         severity: 'baja',
-        description: 'No se detectaron problemas significativos en los últimos 30 días. ¡Buen trabajo!',
+        description: `No se detectaron problemas significativos en ${range.custom ? "el período elegido" : "los últimos 30 días"}. ¡Buen trabajo!`,
       });
     }
 
@@ -295,10 +323,12 @@ router.get(
 router.get(
   '/costs',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const range = rangeOf(req, 30);
+    const inRange = windowFilter(range);
 
     // Sumamos el largo de los textos EN LA DB (SUM(LENGTH)) en vez de traer todos
     // los mensajes del bot a memoria: el findMany anterior crecía sin tope con el
@@ -309,7 +339,8 @@ router.get(
       JOIN "conversations" c ON c."id" = m."conversationId"
       WHERE c."businessId" = ${businessId}
         AND m."role" = 'BOT'::"MessageRole"
-        AND m."createdAt" >= ${thirtyDaysAgo}
+        AND m."createdAt" >= ${range.since}
+        ${untilSql(Prisma.raw('m."createdAt"'), range)}
     `;
     const totalChars = Number(rows[0]?.total ?? 0);
     const estimatedTokens = Math.round(totalChars / 4);
@@ -330,23 +361,25 @@ router.get(
 router.get(
   '/metrics',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const range = rangeOf(req, 30);
+    const inRange = windowFilter(range);
 
     const [avgResp, totalMessages, totalConvos, closedConvos, handoffConvos, botBookings] = await Promise.all([
       prisma.message.aggregate({
-        where: { role: 'BOT', responseTime: { not: null }, createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        where: { role: 'BOT', responseTime: { not: null }, createdAt: inRange, conversation: { businessId } },
         _avg: { responseTime: true },
       }),
       prisma.message.count({
-        where: { createdAt: { gte: thirtyDaysAgo }, conversation: { businessId } },
+        where: { createdAt: inRange, conversation: { businessId } },
       }),
-      prisma.conversation.count({ where: { businessId, createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.booking.count({ where: { businessId, source: { in: ['TELEGRAM', 'WHATSAPP'] }, createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.conversation.count({ where: { businessId, createdAt: inRange } }),
+      prisma.conversation.count({ where: { businessId, status: 'CLOSED', createdAt: inRange } }),
+      prisma.conversation.count({ where: { businessId, status: 'HANDOFF', createdAt: inRange } }),
+      prisma.booking.count({ where: { businessId, source: { in: ['TELEGRAM', 'WHATSAPP'] }, createdAt: inRange } }),
     ]);
 
     const avgRespMs = avgResp._avg.responseTime || 0;
@@ -377,13 +410,15 @@ router.get(
 router.get(
   '/timeseries',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
     // 14 días calendario en hora de Argentina. Agrupado en la DB (una consulta por
     // tabla, a lo sumo 14 filas cada una); mensajes se acota por negocio vía JOIN.
-    const keys = arDayKeys(14);
+    const range = rangeOf(req, 14);
+    const keys = range.keys;
     const since = arDayStartUtc(keys[0]);
     const [convRows, msgRows] = await Promise.all([
       prisma.$queryRaw<{ day: string; n: number }[]>`
@@ -391,6 +426,7 @@ router.get(
                COUNT(*)::int AS n
         FROM "conversations"
         WHERE "businessId" = ${businessId} AND "createdAt" >= ${since}
+          ${untilSql(Prisma.raw('"createdAt"'), range)}
         GROUP BY 1`,
       prisma.$queryRaw<{ day: string; n: number }[]>`
         SELECT to_char((m."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
@@ -398,6 +434,7 @@ router.get(
         FROM "messages" m
         JOIN "conversations" c ON c."id" = m."conversationId"
         WHERE c."businessId" = ${businessId} AND m."createdAt" >= ${since}
+          ${untilSql(Prisma.raw('m."createdAt"'), range)}
         GROUP BY 1`,
     ]);
     const convCounts = new Map(convRows.map((r) => [r.day, Number(r.n)]));
@@ -463,9 +500,11 @@ router.get(
 router.get(
   '/attribution',
   requireAuth,
+  rangeQuery,
   cacheResponse(ANALYTICS_TTL_MS),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+    const range = rangeOf(req, 30); // solo filtra si el cliente pidió un rango
 
     // Agregado EN LA DB (antes se traía el metadata de TODAS las conversaciones del
     // negocio a memoria). Mismas reglas que la lectura tolerante anterior: la
@@ -474,14 +513,14 @@ router.get(
     // no vacío (se recortan espacios). Ver attributionBase().
     const [totals, sources, ads] = await Promise.all([
       prisma.$queryRaw<{ total: number; attributed: number }[]>`
-        ${attributionBase(businessId)}
+        ${attributionBase(businessId, undefined, range)}
         SELECT COUNT(*)::int AS total, COUNT(source)::int AS attributed FROM base`,
       prisma.$queryRaw<{ source: string; n: number }[]>`
-        ${attributionBase(businessId)}
+        ${attributionBase(businessId, undefined, range)}
         SELECT source, COUNT(*)::int AS n FROM base WHERE source IS NOT NULL
         GROUP BY source ORDER BY n DESC, source ASC`,
       prisma.$queryRaw<{ source_id: string | null; headline: string | null; n: number }[]>`
-        ${attributionBase(businessId)}
+        ${attributionBase(businessId, undefined, range)}
         SELECT MAX(source_id) AS source_id, MIN(headline) AS headline, COUNT(*)::int AS n
         FROM base
         WHERE source IS NOT NULL AND COALESCE(source_id, 'headline:' || headline) IS NOT NULL

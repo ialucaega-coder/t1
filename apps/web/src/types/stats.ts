@@ -9,6 +9,8 @@ export interface StatsOverview {
   totalProducts: number;
   noShowRate: string;
   noShowChange: string;
+  /** Período que cubren los números (días calendario en hora de Argentina). */
+  range?: { from: string; to: string; days: number; custom: boolean };
 }
 
 export interface WeeklyData {
