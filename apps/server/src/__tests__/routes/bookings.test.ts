@@ -19,8 +19,12 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
+      findFirst: vi.fn(),
     },
     service: {
+      findFirst: vi.fn(),
+    },
+    professional: {
       findFirst: vi.fn(),
     },
     user: {
@@ -33,7 +37,8 @@ vi.mock('../../lib/prisma', () => ({
 
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    const role = (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN';
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role };
     next();
   },
   requireRole:
@@ -69,6 +74,8 @@ describe('routes/bookings', () => {
     (prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (prisma.$transaction as ReturnType<typeof vi.fn>).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
     (prisma.booking.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    // El profesional existe en el negocio por defecto.
+    (prisma.professional.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'prof_1' });
   });
 
   describe('GET /api/bookings', () => {
@@ -209,6 +216,181 @@ describe('routes/bookings', () => {
       const res = await request(app).post('/api/bookings').send({ date: '2026-01-01' });
 
       expect(res.status).toBe(400);
+    });
+
+    it('devuelve 400 (no 500) con una fecha inválida', async () => {
+      const res = await request(app).post('/api/bookings').send({ ...validPayload, date: 'no-es-fecha' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rechaza (404) un profesional de otro negocio (anti cross-tenant)', async () => {
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'svc_1', duration: 30, price: 1000 });
+      (prisma.professional.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app).post('/api/bookings').send({ ...validPayload, professionalId: 'prof_ajeno' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.professional.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'prof_ajeno', businessId: 'biz_1' } })
+      );
+      expect(prisma.booking.create).not.toHaveBeenCalled();
+    });
+
+    it('usa la misma clave de lock para "2026-01-01" y "2026-01-01T00:00:00.000Z" (sin carrera entre altas)', async () => {
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'svc_1', duration: 30, price: 1000 });
+      (prisma.booking.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'b' });
+
+      await request(app).post('/api/bookings').send(validPayload);
+      await request(app).post('/api/bookings').send({ ...validPayload, date: '2026-01-01T00:00:00.000Z' });
+
+      const calls = (prisma.$executeRaw as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[0][1]).toBe('booking:biz_1:prof_1:2026-01-01');
+      expect(calls[1][1]).toBe(calls[0][1]);
+    });
+  });
+
+  describe('PATCH /api/bookings/:id (editar / reprogramar)', () => {
+    const existing = {
+      id: 'booking_1',
+      businessId: 'biz_1',
+      status: 'CONFIRMED',
+      date: new Date('2026-01-01'),
+      startTime: '10:00',
+      endTime: '10:30',
+      serviceId: 'svc_1',
+      professionalId: 'prof_1',
+    };
+    const svc30 = { id: 'svc_1', duration: 30, price: 1000 };
+
+    beforeEach(() => {
+      (prisma.booking.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(existing);
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(svc30);
+      (prisma.booking.update as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'booking_1' });
+    });
+
+    it('reprograma: nueva fecha/hora con endTime recalculado, scoped por negocio', async () => {
+      const res = await request(app)
+        .patch('/api/bookings/booking_1')
+        .send({ date: '2026-01-05', startTime: '15:00' });
+
+      expect(res.status).toBe(200);
+      expect(prisma.booking.findFirst).toHaveBeenCalledWith({ where: { id: 'booking_1', businessId: 'biz_1' } });
+      expect(prisma.booking.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'booking_1', businessId: 'biz_1' },
+          data: expect.objectContaining({
+            date: new Date('2026-01-05'),
+            startTime: '15:00',
+            endTime: '15:30',
+            professionalId: 'prof_1',
+          }),
+        })
+      );
+    });
+
+    it('valida conflictos con el mismo advisory lock que el alta y excluye a la propia reserva', async () => {
+      await request(app).patch('/api/bookings/booking_1').send({ startTime: '10:15' });
+
+      const lockCalls = (prisma.$executeRaw as ReturnType<typeof vi.fn>).mock.calls;
+      expect(lockCalls[0][1]).toBe('booking:biz_1:prof_1:2026-01-01');
+      expect(prisma.booking.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ businessId: 'biz_1', professionalId: 'prof_1', id: { not: 'booking_1' } }),
+        })
+      );
+      expect(prisma.booking.update).toHaveBeenCalled();
+    });
+
+    it('rechaza (409) si el nuevo horario se solapa con otro turno del profesional', async () => {
+      (prisma.booking.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([{ startTime: '15:00', endTime: '15:30' }]);
+
+      const res = await request(app).patch('/api/bookings/booking_1').send({ startTime: '15:00' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/ya está reservado/);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
+    it('al cambiar el servicio recalcula endTime con su duración y actualiza el precio', async () => {
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'svc_2', duration: 60, price: 2500 });
+
+      await request(app).patch('/api/bookings/booking_1').send({ serviceId: 'svc_2' });
+
+      expect(prisma.service.findFirst).toHaveBeenCalledWith({ where: { id: 'svc_2', businessId: 'biz_1' } });
+      expect(prisma.booking.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ serviceId: 'svc_2', endTime: '11:00', totalPrice: 2500 }),
+        })
+      );
+    });
+
+    it('devuelve 404 si la reserva es de otro negocio (anti cross-tenant)', async () => {
+      (prisma.booking.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app).patch('/api/bookings/de_otro').send({ startTime: '15:00' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (404) un servicio de otro negocio', async () => {
+      (prisma.service.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app).patch('/api/bookings/booking_1').send({ serviceId: 'svc_ajeno' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (404) un profesional de otro negocio', async () => {
+      (prisma.professional.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const res = await request(app).patch('/api/bookings/booking_1').send({ professionalId: 'prof_ajeno' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.professional.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'prof_ajeno', businessId: 'biz_1' } })
+      );
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
+    it('no deja editar una reserva cancelada (409)', async () => {
+      (prisma.booking.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ ...existing, status: 'CANCELLED' });
+
+      const res = await request(app).patch('/api/bookings/booking_1').send({ startTime: '15:00' });
+
+      expect(res.status).toBe(409);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
+    it('notes vacío borra las notas (null) y no pisa el resto de los campos', async () => {
+      await request(app).patch('/api/bookings/booking_1').send({ notes: '' });
+
+      const data = (prisma.booking.update as ReturnType<typeof vi.fn>).mock.calls[0][0].data;
+      expect(data.notes).toBeNull();
+      expect(data).toMatchObject({ startTime: '10:00', serviceId: 'svc_1', professionalId: 'prof_1' });
+      expect(data).not.toHaveProperty('totalPrice');
+    });
+
+    it('devuelve 400 con body vacío o con hora inválida', async () => {
+      const empty = await request(app).patch('/api/bookings/booking_1').send({});
+      const bad = await request(app).patch('/api/bookings/booking_1').send({ startTime: '3pm' });
+
+      expect(empty.status).toBe(400);
+      expect(bad.status).toBe(400);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
+    });
+
+    it('un CLIENT no puede reprogramar (403)', async () => {
+      const res = await request(app)
+        .patch('/api/bookings/booking_1')
+        .set('x-test-role', 'CLIENT')
+        .send({ startTime: '15:00' });
+
+      expect(res.status).toBe(403);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
     });
   });
 

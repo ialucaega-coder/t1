@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { bookingsApi } from '@/lib/api/index';
+import type { UpdateBookingData } from '@/lib/api/bookings';
 import type { Booking, CreateBookingData } from '@/types';
 
 export interface UseBookingsResult {
@@ -9,8 +10,12 @@ export interface UseBookingsResult {
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
-  createBooking: (data: CreateBookingData) => Promise<Booking | null>;
+  /** Rechaza con el error REAL del server (p. ej. horario ocupado) para que la UI lo muestre. */
+  createBooking: (data: CreateBookingData) => Promise<Booking>;
   updateStatus: (id: string, status: string) => Promise<void>;
+  /** Edita / reprograma. Rechaza con el error real del server (conflicto de horario, no encontrada...). */
+  updateBooking: (id: string, data: UpdateBookingData) => Promise<Booking>;
+  deleteBooking: (id: string) => Promise<void>;
 }
 
 export function useBookings(date?: string): UseBookingsResult {
@@ -50,25 +55,30 @@ export function useBookings(date?: string): UseBookingsResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
+  // Estas acciones NO tragan el error: lo propagan para que la pantalla muestre el
+  // mensaje real del server (antes devolvían null / seteaban el error global y la UI
+  // anunciaba éxito aunque hubiera fallado).
   const createBooking = useCallback(async (data: CreateBookingData) => {
-    try {
-      const created = await bookingsApi.createBooking(data);
-      setBookings((prev) => [...prev, created]);
-      return created;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al crear la reserva');
-      return null;
-    }
+    const created = await bookingsApi.createBooking(data);
+    setBookings((prev) => [...prev, created]);
+    return created;
   }, []);
 
   const updateStatus = useCallback(async (id: string, status: string) => {
-    try {
-      const updated = await bookingsApi.updateBookingStatus(id, status);
-      setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al actualizar el estado');
-    }
+    const updated = await bookingsApi.updateBookingStatus(id, status);
+    setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
   }, []);
 
-  return { bookings, isLoading, error, refetch, createBooking, updateStatus };
+  const updateBooking = useCallback(async (id: string, data: UpdateBookingData) => {
+    const updated = await bookingsApi.updateBooking(id, data);
+    setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+    return updated;
+  }, []);
+
+  const deleteBooking = useCallback(async (id: string) => {
+    await bookingsApi.deleteBooking(id);
+    setBookings((prev) => prev.filter((b) => b.id !== id));
+  }, []);
+
+  return { bookings, isLoading, error, refetch, createBooking, updateStatus, updateBooking, deleteBooking };
 }

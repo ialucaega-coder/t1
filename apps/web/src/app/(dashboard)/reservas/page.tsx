@@ -12,6 +12,7 @@ import { BookingList } from '@/components/bookings/BookingList';
 import { BookingCalendar } from '@/components/bookings/BookingCalendar';
 import { BookingFormModal } from '@/components/bookings/BookingFormModal';
 import { BookingDetailModal } from '@/components/bookings/BookingDetailModal';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { useToast } from '@/components/common/Toast';
@@ -51,9 +52,17 @@ export default function ReservasPage() {
   const [selectedBooking, setSelectedBooking] = useState<LegacyBooking | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  const { bookings, isLoading, error, refetch, createBooking, updateStatus } = useBookings(selectedDate);
+  // Edición / reprogramación (mismo modal del alta) y confirmación de cancelar / eliminar.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: 'cancel' | 'delete'; id: string } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+
+  const { bookings, isLoading, error, refetch, createBooking, updateStatus, updateBooking, deleteBooking } = useBookings(selectedDate);
   const { toast } = useToast();
-  const { business } = useAuth();
+  const { business, user } = useAuth();
+  const role = user?.role;
+  const editingBooking = editingId ? bookings.find((b) => b.id === editingId) ?? null : null;
+  const confirmBooking = confirm ? bookings.find((b) => b.id === confirm.id) ?? null : null;
   useSocket(business?.id ?? null);
   useSocketEvent('booking:created', () => refetch());
   useSocketEvent('booking:updated', () => refetch());
@@ -66,15 +75,25 @@ export default function ReservasPage() {
     ? legacyBookings
     : legacyBookings.filter((b) => b.status === statusFilter);
 
+  // El modal muestra el error real del server (p. ej. horario ocupado) si esto rechaza.
   const handleCreate = useCallback(async (data: CreateBookingData) => {
-    try {
-      await createBooking(data);
-      refetch();
-      toast({ type: 'success', message: 'Reserva creada correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al crear reserva' });
-    }
+    await createBooking(data);
+    refetch();
+    toast({ type: 'success', message: 'Reserva creada correctamente' });
   }, [createBooking, refetch, toast]);
+
+  const handleEdit = useCallback(async (data: CreateBookingData) => {
+    if (!editingId) return;
+    await updateBooking(editingId, {
+      date: data.date,
+      startTime: data.startTime,
+      serviceId: data.serviceId,
+      professionalId: data.professionalId,
+      notes: data.notes ?? '',
+    });
+    refetch();
+    toast({ type: 'success', message: 'Reserva actualizada correctamente' });
+  }, [editingId, updateBooking, refetch, toast]);
 
   const handleUpdateStatus = useCallback(async (id: string, status: string) => {
     try {
@@ -82,10 +101,30 @@ export default function ReservasPage() {
       refetch();
       const label = status === 'CANCELLED' ? 'Reserva cancelada' : 'Reserva actualizada correctamente';
       toast({ type: 'success', message: label });
-    } catch {
-      toast({ type: 'error', message: 'Error al actualizar reserva' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al actualizar reserva' });
     }
   }, [updateStatus, refetch, toast]);
+
+  const handleConfirm = useCallback(async () => {
+    if (!confirm) return;
+    setConfirmLoading(true);
+    try {
+      if (confirm.kind === 'cancel') {
+        await updateStatus(confirm.id, 'CANCELLED');
+        toast({ type: 'success', message: 'Reserva cancelada' });
+      } else {
+        await deleteBooking(confirm.id);
+        toast({ type: 'success', message: 'Reserva eliminada' });
+      }
+      refetch();
+      setConfirm(null);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo completar la acción' });
+    } finally {
+      setConfirmLoading(false);
+    }
+  }, [confirm, updateStatus, deleteBooking, refetch, toast]);
 
   const isToday = selectedDate === today;
 
@@ -187,6 +226,32 @@ export default function ReservasPage() {
         onClose={() => setSelectedBooking(null)}
         booking={selectedBooking}
         onUpdateStatus={handleUpdateStatus}
+        onEdit={role === 'CLIENT' ? undefined : setEditingId}
+        onRequestCancel={(id) => setConfirm({ kind: 'cancel', id })}
+        onRequestDelete={role === 'ADMIN' ? (id) => setConfirm({ kind: 'delete', id }) : undefined}
+      />
+
+      <BookingFormModal
+        isOpen={!!editingBooking}
+        onClose={() => setEditingId(null)}
+        onSubmit={handleEdit}
+        booking={editingBooking}
+      />
+
+      <ConfirmDialog
+        isOpen={!!confirm}
+        onClose={() => setConfirm(null)}
+        onConfirm={handleConfirm}
+        loading={confirmLoading}
+        variant="danger"
+        title={confirm?.kind === 'delete' ? 'Eliminar reserva' : 'Cancelar reserva'}
+        message={
+          confirm?.kind === 'delete'
+            ? `Vas a eliminar${confirmBooking ? ` la reserva de ${confirmBooking.client?.name ?? 'el cliente'}` : ' la reserva'} de forma definitiva. Esta acción no se puede deshacer.`
+            : `Vas a cancelar${confirmBooking ? ` la reserva de ${confirmBooking.client?.name ?? 'el cliente'}` : ' la reserva'}. Se le avisa al cliente.`
+        }
+        confirmLabel={confirm?.kind === 'delete' ? 'Eliminar' : 'Cancelar reserva'}
+        cancelLabel="Volver"
       />
     </div>
   );

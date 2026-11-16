@@ -12,6 +12,8 @@ vi.mock('@/lib/api/index', () => ({
     getBookings: vi.fn(),
     createBooking: vi.fn(),
     updateBookingStatus: vi.fn(),
+    updateBooking: vi.fn(),
+    deleteBooking: vi.fn(),
   },
 }));
 
@@ -21,6 +23,8 @@ import { bookingsApi } from '@/lib/api/index';
 const mockGetBookings = bookingsApi.getBookings as ReturnType<typeof vi.fn>;
 const mockCreateBooking = bookingsApi.createBooking as ReturnType<typeof vi.fn>;
 const mockUpdateStatus = bookingsApi.updateBookingStatus as ReturnType<typeof vi.fn>;
+const mockUpdateBooking = bookingsApi.updateBooking as ReturnType<typeof vi.fn>;
+const mockDeleteBooking = bookingsApi.deleteBooking as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -111,20 +115,18 @@ describe('hooks/use-bookings', () => {
     expect(result.current.bookings).toContainEqual(created);
   });
 
-  it('createBooking devuelve null y setea error cuando falla', async () => {
+  it('createBooking rechaza con el error real del server (no lo traga)', async () => {
     mockGetBookings.mockResolvedValue([]);
     mockCreateBooking.mockRejectedValue(new Error('Conflicto de horario'));
 
     const { result } = renderHook(() => useBookings());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    let returned: unknown;
     await act(async () => {
-      returned = await result.current.createBooking({} as any);
+      await expect(result.current.createBooking({} as any)).rejects.toThrow('Conflicto de horario');
     });
 
-    expect(returned).toBeNull();
-    expect(result.current.error).toBe('Conflicto de horario');
+    expect(result.current.bookings).toEqual([]);
   });
 
   it('updateStatus actualiza la reserva en la lista', async () => {
@@ -143,7 +145,7 @@ describe('hooks/use-bookings', () => {
     expect(result.current.bookings[0].status).toBe('CONFIRMED');
   });
 
-  it('updateStatus setea error cuando falla', async () => {
+  it('updateStatus rechaza con el error real cuando falla', async () => {
     mockGetBookings.mockResolvedValue([{ id: 'b1', status: 'PENDING' }]);
     mockUpdateStatus.mockRejectedValue(new Error('Sin permiso'));
 
@@ -151,10 +153,66 @@ describe('hooks/use-bookings', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
-      await result.current.updateStatus('b1', 'CONFIRMED');
+      await expect(result.current.updateStatus('b1', 'CONFIRMED')).rejects.toThrow('Sin permiso');
     });
 
-    expect(result.current.error).toBe('Sin permiso');
+    expect(result.current.bookings[0].status).toBe('PENDING');
+  });
+
+  it('updateBooking reemplaza la reserva editada en la lista', async () => {
+    mockGetBookings.mockResolvedValue([{ id: 'b1', startTime: '10:00' }]);
+    mockUpdateBooking.mockResolvedValue({ id: 'b1', startTime: '15:00' });
+
+    const { result } = renderHook(() => useBookings());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.updateBooking('b1', { startTime: '15:00' });
+    });
+
+    expect(mockUpdateBooking).toHaveBeenCalledWith('b1', { startTime: '15:00' });
+    expect(result.current.bookings[0]).toMatchObject({ id: 'b1', startTime: '15:00' });
+  });
+
+  it('updateBooking rechaza con el mensaje real (conflicto de horario)', async () => {
+    mockGetBookings.mockResolvedValue([{ id: 'b1', startTime: '10:00' }]);
+    mockUpdateBooking.mockRejectedValue(new Error('Ese horario ya está reservado para el profesional.'));
+
+    const { result } = renderHook(() => useBookings());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await expect(result.current.updateBooking('b1', { startTime: '15:00' })).rejects.toThrow(/ya está reservado/);
+    });
+    expect(result.current.bookings[0].startTime).toBe('10:00');
+  });
+
+  it('deleteBooking quita la reserva de la lista', async () => {
+    mockGetBookings.mockResolvedValue([{ id: 'b1' }, { id: 'b2' }]);
+    mockDeleteBooking.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useBookings());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.deleteBooking('b1');
+    });
+
+    expect(mockDeleteBooking).toHaveBeenCalledWith('b1');
+    expect(result.current.bookings).toEqual([{ id: 'b2' }]);
+  });
+
+  it('deleteBooking rechaza y conserva la reserva si el server falla', async () => {
+    mockGetBookings.mockResolvedValue([{ id: 'b1' }]);
+    mockDeleteBooking.mockRejectedValue(new Error('Insufficient permissions'));
+
+    const { result } = renderHook(() => useBookings());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await expect(result.current.deleteBooking('b1')).rejects.toThrow('Insufficient permissions');
+    });
+    expect(result.current.bookings).toHaveLength(1);
   });
 
   it('setea mensaje generico cuando el error no es instancia de Error', async () => {

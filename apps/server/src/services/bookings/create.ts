@@ -22,6 +22,42 @@
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../middleware/errorHandler';
 
+/** Día de la reserva normalizado a YYYY-MM-DD (UTC): base de la fecha guardada y de la clave del lock. */
+export function bookingDateKey(date: string): string {
+  return new Date(date).toISOString().slice(0, 10);
+}
+
+/** Hora de fin (HH:mm) = inicio + duración del servicio. */
+export function computeEndTime(startTime: string, durationMinutes: number): string {
+  const [hours, minutes] = startTime.split(':').map(Number);
+  const endMinutes = hours * 60 + minutes + durationMinutes;
+  return `${Math.floor(endMinutes / 60).toString().padStart(2, '0')}:${(endMinutes % 60).toString().padStart(2, '0')}`;
+}
+
+/**
+ * Lock de agenda por (negocio, profesional, día). La clave se arma con la fecha
+ * NORMALIZADA: antes usaba el string crudo, así que '2026-01-01' y
+ * '2026-01-01T00:00:00Z' tomaban locks distintos para el mismo día y dos altas
+ * simultáneas podían pisarse. Compartida por alta y edición/reprogramación.
+ */
+export function bookingLockKey(businessId: string, professionalId: string, date: string): string {
+  return `booking:${businessId}:${professionalId}:${bookingDateKey(date)}`;
+}
+
+/** Dos turnos del mismo día se solapan si cada uno empieza antes de que termine el otro. */
+export function overlaps(a: { startTime: string; endTime: string }, b: { startTime: string; endTime: string }): boolean {
+  return a.startTime < b.endTime && a.endTime > b.startTime;
+}
+
+/** El profesional tiene que ser del negocio (multi-tenant). Lanza AppError(404) si no. */
+export async function assertProfessionalInBusiness(businessId: string, professionalId: string) {
+  const professional = await prisma.professional.findFirst({
+    where: { id: professionalId, businessId },
+    select: { id: true },
+  });
+  if (!professional) throw new AppError(404, 'Profesional no encontrado en este negocio');
+}
+
 export type BookingSource = 'WEB' | 'TELEGRAM' | 'WHATSAPP' | 'VOICE' | 'WALK_IN';
 
 export interface CreateBookingData {
@@ -68,32 +104,33 @@ export async function createBooking(
     if (!client) throw new AppError(404, 'Cliente no encontrado en este negocio');
   }
 
-  const [hours, minutes] = data.startTime.split(':').map(Number);
-  const endMinutes = hours * 60 + minutes + service.duration;
-  const endTime = `${Math.floor(endMinutes / 60).toString().padStart(2, '0')}:${(endMinutes % 60).toString().padStart(2, '0')}`;
+  await assertProfessionalInBusiness(businessId, data.professionalId);
+
+  const endTime = computeEndTime(data.startTime, service.duration);
+  const dateKey = bookingDateKey(data.date);
 
   // Reserva atómica: advisory lock por (negocio, profesional, día) + re-chequeo
   // de solape dentro de la transacción, para no agendar dos turnos del mismo
   // profesional a la misma hora.
-  const lockKey = `booking:${businessId}:${data.professionalId}:${data.date}`;
+  const lockKey = bookingLockKey(businessId, data.professionalId, data.date);
   const booking = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
     const sameDay = await tx.booking.findMany({
       where: {
         businessId,
         professionalId: data.professionalId,
-        date: new Date(data.date),
+        date: new Date(dateKey),
         status: { notIn: ['CANCELLED'] },
       },
       select: { startTime: true, endTime: true },
     });
-    if (sameDay.some((b) => data.startTime < b.endTime && endTime > b.startTime)) {
+    if (sameDay.some((b) => overlaps({ startTime: data.startTime, endTime }, b))) {
       return null;
     }
 
     return tx.booking.create({
       data: {
-        date: new Date(data.date),
+        date: new Date(dateKey),
         startTime: data.startTime,
         endTime,
         totalPrice: service.price,

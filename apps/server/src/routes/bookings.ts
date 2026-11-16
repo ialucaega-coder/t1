@@ -4,13 +4,14 @@ import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
-import { createBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
+import { createBookingSchema, updateBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
 import { paginationSchema, toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { sendBookingCreated, sendBookingConfirmed, sendBookingCancelled } from '../services/notifications';
 import { syncBookingToCalcom } from '../services/calcom/sync';
 import { dispatchEvent } from '../services/workflows';
 import { createBooking } from '../services/bookings/create';
+import { updateBooking } from '../services/bookings/update';
 
 const router = Router();
 
@@ -134,6 +135,26 @@ router.get(
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="reservas.csv"');
     res.send('﻿' + header + rows);
+  })
+);
+
+// Edita / reprograma una reserva (fecha, hora, servicio, profesional, notas).
+// Valida pertenencia al negocio y conflictos de agenda igual que el alta (servicio
+// `updateBooking`, con el mismo advisory lock). No notifica al cliente: hoy
+// services/notifications no tiene una notificación de "reprogramada".
+router.patch(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN', 'PROFESSIONAL'),
+  validate(updateBookingSchema),
+  asyncHandler(async (req, res) => {
+    const booking = await updateBooking(
+      req.auth!.businessId,
+      String(req.params.id),
+      req.body as UpdateBookingInput
+    );
+    getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
+    res.json(booking);
   })
 );
 
