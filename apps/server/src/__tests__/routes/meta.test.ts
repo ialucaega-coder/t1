@@ -167,9 +167,27 @@ describe('routes/meta', () => {
 
         expect(mock(processMessage)).toHaveBeenCalledTimes(2);
         expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
-        expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toMatchObject({
-          conversation: { businessId: 'biz_1', contactPhone: 'U9' },
+        expect(mock(processMessage).mock.calls[0][3]).toMatchObject({ externalId: 'mid_retry' });
+        expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toEqual({
+          role: 'USER',
+          metadata: { path: ['externalId'], equals: 'mid_retry' },
+          conversation: { businessId: 'biz_1' },
         });
+      });
+
+      it('si falló pero solo quedó el USER (sin respuesta del bot) SÍ se reintenta', async () => {
+        mock(parseMetaEvents).mockReturnValue(ev('mid_only_user'));
+        mock(processMessage)
+          .mockRejectedValueOnce(new Error('falló generando la respuesta'))
+          .mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+        mock(prisma.message.findFirst)
+          .mockResolvedValueOnce({ conversationId: 'c1', createdAt: new Date() })
+          .mockResolvedValueOnce(null);
+
+        await fire();
+
+        expect(mock(processMessage)).toHaveBeenCalledTimes(2);
+        expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
       });
 
       it('un fallo al resolver el negocio (antes de todo) se reintenta', async () => {

@@ -626,8 +626,27 @@ describe('atención: /take, /close y reintentos (estados atómicos)', () => {
 
       expect(res.status).toBe(200);
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      // La reserva atómica parte de 'pending' (no de 'failed').
-      expect(m(prisma.message.updateMany).mock.calls[0][0].where.metadata).toEqual({ path: ['deliveryStatus'], equals: 'pending' });
+      // La reserva atómica parte de 'pending' (no de 'failed') y ata el claim al
+      // deliveryStartedAt y a los intentos que se leyeron.
+      const and = m(prisma.message.updateMany).mock.calls[0][0].where.AND;
+      expect(and).toContainEqual({ metadata: { path: ['deliveryStatus'], equals: 'pending' } });
+      expect(and).toContainEqual({ metadata: { path: ['deliveryAttempts'], equals: 1 } });
+      expect(and).toContainEqual({ metadata: { path: ['deliveryStartedAt'], equals: old } });
+    });
+
+    it('doble click sobre un pending colgado: el segundo request ve otro deliveryStartedAt/intentos, no reserva y NO reenvía', async () => {
+      const old = new Date(Date.now() - 120_000).toISOString();
+      m(prisma.message.findFirst).mockResolvedValue(humanMsg({ deliveryStatus: 'pending', deliveryStartedAt: old }));
+      // Ambos leyeron el mismo estado; solo el primero logra el claim.
+      m(prisma.message.updateMany).mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+      const [a, b] = await Promise.all([
+        post('/api/conversations/c1/reply/m1/retry'),
+        post('/api/conversations/c1/reply/m1/retry'),
+      ]);
+
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
     });
 
     it('un pending reciente (< 60 s) todavía se está enviando: 409 y no reenvía', async () => {

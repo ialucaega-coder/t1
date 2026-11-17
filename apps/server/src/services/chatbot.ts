@@ -102,6 +102,37 @@ export interface ChatbotResponse {
 export const BOT_PAUSED_NOTICE = 'Una persona del equipo está atendiendo tu consulta y te va a responder en breve.';
 
 /**
+ * La conversación se cerró (o desapareció) mientras se armaba la respuesta: se
+ * descarta todo. No se guarda mensaje BOT, no se avisa a nadie y los canales
+ * asíncronos no envían nada (`botPaused`, texto vacío).
+ */
+function discardedResponse(conversationId: string, intent: ChatIntent): ChatbotResponse & { conversationId: string } {
+  return { text: '', intent, actions: [], conversationId, botPaused: true };
+}
+
+/**
+ * Guarda el mensaje USER. Con `externalId` (sid/mid del canal) es idempotente: si
+ * ya existe uno con ese id en la conversación NO se vuelve a crear (`reused`).
+ */
+async function saveUserMessage(conversationId: string, text: string, externalId?: string) {
+  if (externalId) {
+    const existing = await prisma.message.findFirst({
+      where: { conversationId, role: 'USER', metadata: { path: ['externalId'], equals: externalId } },
+    });
+    if (existing) return { message: existing, reused: true };
+  }
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      role: 'USER',
+      text,
+      ...(externalId ? { metadata: { externalId } as Prisma.InputJsonObject } : {}),
+    },
+  });
+  return { message, reused: false };
+}
+
+/**
  * Respuesta cuando el bot está silenciado (un humano atiende o se espera a uno):
  * el mensaje del cliente ya se guardó y NO se genera nada. El aviso de cortesía
  * (para canales síncronos) sale como máximo una vez cada PAUSE_NOTICE_INTERVAL_MS
@@ -113,6 +144,14 @@ async function silencedResponse(
   metadata: unknown,
   intent: ChatIntent,
 ): Promise<ChatbotResponse & { conversationId: string }> {
+  // El mensaje del cliente entró aunque el bot no conteste: la conversación sube
+  // en el Inbox (`updatedAt`). Best-effort: no debe romper la respuesta.
+  try {
+    await prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
+  } catch (err) {
+    console.error('No se pudo actualizar la fecha de la conversación:', (err as Error).message);
+  }
+
   let text = '';
   try {
     if (isPauseNoticeDue(metadata, Date.now()) && (await stampPauseNotice(conversationId, businessId))) {
@@ -158,6 +197,13 @@ export interface ProcessMessageOptions {
    * en metadata.attribution al CREAR la conversación (origen de la charla).
    */
   attribution?: ConversationAttribution;
+  /**
+   * Id del mensaje entrante en el canal (MessageSid de Twilio, `mid` de Meta). Se
+   * guarda en `Message.metadata.externalId` del mensaje USER para que un reintento
+   * del job NO lo guarde dos veces y pueda continuar donde falló. Sin id (canales
+   * que no lo tienen) el comportamiento es el de siempre.
+   */
+  externalId?: string;
 }
 
 /**
@@ -399,17 +445,29 @@ export async function processMessage(
 
   const conversation = await getOrCreateConversation(businessId, channel, options);
 
-  const userMessage = await prisma.message.create({
-    data: { conversationId: conversation.id, role: 'USER', text: clientMessage },
-  });
+  const { message: userMessage, reused } = await saveUserMessage(conversation.id, clientMessage, options.externalId);
 
-  try {
-    const { getIO } = require('../lib/socket');
-    getIO()?.to(`business:${businessId}`).emit('conversation:new-message', {
-      conversationId: conversation.id,
-      message: userMessage,
+  // Reintento de un job que ya había guardado el mensaje: si el bot además ya
+  // respondió, se devuelve esa respuesta (no se vuelve a generar ni se duplica);
+  // si no, se continúa desde acá.
+  if (reused) {
+    const answered = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, role: 'BOT', createdAt: { gte: userMessage.createdAt } },
+      orderBy: { createdAt: 'asc' },
+      select: { text: true },
     });
-  } catch {}
+    if (answered) {
+      return { text: answered.text, intent, actions: [], conversationId: conversation.id };
+    }
+  } else {
+    try {
+      const { getIO } = require('../lib/socket');
+      getIO()?.to(`business:${businessId}`).emit('conversation:new-message', {
+        conversationId: conversation.id,
+        message: userMessage,
+      });
+    } catch {}
+  }
 
   // Dispara las automatizaciones de "mensaje entrante". Fire-and-forget: el modo
   // (simular/ejecutar) lo resuelve dispatchEvent según el ajuste del negocio y
@@ -464,7 +522,12 @@ export async function processMessage(
     // BOT -> ESPERANDO en una transacción. Si alguien la tomó justo antes (changed
     // = false) no se pisa ni se acusa recibo: el bot se queda callado.
     const handoff = await transitionAttention(conversation.id, businessId, { type: 'handoff', ack: true });
-    if (handoff.ok && !handoff.changed) {
+    if (!handoff.ok) {
+      // Cerrada (o ya no existe) mientras tanto: no se acusa recibo, no se avisa a
+      // los admins ni se guarda respuesta del bot.
+      return discardedResponse(conversation.id, intent);
+    }
+    if (!handoff.changed) {
       return silencedResponse(conversation.id, businessId, handoff.metadata, intent);
     }
     handedOffNow = true;
@@ -568,36 +631,58 @@ export async function processMessage(
   }
 
   // CARRERA bot vs humano: la IA tarda segundos. Si mientras tanto un humano tomó o
-  // respondió (o se derivó), la respuesta del bot se DESCARTA: no se guarda ni se
-  // envía. Se relee solo status+metadata (liviano) justo antes de persistir.
-  if (!handedOffNow) {
-    const fresh = await prisma.conversation.findFirst({
-      where: { id: conversation.id, businessId },
+  // respondió (o se derivó o se cerró), la respuesta del bot se DESCARTA: no se
+  // guarda ni se envía. La relectura del estado y el insert del mensaje BOT van en
+  // la MISMA transacción bajo `FOR UPDATE` de la conversación (el mismo lock de
+  // `transitionAttention`), así un take/reply/close concurrente no se cuela entre
+  // el chequeo y el insert. Un solo lock por transacción: no hay deadlock posible.
+  const persisted = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "conversations"
+      WHERE id = ${conversation.id} AND "businessId" = ${businessId}
+      FOR UPDATE`;
+    if (locked.length === 0) return { kind: 'closed' as const };
+    const cur = await tx.conversation.findUnique({
+      where: { id: conversation.id },
       select: { status: true, metadata: true },
     });
-    if (fresh && isBotSilenced(fresh)) {
-      return silencedResponse(conversation.id, businessId, fresh.metadata, intent);
+    if (cur?.status === 'CLOSED') return { kind: 'closed' as const };
+    // En el turno de derivación la conversación ya está en HANDOFF por nosotros.
+    if (!handedOffNow && cur && isBotSilenced(cur)) {
+      return { kind: 'silenced' as const, metadata: cur.metadata };
     }
+    const message = await tx.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: 'BOT',
+        text: responseText,
+        // Antes `responseTime` medía ~0 (el reloj arrancaba justo antes del insert);
+        // ahora refleja la latencia real de la generación de IA.
+        ...(aiLatencyMs !== undefined ? { responseTime: aiLatencyMs } : {}),
+        // Guardamos el consumo de tokens en el metadata del propio mensaje (que ya
+        // se persiste): cero escrituras extra y base para el dashboard de FinOps.
+        ...(usage ? { metadata: { usage } as unknown as Prisma.InputJsonObject } : {}),
+      },
+    });
+    return { kind: 'ok' as const, message };
+  });
+
+  if (persisted.kind === 'closed') return discardedResponse(conversation.id, intent);
+  if (persisted.kind === 'silenced') {
+    return silencedResponse(conversation.id, businessId, persisted.metadata, intent);
   }
+  const botMessage = persisted.message;
 
-  const botMessage = await prisma.message.create({
-    data: {
-      conversationId: conversation.id,
-      role: 'BOT',
-      text: responseText,
-      // Antes `responseTime` medía ~0 (el reloj arrancaba justo antes del insert);
-      // ahora refleja la latencia real de la generación de IA.
-      ...(aiLatencyMs !== undefined ? { responseTime: aiLatencyMs } : {}),
-      // Guardamos el consumo de tokens en el metadata del propio mensaje (que ya
-      // se persiste): cero escrituras extra y base para el dashboard de FinOps.
-      ...(usage ? { metadata: { usage } as unknown as Prisma.InputJsonObject } : {}),
-    },
-  });
-
-  await prisma.conversation.update({
-    where: { id: conversation.id },
-    data: { updatedAt: new Date() },
-  });
+  // La respuesta YA está guardada: si esta escritura (solo `updatedAt`) falla no
+  // debe tumbar el turno ni dejar al cliente sin respuesta.
+  try {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
+  } catch (err) {
+    console.error('No se pudo actualizar la fecha de la conversación:', (err as Error).message);
+  }
 
   try {
     const { getIO } = require('../lib/socket');

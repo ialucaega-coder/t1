@@ -187,10 +187,42 @@ describe('routes/whatsapp — webhook', () => {
       expect(res.status).toBe(200);
       expect(mock(processMessage)).toHaveBeenCalledTimes(2);
       expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
-      // El chequeo de "¿ya se guardó algo?" va scopeado por negocio y contacto.
-      expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toMatchObject({
-        conversation: { businessId: 'biz_1', contactPhone: '+549' },
+      // El mensaje se procesa con el MessageSid como externalId (USER idempotente).
+      expect(mock(processMessage).mock.calls[0][3]).toMatchObject({ externalId: 'SM_retry_1' });
+      // El chequeo de "¿ya respondió el bot?" busca por el externalId PROPIO, acotado al negocio.
+      expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toEqual({
+        role: 'USER',
+        metadata: { path: ['externalId'], equals: 'SM_retry_1' },
+        conversation: { businessId: 'biz_1' },
       });
+    });
+
+    it('si falló pero solo quedó el USER (sin respuesta del bot) SÍ se reintenta: el USER no se duplica', async () => {
+      mock(processMessage)
+        .mockRejectedValueOnce(new Error('falló generando la respuesta'))
+        .mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+      // 1ª: el USER con ese externalId existe; 2ª: no hay BOT posterior.
+      mock(prisma.message.findFirst)
+        .mockResolvedValueOnce({ conversationId: 'c1', createdAt: new Date() })
+        .mockResolvedValueOnce(null);
+
+      await send('SM_only_user');
+
+      expect(mock(processMessage)).toHaveBeenCalledTimes(2);
+      expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+    });
+
+    it('un mensaje de otro contacto en el mismo rato ya no bloquea el reintento (antes daba falso positivo)', async () => {
+      mock(processMessage)
+        .mockRejectedValueOnce(new Error('db caída un instante'))
+        .mockResolvedValue({ text: 'respuesta', conversationId: 'c1', intent: 'FAQ', actions: [] });
+      // No hay USER con este externalId (aunque haya mensajes de otros contactos recientes).
+      mock(prisma.message.findFirst).mockResolvedValue(null);
+
+      await send('SM_false_positive');
+
+      expect(mock(processMessage)).toHaveBeenCalledTimes(2);
+      expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
     });
 
     it('un fallo de lectura de la conversación (previo a procesar) también se reintenta', async () => {

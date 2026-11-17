@@ -505,8 +505,20 @@ router.post(
     };
 
     // Reserva atómica: solo UNA llamada concurrente logra tomar el reintento.
+    // La condición incluye el `deliveryStartedAt` y los `deliveryAttempts` que se
+    // leyeron: el primer request los cambia al reservar, así un doble click (que
+    // leyó el mismo estado) NO puede reservar de nuevo ni enviar dos veces, ni
+    // siquiera sobre un `pending` colgado.
     const claimed = await prisma.message.updateMany({
-      where: { id: message.id, conversationId: conversation.id, metadata: { path: ['deliveryStatus'], equals: retryFrom } },
+      where: {
+        id: message.id,
+        conversationId: conversation.id,
+        AND: [
+          { metadata: { path: ['deliveryStatus'], equals: retryFrom } },
+          { metadata: { path: ['deliveryAttempts'], equals: attemptsSoFar } },
+          ...(prev.deliveryStartedAt ? [{ metadata: { path: ['deliveryStartedAt'], equals: prev.deliveryStartedAt } }] : []),
+        ],
+      },
       data: { metadata: baseMeta as unknown as Prisma.InputJsonObject },
     });
     if (claimed.count === 0) {

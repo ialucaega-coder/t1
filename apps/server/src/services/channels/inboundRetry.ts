@@ -11,13 +11,17 @@
  *
  *   1. Un fallo ANTES de procesar el mensaje (leer la conversación, adjuntos, el
  *      negocio) → se RELANZA: la cola reintenta con backoff exponencial.
- *   2. Un fallo DENTRO de `processMessage` (guardar el mensaje USER, generar y
- *      guardar la respuesta) → se reintenta SOLO si no quedó nada persistido para
- *      ese contacto desde que arrancó el trabajo (`wasAnythingPersisted`). Si ya
- *      se guardó algo (el USER o la respuesta) NO se reintenta: se duplicaría el
- *      mensaje del cliente y el bot volvería a generar (costo de IA).
+ *   2. Un fallo DENTRO de `processMessage` → se reintenta salvo que el bot YA haya
+ *      respondido (`wasAnythingPersisted`):
+ *        - Con `externalId` (MessageSid / mid): el mensaje USER se guarda con ese id
+ *          en `Message.metadata.externalId` y `processMessage` es idempotente sobre
+ *          él, así que reintentar cuando solo quedó el USER es SEGURO (no se
+ *          duplica; el reintento continúa y genera la respuesta). Solo NO se
+ *          reintenta si ya existe una respuesta BOT posterior a ese USER.
+ *        - Sin `externalId` (canal que no lo trae): criterio conservador previo, no
+ *          se reintenta si hay cualquier mensaje del contacto desde que arrancó.
  *      Si no se puede averiguar (la DB sigue caída), se reintenta: el peor caso es
- *      una fila USER repetida en el historial, nunca un mensaje repetido al cliente
+ *      una fila repetida en el historial, nunca un mensaje repetido al cliente
  *      (nada salió todavía).
  *   3. Un fallo DESPUÉS de que `processMessage` devolvió (el envío al proveedor) →
  *      NO se reintenta, solo se loguea: la respuesta ya está guardada y visible en
@@ -26,11 +30,6 @@
  * Dedupe: el reintento de BullMQ conserva el `jobId` (messageSid / mid), y encolar
  * dos veces el mismo id lo ejecuta una sola vez; el reintento del proveedor
  * (Twilio/Meta) del mismo mensaje no se procesa dos veces.
- *
- * LIMITACIÓN conocida: el mensaje USER lo guarda `processMessage` y hoy no recibe
- * el id de entrada, así que no queda marcado con el messageSid/mid; la protección
- * contra doble guardado es el chequeo de (2) + el dedupe por jobId. Marcar
- * `Message.metadata.externalId` requiere una opción nueva en `processMessage`.
  */
 import { prisma } from '../../lib/prisma';
 
@@ -41,14 +40,35 @@ export const INBOUND_RETRY = { attempts: 3, backoffMs: 2000 };
 const CLOCK_SKEW_MS = 5000;
 
 /**
- * ¿Se guardó algún mensaje para este contacto del negocio desde `sinceMs`? Se
- * scopea por `businessId` y por `contactPhone` (teléfono de WhatsApp / id de Meta).
+ * ¿Ya quedó una respuesta del bot para este mensaje entrante (no conviene
+ * reintentar)? Con `externalId`: busca el USER con ese id en una conversación DEL
+ * NEGOCIO y mira si hay un BOT posterior; sin USER guardado o sin BOT todavía es
+ * seguro reintentar (el USER no se duplica). Sin `externalId` cae al criterio
+ * conservador: cualquier mensaje del contacto desde `sinceMs`.
  */
 export async function wasAnythingPersisted(
   businessId: string,
   contactPhone: string,
   sinceMs: number,
+  externalId?: string,
 ): Promise<boolean> {
+  if (externalId) {
+    const user = await prisma.message.findFirst({
+      where: {
+        role: 'USER',
+        metadata: { path: ['externalId'], equals: externalId },
+        conversation: { businessId },
+      },
+      select: { conversationId: true, createdAt: true },
+    });
+    if (!user) return false;
+    const answered = await prisma.message.findFirst({
+      where: { conversationId: user.conversationId, role: 'BOT', createdAt: { gte: user.createdAt } },
+      select: { id: true },
+    });
+    return Boolean(answered);
+  }
+
   const row = await prisma.message.findFirst({
     where: {
       createdAt: { gte: new Date(sinceMs - CLOCK_SKEW_MS) },
@@ -73,7 +93,7 @@ export interface InboundPhase {
  */
 export async function runInbound(
   label: string,
-  ctx: { businessId: string; contact: string },
+  ctx: { businessId: string; contact: string; externalId?: string },
   work: (phase: InboundPhase) => Promise<void>,
 ): Promise<void> {
   const startedAt = Date.now();
@@ -95,12 +115,12 @@ export async function runInbound(
     // 1) y 2) Falló antes de terminar de procesar. ¿Quedó algo guardado?
     let persisted = false;
     try {
-      persisted = await wasAnythingPersisted(ctx.businessId, ctx.contact, startedAt);
+      persisted = await wasAnythingPersisted(ctx.businessId, ctx.contact, startedAt, ctx.externalId);
     } catch {
       persisted = false; // no se pudo averiguar: se prefiere reintentar a perder el mensaje
     }
     if (persisted) {
-      console.error(`${label}: falló con mensajes ya guardados (no se reintenta para no duplicar):`, error);
+      console.error(`${label}: falló con la respuesta ya guardada (no se reintenta para no duplicar):`, error);
       return;
     }
     console.error(`${label}: falló antes de guardar nada, se reintenta:`, (error as Error)?.message);

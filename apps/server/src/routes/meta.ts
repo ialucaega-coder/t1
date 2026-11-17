@@ -86,7 +86,7 @@ async function processMetaInbound(msg: MetaIncomingMessage): Promise<void> {
 
   const { businessId, botId, pageAccessToken } = target;
 
-  await runInbound('Error procesando mensaje de Meta', { businessId, contact: msg.senderId }, async (phase) => {
+  await runInbound('Error procesando mensaje de Meta', { businessId, contact: msg.senderId, externalId: msg.mid }, async (phase) => {
     // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
     const hasAttachments = msg.images.length > 0 || msg.audios.length > 0;
     const oidoYVista = hasAttachments
@@ -136,6 +136,7 @@ async function processMetaInbound(msg: MetaIncomingMessage): Promise<void> {
       // reabrir la misma conversación y responderle.
       contactPhone: msg.senderId,
       ...(images.length ? { images } : {}),
+      ...(msg.mid ? { externalId: msg.mid } : {}),
     });
 
     // A partir de acá la respuesta ya está guardada: un fallo del envío NO se reintenta.

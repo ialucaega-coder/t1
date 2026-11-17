@@ -65,6 +65,63 @@ describe('wasAnythingPersisted', () => {
   });
 });
 
+describe('wasAnythingPersisted con externalId propio', () => {
+  it('sin USER guardado con ese id: false (se puede reintentar)', async () => {
+    mock(prisma.message.findFirst).mockResolvedValue(null);
+
+    expect(await wasAnythingPersisted('biz_1', '+549', Date.now(), 'SM_1')).toBe(false);
+    expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toEqual({
+      role: 'USER',
+      metadata: { path: ['externalId'], equals: 'SM_1' },
+      conversation: { businessId: 'biz_1' },
+    });
+  });
+
+  it('USER guardado pero sin respuesta del bot: false (el reintento continúa sin duplicar el USER)', async () => {
+    mock(prisma.message.findFirst)
+      .mockResolvedValueOnce({ conversationId: 'c1', createdAt: new Date('2026-01-01T10:00:00Z') })
+      .mockResolvedValueOnce(null);
+
+    expect(await wasAnythingPersisted('biz_1', '+549', Date.now(), 'SM_1')).toBe(false);
+    expect(mock(prisma.message.findFirst).mock.calls[1][0].where).toMatchObject({ conversationId: 'c1', role: 'BOT' });
+  });
+
+  it('USER y respuesta del bot posterior: true (no se reintenta)', async () => {
+    mock(prisma.message.findFirst)
+      .mockResolvedValueOnce({ conversationId: 'c1', createdAt: new Date('2026-01-01T10:00:00Z') })
+      .mockResolvedValueOnce({ id: 'm_bot' });
+
+    expect(await wasAnythingPersisted('biz_1', '+549', Date.now(), 'SM_1')).toBe(true);
+  });
+
+  it('mensajes de OTROS contactos no cuentan (ya no hay falso positivo por "cualquier mensaje reciente")', async () => {
+    mock(prisma.message.findFirst).mockResolvedValue(null);
+
+    expect(await wasAnythingPersisted('biz_1', '+549', Date.now(), 'SM_1')).toBe(false);
+    expect(mock(prisma.message.findFirst).mock.calls[0][0].where.conversation).toEqual({ businessId: 'biz_1' });
+  });
+
+  it('runInbound usa el externalId: con solo el USER guardado relanza para reintentar', async () => {
+    mock(prisma.message.findFirst)
+      .mockResolvedValueOnce({ conversationId: 'c1', createdAt: new Date() })
+      .mockResolvedValueOnce(null);
+
+    await expect(
+      runInbound('x', { ...ctx, externalId: 'SM_1' }, async () => { throw new Error('falló la IA'); }),
+    ).rejects.toThrow('falló la IA');
+  });
+
+  it('runInbound con el bot ya respondido no relanza', async () => {
+    mock(prisma.message.findFirst)
+      .mockResolvedValueOnce({ conversationId: 'c1', createdAt: new Date() })
+      .mockResolvedValueOnce({ id: 'm_bot' });
+
+    await expect(
+      runInbound('x', { ...ctx, externalId: 'SM_1' }, async () => { throw new Error('falló al enviar el reintento'); }),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('configuración de reintentos', () => {
   it('hay más de un intento con backoff', () => {
     expect(INBOUND_RETRY.attempts).toBeGreaterThan(1);

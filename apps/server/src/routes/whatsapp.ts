@@ -43,6 +43,8 @@ interface WhatsAppInboundJob {
   images: ReturnType<typeof parseTwilioImages>;
   audios: ReturnType<typeof parseTwilioAudio>;
   attribution?: NonNullable<ReturnType<typeof parseWhatsAppReferral>>;
+  /** MessageSid de Twilio: marca el mensaje USER guardado para que un reintento no lo duplique. */
+  messageSid?: string;
 }
 
 /**
@@ -55,8 +57,8 @@ interface WhatsAppInboundJob {
  * El dedupe por MessageSid evita procesar dos veces el mismo mensaje.
  */
 async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
-  const { businessId, botId, from, to, profileName, rawBody, body, images, audios, attribution } = job;
-  await runInbound('WhatsApp webhook error', { businessId, contact: from }, async (phase) => {
+  const { businessId, botId, from, to, profileName, rawBody, body, images, audios, attribution, messageSid } = job;
+  await runInbound('WhatsApp webhook error', { businessId, contact: from, externalId: messageSid }, async (phase) => {
     // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
     const hasAttachments = images.length > 0 || audios.length > 0;
     const oidoYVista = hasAttachments
@@ -107,6 +109,7 @@ async function processWhatsAppInbound(job: WhatsAppInboundJob): Promise<void> {
       contactPhone: from,
       ...(visionImages.length ? { images: visionImages } : {}),
       ...(attribution ? { attribution } : {}),
+      ...(messageSid ? { externalId: messageSid } : {}),
     });
 
     // A partir de acá la respuesta ya está guardada: un fallo del envío NO se reintenta.
@@ -207,6 +210,7 @@ router.post(
         // Atribución Click-to-WhatsApp: se parsea acá (necesita el body crudo de
         // Twilio) y viaja ya normalizada.
         attribution: parseWhatsAppReferral(req.body) ?? undefined,
+        messageSid: messageSid || undefined,
       },
       { ...(messageSid ? { jobId: `wa_${messageSid}` } : {}), ...INBOUND_RETRY },
     );

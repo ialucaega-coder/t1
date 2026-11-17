@@ -14,7 +14,7 @@ vi.mock('../../lib/prisma', () => ({
     $queryRaw: vi.fn(),
     conversation: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     bot: { findFirst: vi.fn(), create: vi.fn() },
-    message: { create: vi.fn(), findMany: vi.fn() },
+    message: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
     service: { findMany: vi.fn() },
     product: { findMany: vi.fn() },
     skill: { findMany: vi.fn() },
@@ -50,6 +50,14 @@ import { dispatchEvent } from '../../services/workflows';
 import { processMessage, BOT_PAUSED_NOTICE, type ChatChannel } from '../../services/chatbot';
 
 const mock = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+// Por defecto la conversación está OPEN y sin pausa bajo el lock: el mensaje BOT se
+// guarda dentro de una transacción con FOR UPDATE (la tx es el propio mock).
+beforeEach(() => {
+  mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+  mock(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+  mock(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: null });
+});
 
 /** Devuelve el `data` con el que se llamó a prisma.conversation.create. */
 function createData(): Record<string, unknown> {
@@ -287,6 +295,14 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
 
   /** Lo que la transacción "ve" bajo el lock (findUnique) y devuelve al escribir. */
   const dbRow = (conv: { status: string; metadata: unknown }) => mock(prisma.conversation.findUnique).mockResolvedValue({ status: conv.status, metadata: conv.metadata });
+  /** Filas que ve la transacción en lecturas sucesivas (la última se repite). */
+  const dbRows = (...rows: { status: string; metadata: unknown }[]) => {
+    const fn = mock(prisma.conversation.findUnique);
+    fn.mockReset();
+    rows.slice(0, -1).forEach((r) => fn.mockResolvedValueOnce({ status: r.status, metadata: r.metadata }));
+    const last = rows[rows.length - 1];
+    fn.mockResolvedValue({ status: last.status, metadata: last.metadata });
+  };
   const writes = () => mock(prisma.conversation.update).mock.calls.map((c) => c[0].data);
 
   beforeEach(() => {
@@ -342,7 +358,8 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
 
       expect(second.botPaused).toBe(true);
       expect(second.text).toBe('');
-      expect(prisma.conversation.update).not.toHaveBeenCalled();
+      // No se vuelve a marcar el aviso (solo sube la fecha de la conversación).
+      expect(writes().every((d) => d.metadata === undefined)).toBe(true);
       // Los dos mensajes del cliente se guardaron igual.
       expect(mock(prisma.message.create).mock.calls.filter((c) => c[0].data.role === 'USER')).toHaveLength(2);
     });
@@ -400,7 +417,8 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
       const conv = humanConv({ lastHumanAt: ago(31 * MIN), pausedAt: ago(40 * MIN) });
       // 1ª lectura: vencida. La relectura previa a persistir ya ve el estado liberado.
       mock(prisma.conversation.findFirst).mockResolvedValueOnce(conv).mockResolvedValue(botConv);
-      dbRow(conv);
+      // 1ª lectura bajo lock (expire): vencida; 2ª (persistir la respuesta): ya liberada.
+      dbRows(conv, { status: 'OPEN', metadata: {} });
 
       const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
 
@@ -426,7 +444,7 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
     it('ESPERANDO por más de 15 min sin que nadie tome: pasa a OPEN (bot) y responde', async () => {
       const conv = waitingConv(ago(16 * MIN));
       mock(prisma.conversation.findFirst).mockResolvedValueOnce(conv).mockResolvedValue(botConv);
-      dbRow(conv);
+      dbRows(conv, { status: 'OPEN', metadata: {} });
 
       const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
 
@@ -449,10 +467,8 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
 
   describe('carrera: el humano entra mientras la IA genera', () => {
     it('si se pausó a mitad de la generación, la respuesta del bot se DESCARTA (no se guarda)', async () => {
-      // 1ª lectura (getOrCreate): bot activo. Relectura justo antes de persistir: ya hay un humano.
-      mock(prisma.conversation.findFirst)
-        .mockResolvedValueOnce(botConv)
-        .mockResolvedValueOnce(humanConv());
+      // Lectura inicial: bot activo. Bajo el lock, justo antes de insertar: ya hay un humano.
+      mock(prisma.conversation.findFirst).mockResolvedValue(botConv);
       dbRow(humanConv());
 
       const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
@@ -461,16 +477,22 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
       expect(res.botPaused).toBe(true);
       // Solo el mensaje del cliente; la respuesta del bot no se guardó.
       expect(mock(prisma.message.create).mock.calls.every((c) => c[0].data.role === 'USER')).toBe(true);
-      // Y la relectura fue liviana y scopeada por negocio.
-      const reread = mock(prisma.conversation.findFirst).mock.calls[1][0];
-      expect(reread.where).toEqual({ id: 'c1', businessId: 'biz_1' });
-      expect(reread.select).toEqual({ status: true, metadata: true });
+    });
+
+    it('el chequeo y el insert del mensaje BOT van bajo FOR UPDATE de ESA conversación y negocio, en una transacción', async () => {
+      mock(prisma.conversation.findFirst).mockResolvedValue(botConv);
+
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      // $queryRaw es un template tag: (strings, conversationId, businessId)
+      expect(mock(prisma.$queryRaw).mock.calls[0].slice(1)).toEqual(['c1', 'biz_1']);
+      expect(String(mock(prisma.$queryRaw).mock.calls[0][0].join(' '))).toMatch(/FOR UPDATE/);
+      expect(mock(prisma.message.create).mock.calls.some((c) => c[0].data.role === 'BOT')).toBe(true);
     });
 
     it('también si en el medio la conversación pasó a HANDOFF', async () => {
-      mock(prisma.conversation.findFirst)
-        .mockResolvedValueOnce(botConv)
-        .mockResolvedValueOnce(waitingConv());
+      mock(prisma.conversation.findFirst).mockResolvedValue(botConv);
       dbRow(waitingConv());
 
       const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
@@ -595,6 +617,145 @@ describe('services/chatbot — bot silenciado (humano atendiendo / esperando age
 
       expect(mock(prisma.conversation.findFirst).mock.calls[0][0].where).toMatchObject({ businessId: 'biz_1' });
       expect(mock(prisma.conversation.create).mock.calls[0][0].data).toMatchObject({ businessId: 'biz_1' });
+    });
+  });
+});
+
+describe('services/chatbot — robustez entre guardar el USER y el BOT', () => {
+  const botConv = { id: 'c1', businessId: 'biz_1', status: 'OPEN', metadata: null };
+  const writes = () => mock(prisma.conversation.update).mock.calls.map((c) => c[0].data);
+  const botMessages = () => mock(prisma.message.create).mock.calls.filter((c) => c[0].data.role === 'BOT');
+  const userCreates = () => mock(prisma.message.create).mock.calls.filter((c) => c[0].data.role === 'USER');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    mock(prisma.conversation.findFirst).mockResolvedValue(botConv);
+    mock(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: null });
+    mock(prisma.conversation.update).mockImplementation(async ({ data }: { data: { status?: string; metadata?: unknown } }) => ({ status: data.status ?? 'OPEN', metadata: data.metadata }));
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+    mock(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: `m_${data.role}`, createdAt: new Date('2026-01-01T10:00:00Z'), ...data }));
+    mock(prisma.message.findFirst).mockResolvedValue(null);
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+    mock(prisma.user.findMany).mockResolvedValue([{ id: 'adm_1' }]);
+    mock(prisma.notification.create).mockResolvedValue({});
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse: vi.fn().mockResolvedValue('respuesta del bot') });
+  });
+
+  describe('USER idempotente por externalId', () => {
+    it('guarda el mensaje USER con el id de entrada en metadata.externalId', async () => {
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1', externalId: 'SM_1' });
+
+      expect(userCreates()).toHaveLength(1);
+      expect(userCreates()[0][0].data).toMatchObject({ text: 'hola, ¿tienen novedades?', metadata: { externalId: 'SM_1' } });
+    });
+
+    it('reintento: si el USER con ese externalId ya existe NO se vuelve a crear y se continúa (responde)', async () => {
+      const existing = { id: 'm_old', role: 'USER', createdAt: new Date('2026-01-01T10:00:00Z') };
+      // 1ª búsqueda (USER por externalId): existe. 2ª (BOT posterior): todavía no hay respuesta.
+      mock(prisma.message.findFirst).mockResolvedValueOnce(existing).mockResolvedValue(null);
+
+      const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1', externalId: 'SM_1' });
+
+      expect(mock(prisma.message.findFirst).mock.calls[0][0].where).toEqual({
+        conversationId: 'c1', role: 'USER', metadata: { path: ['externalId'], equals: 'SM_1' },
+      });
+      expect(userCreates()).toHaveLength(0);
+      expect(res.text).toBe('respuesta del bot');
+      expect(botMessages()).toHaveLength(1);
+    });
+
+    it('reintento con el bot ya respondido: devuelve la respuesta guardada, sin volver a llamar a la IA ni duplicar', async () => {
+      const existing = { id: 'm_old', role: 'USER', createdAt: new Date('2026-01-01T10:00:00Z') };
+      mock(prisma.message.findFirst).mockResolvedValueOnce(existing).mockResolvedValueOnce({ text: 'ya respondí' });
+
+      const res = await processMessage('biz_1', 'hola', 'WHATSAPP', { conversationId: 'c1', externalId: 'SM_1' });
+
+      expect(res.text).toBe('ya respondí');
+      expect(userCreates()).toHaveLength(0);
+      expect(botMessages()).toHaveLength(0);
+      expect(getAIProviderForBusiness).not.toHaveBeenCalled();
+    });
+
+    it('sin externalId (canal que no lo trae) se comporta como siempre: crea el USER sin metadata y no busca duplicados', async () => {
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { conversationId: 'c1' });
+
+      expect(userCreates()).toHaveLength(1);
+      expect(userCreates()[0][0].data.metadata).toBeUndefined();
+      expect(prisma.message.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  it('si falla subir updatedAt DESPUÉS de guardar el BOT, el turno igual responde (no deja al cliente sin respuesta)', async () => {
+    mock(prisma.conversation.update).mockRejectedValue(new Error('db caída'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
+
+    expect(res.text).toBe('respuesta del bot');
+    expect(botMessages()).toHaveLength(1);
+    err.mockRestore();
+  });
+
+  describe('un mensaje USER sube la conversación en el Inbox aunque el bot esté callado', () => {
+    it('HUMANO: se actualiza updatedAt', async () => {
+      const conv = { id: 'c1', businessId: 'biz_1', status: 'OPEN', metadata: { botPaused: true, pausedBy: 'u1', lastHumanAt: new Date().toISOString(), pauseNoticeAt: new Date().toISOString() } };
+      mock(prisma.conversation.findFirst).mockResolvedValue(conv);
+
+      const res = await processMessage('biz_1', 'hola?', 'WHATSAPP', { conversationId: 'c1' });
+
+      expect(res.botPaused).toBe(true);
+      const bump = writes().find((d) => d.updatedAt instanceof Date);
+      expect(bump).toBeTruthy();
+      expect(botMessages()).toHaveLength(0);
+    });
+
+    it('ESPERANDO (HANDOFF): también', async () => {
+      const conv = { id: 'c1', businessId: 'biz_1', status: 'HANDOFF', metadata: { waitingSince: new Date().toISOString(), pauseNoticeAt: new Date().toISOString() } };
+      mock(prisma.conversation.findFirst).mockResolvedValue(conv);
+
+      await processMessage('biz_1', 'hola?', 'WHATSAPP', { conversationId: 'c1' });
+
+      expect(writes().some((d) => d.updatedAt instanceof Date)).toBe(true);
+    });
+  });
+
+  describe('conversación CERRADA en el medio', () => {
+    it('derivación: si se cerró, no acusa recibo, no avisa a los admins y no guarda BOT', async () => {
+      // Lo que ve la transición de handoff bajo el lock: ya CLOSED.
+      mock(prisma.conversation.findUnique).mockResolvedValue({ status: 'CLOSED', metadata: null });
+
+      const res = await processMessage('biz_1', 'quiero hablar con una persona', 'WHATSAPP', { conversationId: 'c1' });
+
+      expect(res.botPaused).toBe(true);
+      expect(res.text).toBe('');
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+      expect(botMessages()).toHaveLength(0);
+    });
+
+    it('si se cerró mientras la IA generaba, la respuesta se descarta (no se guarda ni se envía)', async () => {
+      mock(prisma.conversation.findUnique).mockResolvedValue({ status: 'CLOSED', metadata: null });
+
+      const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
+
+      expect(getAIProviderForBusiness).toHaveBeenCalled();
+      expect(res.botPaused).toBe(true);
+      expect(res.text).toBe('');
+      expect(botMessages()).toHaveLength(0);
+    });
+
+    it('si la conversación ya no existe para el negocio (lock sin filas) tampoco se guarda el BOT', async () => {
+      mock(prisma.$queryRaw).mockResolvedValue([]);
+
+      const res = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { conversationId: 'c1' });
+
+      expect(res.botPaused).toBe(true);
+      expect(botMessages()).toHaveLength(0);
     });
   });
 });
