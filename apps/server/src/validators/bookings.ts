@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { patchSchema } from './patch';
+import { HH_MM_REGEX } from '../services/bookings/time';
 
 const bookingStatusEnum = z.enum([
   'PENDING',
@@ -21,7 +22,7 @@ const bookingDate = z
 /** Creación de un turno/reserva. */
 export const createBookingSchema = z.object({
   date: bookingDate,
-  startTime: z.string().regex(/^\d{2}:\d{2}$/, 'Formato de hora inválido (HH:mm)'),
+  startTime: z.string().regex(HH_MM_REGEX, 'Formato de hora inválido (HH:mm, de 00:00 a 23:59)'),
   serviceId: z.string().min(1),
   professionalId: z.string().min(1),
   clientId: z.string().optional(),
@@ -37,7 +38,7 @@ export const createBookingSchema = z.object({
 export const updateBookingSchema = patchSchema(
   z.object({
     date: bookingDate,
-    startTime: z.string().regex(/^\d{2}:\d{2}$/, 'Formato de hora inválido (HH:mm)'),
+    startTime: z.string().regex(HH_MM_REGEX, 'Formato de hora inválido (HH:mm, de 00:00 a 23:59)'),
     serviceId: z.string().min(1),
     professionalId: z.string().min(1),
     notes: z.string().max(2000),

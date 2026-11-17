@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { getIO } from '../lib/socket';
 import { createBookingSchema, updateBookingSchema, updateBookingStatusSchema, CreateBookingInput, UpdateBookingInput, UpdateBookingStatusInput } from '../validators/bookings';
@@ -12,6 +12,8 @@ import { syncBookingToCalcom } from '../services/calcom/sync';
 import { dispatchEvent } from '../services/workflows';
 import { createBooking } from '../services/bookings/create';
 import { updateBooking } from '../services/bookings/update';
+import { FINAL_BOOKING_STATUSES, bookingDateKey, bookingInstant } from '../services/bookings/time';
+import { csvCell } from '../services/bookings/csv';
 
 const router = Router();
 
@@ -21,7 +23,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const { date, status, professionalId, page, pageSize } = req.query;
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
-    if (date) where.date = new Date(date as string);
+    // Fecha inválida => 400 (antes pasaba un Invalid Date a Prisma y daba 500).
+    if (date) where.date = new Date(bookingDateKey(String(date)));
     if (status) where.status = status;
     if (professionalId) where.professionalId = professionalId;
 
@@ -96,7 +99,7 @@ router.post(
     // Sincroniza con Cal.com si el negocio lo tiene conectado. Best-effort:
     // no bloquea ni afecta la respuesta si Cal.com no está configurado o falla.
     void syncBookingToCalcom(req.auth!.businessId, {
-      start: new Date(`${data.date}T${data.startTime}:00`),
+      start: bookingInstant(data.date, data.startTime),
       clientName: booking.client?.name,
       clientEmail: booking.client?.email,
     });
@@ -121,11 +124,12 @@ router.get(
       [
         b.date.toISOString().split('T')[0],
         b.startTime,
-        `"${(b.service?.name || '').replace(/"/g, '""')}"`,
-        `"${(b.professional?.user?.name || '').replace(/"/g, '""')}"`,
-        `"${(b.client?.name || '').replace(/"/g, '""')}"`,
-        b.client?.email || '',
-        b.client?.phone || '',
+        // Celdas de texto neutralizadas contra inyección de fórmulas (=, +, -, @).
+        csvCell(b.service?.name),
+        csvCell(b.professional?.user?.name),
+        csvCell(b.client?.name),
+        csvCell(b.client?.email),
+        csvCell(b.client?.phone),
         b.status,
         b.service?.price?.toString() || '0',
       ].join(',')
@@ -168,14 +172,32 @@ router.patch(
   validate(updateBookingStatusSchema),
   asyncHandler(async (req, res) => {
     const { status } = req.body as UpdateBookingStatusInput;
-    const booking = await prisma.booking.update({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
-      data: { status },
-      include: {
-        client: { select: { name: true } },
-        service: { select: { name: true } },
-      },
-    });
+    const id = String(req.params.id);
+    const businessId = req.auth!.businessId;
+    // Una reserva en estado final (cancelada, completada, ausente) NO se reabre: el
+    // horario pudo haber sido tomado por otra reserva y quedarían dos turnos
+    // superpuestos sin lock ni chequeo. La condición va en el propio UPDATE (atómica);
+    // el resto de las transiciones queda como estaba.
+    let booking;
+    try {
+      booking = await prisma.booking.update({
+        where: { id, businessId, status: { notIn: FINAL_BOOKING_STATUSES } },
+        data: { status },
+        include: {
+          client: { select: { name: true } },
+          service: { select: { name: true } },
+        },
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'P2025') throw err;
+      // No hubo fila: o no existe en el negocio (404) o estaba en estado final (409).
+      const current = await prisma.booking.findFirst({ where: { id, businessId }, select: { status: true } });
+      if (!current) throw new AppError(404, 'Reserva no encontrada');
+      throw new AppError(
+        409,
+        'No se puede cambiar el estado de una reserva cancelada, completada o ausente. Creá una nueva reserva.'
+      );
+    }
     getIO()?.to(`business:${req.auth!.businessId}`).emit('booking:updated', { booking });
 
     // Notifica al cliente por su mejor canal (WhatsApp/email) vía la cola de avisos.

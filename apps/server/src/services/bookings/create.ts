@@ -21,18 +21,10 @@
  */
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../middleware/errorHandler';
+import { bookingDateKey, computeEndTime, overlaps } from './time';
 
-/** Día de la reserva normalizado a YYYY-MM-DD (UTC): base de la fecha guardada y de la clave del lock. */
-export function bookingDateKey(date: string): string {
-  return new Date(date).toISOString().slice(0, 10);
-}
-
-/** Hora de fin (HH:mm) = inicio + duración del servicio. */
-export function computeEndTime(startTime: string, durationMinutes: number): string {
-  const [hours, minutes] = startTime.split(':').map(Number);
-  const endMinutes = hours * 60 + minutes + durationMinutes;
-  return `${Math.floor(endMinutes / 60).toString().padStart(2, '0')}:${(endMinutes % 60).toString().padStart(2, '0')}`;
-}
+// Los helpers de horario viven en ./time; se reexportan para no romper a los llamadores.
+export { bookingDateKey, computeEndTime, overlaps };
 
 /**
  * Lock de agenda por (negocio, profesional, día). La clave se arma con la fecha
@@ -42,11 +34,6 @@ export function computeEndTime(startTime: string, durationMinutes: number): stri
  */
 export function bookingLockKey(businessId: string, professionalId: string, date: string): string {
   return `booking:${businessId}:${professionalId}:${bookingDateKey(date)}`;
-}
-
-/** Dos turnos del mismo día se solapan si cada uno empieza antes de que termine el otro. */
-export function overlaps(a: { startTime: string; endTime: string }, b: { startTime: string; endTime: string }): boolean {
-  return a.startTime < b.endTime && a.endTime > b.startTime;
 }
 
 /** El profesional tiene que ser del negocio (multi-tenant). Lanza AppError(404) si no. */
@@ -90,7 +77,9 @@ export async function createBooking(
   const service = await prisma.service.findFirst({
     where: { id: data.serviceId, businessId },
   });
-  if (!service) throw new AppError(404, 'Service not found');
+  if (!service || service.deletedAt) throw new AppError(404, 'Service not found');
+  // No se agenda contra un servicio desactivado (el borrado lógico ya cuenta como inexistente).
+  if (service.isActive === false) throw new AppError(409, 'El servicio no está activo: no se pueden crear reservas para él.');
 
   const effectiveClientId = data.clientId || actingUserId;
   if (!effectiveClientId) throw new AppError(400, 'Falta el cliente de la reserva');

@@ -9,24 +9,19 @@
  *    un alta simultáneos sobre la misma agenda se serializan (sin doble reserva).
  *    El solape excluye a la propia reserva (mover un turno 15 min no choca consigo
  *    mismo).
+ *  - el estado se vuelve a leer DENTRO del lock: si la reserva se canceló entre la
+ *    primera lectura y la transacción, la edición no se aplica (409).
  *
- * Si cambia el servicio, el precio total se actualiza al del nuevo servicio. No
- * tiene efectos colaterales (socket/notificaciones): los maneja la ruta.
+ * Una edición solo de notas no toca la agenda: no recalcula la hora de fin ni
+ * chequea conflictos. Si cambia el servicio, el precio total pasa al del nuevo
+ * servicio. No tiene efectos colaterales (socket/notificaciones): los maneja la ruta.
  * Lanza AppError 404 (reserva/servicio/profesional inexistente en el negocio),
- * 409 (reserva en estado final o horario ocupado) o 400 (sin cambios).
+ * 409 (reserva en estado final, servicio inactivo u horario ocupado) o 400 (sin cambios).
  */
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../middleware/errorHandler';
-import {
-  assertProfessionalInBusiness,
-  bookingDateKey,
-  bookingLockKey,
-  computeEndTime,
-  overlaps,
-} from './create';
-
-/** Estados finales: la reserva ya no se puede mover ni editar. */
-const FINAL_STATUSES = ['CANCELLED', 'COMPLETED', 'NO_SHOW'];
+import { assertProfessionalInBusiness, bookingLockKey } from './create';
+import { FINAL_BOOKING_STATUSES, bookingDateKey, computeEndTime, overlaps } from './time';
 
 export interface UpdateBookingData {
   date?: string;
@@ -36,6 +31,14 @@ export interface UpdateBookingData {
   notes?: string;
 }
 
+const FINAL_EDIT_MESSAGE = 'No se puede editar una reserva cancelada, completada o ausente.';
+
+const includeForResponse = {
+  client: { select: { id: true, name: true, phone: true, email: true } },
+  professional: { include: { user: { select: { name: true } } } },
+  service: { select: { id: true, name: true, duration: true, price: true } },
+};
+
 export async function updateBooking(businessId: string, id: string, data: UpdateBookingData) {
   if (Object.values(data).every((v) => v === undefined)) {
     throw new AppError(400, 'No hay cambios para guardar');
@@ -43,9 +46,7 @@ export async function updateBooking(businessId: string, id: string, data: Update
 
   const existing = await prisma.booking.findFirst({ where: { id, businessId } });
   if (!existing) throw new AppError(404, 'Reserva no encontrada');
-  if (FINAL_STATUSES.includes(existing.status)) {
-    throw new AppError(409, 'No se puede editar una reserva cancelada, completada o ausente.');
-  }
+  if (FINAL_BOOKING_STATUSES.includes(existing.status)) throw new AppError(409, FINAL_EDIT_MESSAGE);
 
   const serviceId = data.serviceId ?? existing.serviceId;
   const professionalId = data.professionalId ?? existing.professionalId;
@@ -53,8 +54,32 @@ export async function updateBooking(businessId: string, id: string, data: Update
   const date = data.date ?? existing.date.toISOString();
   const dateKey = bookingDateKey(date);
 
+  const schedulingChanged =
+    dateKey !== bookingDateKey(existing.date.toISOString()) ||
+    startTime !== existing.startTime ||
+    serviceId !== existing.serviceId ||
+    professionalId !== existing.professionalId;
+
+  // Solo notas: no se recalcula la hora de fin ni se chequean conflictos.
+  if (!schedulingChanged) {
+    try {
+      return await prisma.booking.update({
+        where: { id, businessId, status: { notIn: FINAL_BOOKING_STATUSES } },
+        data: { notes: data.notes === '' ? null : data.notes },
+        include: includeForResponse,
+      });
+    } catch (err) {
+      // El estado pasó a final entre la lectura y el guardado.
+      if ((err as { code?: string }).code === 'P2025') throw new AppError(409, FINAL_EDIT_MESSAGE);
+      throw err;
+    }
+  }
+
   const service = await prisma.service.findFirst({ where: { id: serviceId, businessId } });
-  if (!service) throw new AppError(404, 'Service not found');
+  if (!service || (serviceId !== existing.serviceId && service.deletedAt)) throw new AppError(404, 'Service not found');
+  if (serviceId !== existing.serviceId && service.isActive === false) {
+    throw new AppError(409, 'El servicio no está activo: no se pueden crear reservas para él.');
+  }
   if (professionalId !== existing.professionalId) {
     await assertProfessionalInBusiness(businessId, professionalId);
   }
@@ -64,6 +89,13 @@ export async function updateBooking(businessId: string, id: string, data: Update
 
   const booking = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+    // El estado se relee ya adentro del lock: antes solo se miraba afuera y una
+    // cancelación concurrente no se veía.
+    const current = await tx.booking.findFirst({ where: { id, businessId }, select: { status: true } });
+    if (!current) throw new AppError(404, 'Reserva no encontrada');
+    if (FINAL_BOOKING_STATUSES.includes(current.status)) throw new AppError(409, FINAL_EDIT_MESSAGE);
+
     const sameDay = await tx.booking.findMany({
       where: {
         businessId,
@@ -89,11 +121,7 @@ export async function updateBooking(businessId: string, id: string, data: Update
         ...(serviceId !== existing.serviceId ? { totalPrice: service.price } : {}),
         ...(data.notes !== undefined ? { notes: data.notes === '' ? null : data.notes } : {}),
       },
-      include: {
-        client: { select: { id: true, name: true, phone: true, email: true } },
-        professional: { include: { user: { select: { name: true } } } },
-        service: { select: { id: true, name: true, duration: true, price: true } },
-      },
+      include: includeForResponse,
     });
   });
 

@@ -5,6 +5,9 @@ import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import type { Prisma } from '@prisma/client';
+import { bookingDateKey, minutesToTime, overlaps, timeToMinutes } from '../services/bookings/time';
+
+const SLOT_STEP_MIN = 30;
 
 const createProfessionalSchema = z.object({
   name: z.string().min(1).max(100),
@@ -61,20 +64,43 @@ router.get(
   })
 );
 
+/**
+ * GET /:id/availability?date=YYYY-MM-DD[&serviceId=...]
+ * Franjas de 30 min libres del profesional ese día. Con `serviceId` solo ofrece las
+ * franjas donde ENTRA el servicio completo (duración) sin pisar otro turno ni pasarse
+ * del horario de atención. Cuenta como ocupado todo turno no cancelado (igual que el
+ * alta de reservas: NO_SHOW y COMPLETED también ocupan el horario).
+ */
 router.get(
   '/:id/availability',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { date } = req.query;
+    const { date, serviceId } = req.query;
     if (!date) {
       throw new AppError(400, 'Date is required');
     }
 
-    const targetDate = new Date(date as string);
-    const dayOfWeek = targetDate.getDay() === 0 ? 7 : targetDate.getDay();
+    const businessId = req.auth!.businessId;
+    const professionalId = String(req.params.id);
+    // Fecha normalizada (YYYY-MM-DD, UTC): el día de la semana ya no depende de la
+    // zona horaria del servidor y la consulta matchea aunque llegue un ISO con hora.
+    const dateKey = bookingDateKey(String(date));
+    const targetDate = new Date(dateKey);
+    const utcDay = targetDate.getUTCDay();
+    const dayOfWeek = utcDay === 0 ? 7 : utcDay;
+
+    let serviceDuration: number | null = null;
+    if (serviceId) {
+      const service = await prisma.service.findFirst({
+        where: { id: String(serviceId), businessId },
+        select: { duration: true },
+      });
+      if (!service) throw new AppError(404, 'Service not found');
+      serviceDuration = service.duration;
+    }
 
     const schedule = await prisma.schedule.findFirst({
-      where: { professionalId: String(req.params.id), businessId: req.auth!.businessId, dayOfWeek, isActive: true },
+      where: { professionalId, businessId, dayOfWeek, isActive: true },
     });
 
     if (!schedule) {
@@ -84,27 +110,24 @@ router.get(
 
     const bookings = await prisma.booking.findMany({
       where: {
-        professionalId: String(req.params.id),
+        businessId,
+        professionalId,
         date: targetDate,
-        status: { in: ['PENDING', 'CONFIRMED', 'IN_PROGRESS'] },
+        status: { notIn: ['CANCELLED'] },
       },
       select: { startTime: true, endTime: true },
     });
 
-    const [startH, startM] = schedule.startTime.split(':').map(Number);
-    const [endH, endM] = schedule.endTime.split(':').map(Number);
+    const scheduleStart = timeToMinutes(schedule.startTime);
+    const scheduleEnd = timeToMinutes(schedule.endTime);
+    const slotLength = serviceDuration ?? SLOT_STEP_MIN;
     const slots: string[] = [];
 
-    for (let m = startH * 60 + startM; m < endH * 60 + endM; m += 30) {
-      const time = `${Math.floor(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}`;
-      const isBooked = bookings.some((b) => {
-        const bStart = b.startTime.split(':').map(Number);
-        const bEnd = b.endTime.split(':').map(Number);
-        const bStartMin = bStart[0] * 60 + bStart[1];
-        const bEndMin = bEnd[0] * 60 + bEnd[1];
-        return m >= bStartMin && m < bEndMin;
-      });
-      if (!isBooked) slots.push(time);
+    for (let m = scheduleStart; m < scheduleEnd; m += SLOT_STEP_MIN) {
+      // Con servicio, el turno completo tiene que entrar en el horario de atención.
+      if (serviceDuration !== null && m + slotLength > scheduleEnd) continue;
+      const slot = { startTime: minutesToTime(m), endTime: minutesToTime(m + slotLength) };
+      if (!bookings.some((b) => overlaps(slot, b))) slots.push(slot.startTime);
     }
 
     res.json({ available: true, schedule, slots });

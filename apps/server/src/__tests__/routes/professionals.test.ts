@@ -23,6 +23,7 @@ vi.mock('../../lib/prisma', () => ({
     user: { findFirst: vi.fn(), create: vi.fn() },
     schedule: { findFirst: vi.fn() },
     booking: { findMany: vi.fn() },
+    service: { findFirst: vi.fn() },
   },
 }));
 
@@ -129,6 +130,76 @@ describe('routes/professionals', () => {
       expect(res.body.available).toBe(true);
       // 09:00 esta reservado, queda 09:30
       expect(res.body.slots).toEqual(['09:30']);
+    });
+  });
+
+  describe('GET /api/professionals/:id/availability: alineado con el alta de reservas', () => {
+    const get = (query: Record<string, string>) =>
+      request(app).get('/api/professionals/p1/availability').query(query).set('Authorization', `Bearer ${token}`);
+
+    beforeEach(() => {
+      mock(prisma.schedule.findFirst).mockResolvedValue({ startTime: '09:00', endTime: '11:00' });
+      mock(prisma.booking.findMany).mockResolvedValue([]);
+    });
+
+    it('cuenta como ocupado todo turno no cancelado (NO_SHOW/COMPLETED también) y filtra por negocio', async () => {
+      await get({ date: '2026-01-05' });
+
+      expect(prisma.booking.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            businessId: 'biz_1',
+            professionalId: 'p1',
+            date: new Date('2026-01-05'),
+            status: { notIn: ['CANCELLED'] },
+          },
+        })
+      );
+    });
+
+    it('normaliza la fecha: el día de la semana sale de la fecha UTC y la consulta usa el día', async () => {
+      // 2026-01-05 es lunes (1). El día no depende de la zona horaria del servidor.
+      await get({ date: '2026-01-05T00:30:00.000Z' });
+
+      expect(prisma.schedule.findFirst).toHaveBeenCalledWith({
+        where: { professionalId: 'p1', businessId: 'biz_1', dayOfWeek: 1, isActive: true },
+      });
+      expect(mock(prisma.booking.findMany).mock.calls[0][0].where.date).toEqual(new Date('2026-01-05'));
+    });
+
+    it('el domingo es el día 7', async () => {
+      await get({ date: '2026-01-04' });
+      expect(mock(prisma.schedule.findFirst).mock.calls[0][0].where.dayOfWeek).toBe(7);
+    });
+
+    it('devuelve 400 con una fecha inválida', async () => {
+      const res = await get({ date: 'no-es-fecha' });
+      expect(res.status).toBe(400);
+    });
+
+    it('con serviceId descarta las franjas donde no entra el servicio (duración) y las que se pasan del horario', async () => {
+      mock(prisma.service.findFirst).mockResolvedValue({ duration: 60 });
+      mock(prisma.booking.findMany).mockResolvedValue([{ startTime: '10:00', endTime: '10:30' }]);
+
+      const res = await get({ date: '2026-01-05', serviceId: 'svc_1' });
+
+      expect(res.status).toBe(200);
+      expect(prisma.service.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'svc_1', businessId: 'biz_1' } })
+      );
+      // 09:00-10:00 entra; 09:30 y 10:00 pisan el turno de 10:00; 10:30-11:30 se pasa del cierre (11:00).
+      expect(res.body.slots).toEqual(['09:00']);
+    });
+
+    it('sin serviceId mantiene las franjas de 30 min', async () => {
+      const res = await get({ date: '2026-01-05' });
+      expect(res.body.slots).toEqual(['09:00', '09:30', '10:00', '10:30']);
+    });
+
+    it('devuelve 404 si el serviceId es de otro negocio', async () => {
+      mock(prisma.service.findFirst).mockResolvedValue(null);
+      const res = await get({ date: '2026-01-05', serviceId: 'svc_ajeno' });
+      expect(res.status).toBe(404);
     });
   });
 
