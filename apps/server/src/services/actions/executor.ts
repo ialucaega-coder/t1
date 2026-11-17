@@ -372,7 +372,7 @@ const crearReserva: ActionHandler = {
     if (!professionalId) return { ok: false, status: 'omitido', detail: 'falta el profesional de la reserva' };
 
     if (mode !== 'live') {
-      const svc = await prisma.service.findFirst({ where: { id: serviceId, businessId }, select: { id: true, name: true } });
+      const svc = await prisma.service.findFirst({ where: { id: serviceId, businessId, deletedAt: null }, select: { id: true, name: true } });
       if (!svc) return { ok: false, status: 'omitido', detail: 'servicio no encontrado' };
       return { ok: true, status: 'simulado', detail: `se crearía una reserva de "${svc.name}" el ${date} ${startTime}` };
     }

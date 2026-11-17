@@ -65,11 +65,23 @@ describe('routes/pos', () => {
       ]);
       // Filtra por negocio y por disponibilidad (servicios activos, productos con stock)
       expect(prisma.service.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { businessId: 'biz_1', isActive: true } })
+        expect.objectContaining({ where: { businessId: 'biz_1', isActive: true, deletedAt: null } })
       );
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { businessId: 'biz_1', stock: { gt: 0 } } })
+        expect.objectContaining({ where: { businessId: 'biz_1', stock: { gt: 0 }, deletedAt: null } })
       );
+    });
+
+    it('no ofrece servicios ni productos dados de baja (deletedAt: null en ambas consultas)', async () => {
+      mock(prisma.service.findMany).mockResolvedValue([]);
+      mock(prisma.product.findMany).mockResolvedValue([]);
+
+      await request(app).get('/api/pos/items').set('Authorization', `Bearer ${token}`);
+
+      const serviceWhere = mock(prisma.service.findMany).mock.calls[0][0].where;
+      const productWhere = mock(prisma.product.findMany).mock.calls[0][0].where;
+      expect(serviceWhere.deletedAt).toBeNull();
+      expect(productWhere.deletedAt).toBeNull();
     });
 
     it('convierte precios tipo Decimal (string) a Number', async () => {

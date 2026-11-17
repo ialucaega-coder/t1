@@ -96,7 +96,7 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
   // `serviceId` viene de callback_data (controlable por el cliente): se acota al
   // negocio del chat para que no resuelva un servicio de otro tenant.
   const service = await prisma.service.findFirst({
-    where: { id: serviceId, businessId: state.businessId },
+    where: { id: serviceId, businessId: state.businessId, deletedAt: null },
     include: {
       professionals: {
         where: { isAvailable: true },
@@ -233,7 +233,7 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   }
 
   // Obtener servicio para la duración
-  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
+  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId, deletedAt: null } });
   if (!service) return;
 
   // Obtener reservas existentes para ese día y profesional
@@ -303,7 +303,7 @@ export async function handleTimeSelected(ctx: Context, time: string): Promise<vo
   state.step = 'confirm';
   await setState(ctx, state);
 
-  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
+  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId, deletedAt: null } });
 
   const summary = [
     '📋 *Resumen de tu reserva:*',
@@ -345,7 +345,7 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
   }
 
   try {
-    const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
+    const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId, deletedAt: null } });
     if (!service) {
       await ctx.reply('⚠️ Servicio no encontrado.');
       await clearState(ctx);

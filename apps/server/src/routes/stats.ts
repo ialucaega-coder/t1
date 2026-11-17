@@ -71,8 +71,9 @@ router.get(
       prisma.user.count({ where: { businessId, role: 'CLIENT' } }),
       prisma.transaction.aggregate({ where: { businessId, createdAt: curWin, type: 'SALE' }, _sum: { amount: true } }),
       prisma.transaction.aggregate({ where: { businessId, createdAt: prevWin, type: 'SALE' }, _sum: { amount: true } }),
-      prisma.service.count({ where: { businessId, isActive: true } }),
-      prisma.product.count({ where: { businessId } }),
+      prisma.service.count({ where: { businessId, isActive: true, deletedAt: null } }),
+      // Los productos dados de baja (deletedAt) no cuentan como catálogo.
+      prisma.product.count({ where: { businessId, deletedAt: null } }),
       prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: curWin } }),
       prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: prevWin } }),
     ]);

@@ -341,6 +341,20 @@ describe('executeAction — crear_reserva (externo, gated)', () => {
     expect(createBooking).not.toHaveBeenCalled();
   });
 
+  it('en dry_run busca el servicio excluyendo los dados de baja (deletedAt null) y omite si no aparece', async () => {
+    mock(prisma.service.findFirst).mockResolvedValue(null);
+    const r = await executeAction({
+      businessId: BIZ,
+      action: 'crear_reserva',
+      params: { serviceId: 'svc_borrado', date: '2026-02-01', startTime: '10:00', clientId: 'c1', professionalId: 'p1' },
+      mode: 'dry_run',
+    });
+    expect(r.status).toBe('omitido');
+    expect(prisma.service.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'svc_borrado', businessId: BIZ, deletedAt: null } })
+    );
+  });
+
   it('en live crea la reserva vía el motor', async () => {
     mock(createBooking).mockResolvedValue({ id: 'bk_1' });
     const r = await executeAction({

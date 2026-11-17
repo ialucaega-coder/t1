@@ -84,6 +84,21 @@ describe('routes/stats', () => {
   });
 
   describe('GET /api/stats/overview', () => {
+    it('los conteos de servicios activos y productos excluyen los dados de baja', async () => {
+      mock(prisma.booking.count).mockResolvedValue(0);
+      mock(prisma.user.count).mockResolvedValue(0);
+      mock(prisma.transaction.aggregate).mockResolvedValue({ _sum: { amount: 0 } });
+      mock(prisma.service.count).mockResolvedValue(0);
+      mock(prisma.product.count).mockResolvedValue(0);
+
+      await request(app).get('/api/stats/overview');
+
+      expect(prisma.product.count).toHaveBeenCalledWith({ where: { businessId: 'biz_1', deletedAt: null } });
+      expect(prisma.service.count).toHaveBeenCalledWith({
+        where: { businessId: 'biz_1', isActive: true, deletedAt: null },
+      });
+    });
+
     it('devuelve las metricas del negocio scopeadas por businessId', async () => {
       mock(prisma.booking.count).mockResolvedValue(4);
       mock(prisma.user.count).mockResolvedValue(10);
