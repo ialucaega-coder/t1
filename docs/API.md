@@ -32,16 +32,16 @@ Esta tabla resume qué middlewares aplica `index.ts` al montar cada router. Cuan
 |---------|------------------------|-------|
 | `/api/health` | ninguno | Público. |
 | `/api/auth` | ninguno (cada ruta aplica lo suyo) | Cuerpo público de 100 KB. |
-| `/api/bookings` | ninguno (`requireAuth` por ruta) | `DELETE` exige ADMIN. |
-| `/api/services` | ninguno | Escrituras exigen ADMIN. |
-| `/api/products` | ninguno | Escrituras exigen ADMIN. |
+| `/api/bookings` | ninguno (`requireAuth` por ruta) | `GET /` y `GET /export/csv` exigen staff; `PATCH /:id` y `PATCH /:id/status` exigen ADMIN o PROFESSIONAL; `DELETE` exige ADMIN. |
+| `/api/services` | ninguno | Escrituras exigen ADMIN. `DELETE` es baja lógica. |
+| `/api/products` | ninguno | Escrituras exigen ADMIN. `DELETE` es baja lógica. |
 | `/api/clients` | `requireAuth`, `requireStaff`, `requireCapability('clients')` | |
 | `/api/orders` | ninguno (`requireAuth` por ruta) | `GET /` y los `PATCH` exigen staff. |
 | `/api/transactions` | `requireAuth`, `requireStaff`, `requireCapability('sales')` | `POST` exige ADMIN. |
 | `/api/notifications` | ninguno | |
 | `/api/categories` | ninguno | Escrituras exigen ADMIN. |
 | `/api/professionals` | ninguno | |
-| `/api/stats` | `requireAuth`, `requireCapability('analytics')` | |
+| `/api/stats` | `requireAuth`, `requireStaff`, `requireCapability('analytics')` | Un `CLIENT` recibe `403`. |
 | `/api/schedules` | ninguno | Escrituras exigen ADMIN. |
 | `/api/ai` | `requireAuth`, `requireStaff` | `GET /spend-overview` exige Super Admin. |
 | `/api/faq` | `requireAuth`, `requireCapability('bots')` | |
@@ -58,7 +58,7 @@ Esta tabla resume qué middlewares aplica `index.ts` al montar cada router. Cuan
 | `/api/integrations` | ninguno (`requireAuth` por ruta) | |
 | `/api/marketplace` | `requireAuth`, `requireCapability('tools')` | |
 | `/api/agency` | ninguno | Capacidad `agency` aplicada por ruta. |
-| `/api/analytics` | `requireAuth`, `requireCapability('analytics')` | |
+| `/api/analytics` | `requireAuth`, `requireStaff`, `requireCapability('analytics')` | Un `CLIENT` recibe `403`. |
 | `/api/campaigns` | `requireAuth`, `requireCapability('marketing')` | Escrituras exigen ADMIN. |
 | `/api/wa-templates` | `requireAuth`, `requireCapability('marketing')` | `approve` y `reject` exigen ADMIN. |
 | `/api/whitelabel` | ninguno | `PATCH /` exige ADMIN. |
@@ -79,7 +79,7 @@ Esta tabla resume qué middlewares aplica `index.ts` al montar cada router. Cuan
 | `/api/mercadopago` | ninguno (`requireAuth` y roles por ruta) | |
 | `/api/manychat` | ninguno (`requireAuth` por ruta) | El webhook es público. |
 | `/api/composio` | ninguno | Conectar y desconectar exigen ADMIN. |
-| `/api/workflows` | ninguno (`requireAuth` por ruta) | Escrituras exigen ADMIN. |
+| `/api/workflows` | `requireAuth`, `requireStaff` | Escrituras exigen ADMIN. Un `CLIENT` recibe `403`. |
 | `/api/mrgo` | ninguno (`requireAuth` por ruta) | |
 | `/api/mcp` | ninguno (`requireAuth` por ruta) | |
 | `/api/platform` | `requireAuth`, `requirePlatformAdmin` | Super Admin, cross-tenant. |
@@ -105,15 +105,15 @@ Esta tabla resume qué middlewares aplica `index.ts` al montar cada router. Cuan
 
 ## Reservas / Turnos — `/api/bookings`
 
-Montaje sin middlewares. Cualquier usuario autenticado puede llamar a estas rutas; se acotan por `businessId`.
+Montaje sin middlewares; cada ruta aplica lo suyo. Todo se acota por `businessId`. El listado y la exportación traen nombre, email y teléfono de los clientes, así que son solo de staff: un `CLIENT` con JWT recibe `403`.
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
-| GET | /api/bookings | Sí | — | Lista turnos del negocio ordenados por `startTime`. Query: `date?`, `status?`, `professionalId?`, `page`/`pageSize` o `limit`/`offset`. |
+| GET | /api/bookings | Sí | Staff | Lista turnos del negocio ordenados por `startTime`. Query: `date?`, `status?`, `professionalId?`, `page`/`pageSize` o `limit`/`offset`. |
 | POST | /api/bookings | Sí | — | Crea un turno con el servicio `createBooking` (chequeo de conflictos por profesional, `(no verificado)` el detalle del anti-solape). Body: `date`, `startTime` (HH:mm), `serviceId`, `professionalId`, `clientId?`, `notes?`, `source?` (`WEB`, `TELEGRAM`, `WHATSAPP`, `VOICE` o `WALK_IN`; por defecto `WEB`). Responde `201`. Dispara notificaciones, automatizaciones y, si está conectado, la sincronización con Cal.com. |
-| GET | /api/bookings/export/csv | Sí | — | Exporta hasta 5000 reservas del negocio a CSV, de la más reciente a la más antigua. |
+| GET | /api/bookings/export/csv | Sí | Staff | Exporta hasta 5000 reservas del negocio a CSV, de la más reciente a la más antigua. Las celdas se escapan para evitar inyección de fórmulas. |
 | PATCH | /api/bookings/:id | Sí | ADMIN, PROFESSIONAL | Edita o reprograma un turno (fecha, hora, servicio, profesional, notas). Parcial. Valida pertenencia al negocio y conflictos de agenda con el mismo lock que el alta (`(no verificado)` el detalle). No notifica al cliente. |
-| PATCH | /api/bookings/:id/status | Sí | — | Cambia el estado del turno. Body: `status` (`PENDING`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` o `NO_SHOW`). Notifica al cliente cuando pasa a `CONFIRMED` o `CANCELLED`. **Nota:** el router no aplica `requireRole`, así que cualquier usuario autenticado del negocio, incluido un `CLIENT`, puede llamar a esta ruta. |
+| PATCH | /api/bookings/:id/status | Sí | ADMIN, PROFESSIONAL | Cambia el estado del turno. Body: `status` (`PENDING`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` o `NO_SHOW`). Los estados finales (`CANCELLED`, `COMPLETED`, `NO_SHOW`) no se reabren: responde `409` (el horario pudo haber sido tomado por otra reserva). `404` si el turno no es del negocio. Notifica al cliente cuando pasa a `CONFIRMED` o `CANCELLED`. |
 | DELETE | /api/bookings/:id | Sí | ADMIN | Elimina un turno. Responde `204`. |
 
 ## Servicios — `/api/services`
@@ -122,10 +122,10 @@ Montaje sin middlewares. Cualquier usuario autenticado puede llamar a estas ruta
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
-| GET | /api/services | Sí | — | Lista los servicios del negocio con categoría y profesionales. |
-| POST | /api/services | Sí | ADMIN | Crea un servicio. Body: `name`, `duration`, `price`, `description?`, `categoryId?`, `isActive`. |
-| PUT | /api/services/:id | Sí | ADMIN | Actualiza (parcial) un servicio. |
-| DELETE | /api/services/:id | Sí | ADMIN | Elimina un servicio del negocio. |
+| GET | /api/services | Sí | — | Lista los servicios del negocio con categoría y profesionales. No incluye los dados de baja. |
+| POST | /api/services | Sí | ADMIN | Crea un servicio. Body: `name`, `duration` (entero de 1 a 1440 minutos), `price` (mayor a 0 y hasta 99.999.999,99), `description?`, `categoryId?`, `isActive`. |
+| PUT | /api/services/:id | Sí | ADMIN | Actualiza (parcial) un servicio, con los mismos topes. `404` si está dado de baja. |
+| DELETE | /api/services/:id | Sí | ADMIN | Baja lógica: marca `deletedAt` y `isActive=false`. El historial de reservas queda intacto y el servicio deja de listarse, de ofrecerse en plantillas y de entrar en la disponibilidad. Responde `{ success: true }`; `404` si no existe o ya estaba dado de baja. |
 
 ## Productos — `/api/products`
 
@@ -133,10 +133,10 @@ Montaje sin middlewares. Cualquier usuario autenticado puede llamar a estas ruta
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
-| GET | /api/products | Sí | — | Lista los productos del negocio (paginado opcional). Query: `page`/`limit`/`offset`. |
-| POST | /api/products | Sí | ADMIN | Crea un producto. Body: `name`, `price`, `stock`, `description?`, `categoryId?`, `isActive`. |
-| PUT | /api/products/:id | Sí | ADMIN | Actualiza (parcial) un producto. |
-| DELETE | /api/products/:id | Sí | ADMIN | Elimina un producto del negocio. |
+| GET | /api/products | Sí | — | Lista los productos del negocio (paginado opcional). No incluye los dados de baja. Query: `page`/`limit`/`offset`. |
+| POST | /api/products | Sí | ADMIN | Crea un producto. Body: `name`, `price` (mayor a 0 y hasta 99.999.999,99), `stock` (entero de 0 a 1.000.000; por defecto 0), `description?`, `categoryId?`, `isActive`. |
+| PUT | /api/products/:id | Sí | ADMIN | Actualiza (parcial) un producto, con los mismos topes. Acepta `expectedUpdatedAt` (ISO): si el producto cambió desde entonces (por ejemplo, una venta descontó stock), no se aplica y responde `409` con `code: PRODUCT_STALE`. `404` si está dado de baja. |
+| DELETE | /api/products/:id | Sí | ADMIN | Baja lógica: marca `deletedAt` y `isActive=false`. El historial de ventas queda intacto y el producto deja de listarse y de venderse (POS, estadísticas, executor y Telegram lo ignoran). Responde `{ success: true }`; `404` si no existe o ya estaba dado de baja. |
 
 ## Clientes — `/api/clients`
 
@@ -163,8 +163,8 @@ Montaje sin middlewares. `GET /` y los `PATCH` exigen staff; `POST /` lo acepta 
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
-| GET | /api/orders | Sí | Staff | Lista pedidos con items y cliente (paginado). Query: `status?` (`PENDING`, `CONFIRMED`, `PREPARING`, `READY`, `DELIVERED`, `CANCELLED`), `search?` (nombre, email o teléfono del cliente, o el código `ORD-XXXXXXXX` / su sufijo), `page`/`pageSize` o `limit`/`offset`. |
-| POST | /api/orders | Sí | — | Alta manual de un pedido. Crea el pedido, su transacción de venta (`SALE`) y descuenta stock. Soporta `Idempotency-Key`. Body: `items[]` (`productId`, `quantity` entero de 1 a 10000; de 1 a 100 items), `paymentMethod` (`CASH`, `CARD`, `TRANSFER` o `QR`), `clientId?` (debe ser del negocio; por defecto el usuario que llama), `notes?` (máx. 2000). Los precios salen siempre de la base. Las líneas repetidas se suman. Si el stock está entre 0 y la cantidad pedida, responde `409`. Responde `201` (`200` en un reintento idempotente). |
+| GET | /api/orders | Sí | Staff | Lista pedidos con items y cliente (paginado). El cliente viaja solo como `{ id, name, phone }`. Query: `status?` (`PENDING`, `CONFIRMED`, `PREPARING`, `READY`, `DELIVERED`, `CANCELLED`), `search?` (nombre, email o teléfono del cliente, o el código `ORD-XXXXXXXX` / su sufijo), `page`/`pageSize` o `limit`/`offset`. |
+| POST | /api/orders | Sí | — | Alta manual de un pedido. Crea el pedido, su transacción de venta (`SALE`) y descuenta stock. Soporta `Idempotency-Key`: un reintento con el mismo contenido devuelve el pedido original; la misma clave con un contenido distinto (otros items o cantidades, otro cliente u otro método de pago) responde `409`; la nota y los precios no se comparan. El `client` de la respuesta es solo `{ id, name, phone, email }` (nunca el usuario completo). Body: `items[]` (`productId`, `quantity` entero de 1 a 10000; de 1 a 100 items), `paymentMethod` (`CASH`, `CARD`, `TRANSFER` o `QR`), `clientId?` (debe ser del negocio; por defecto el usuario que llama), `notes?` (máx. 2000). Los precios salen siempre de la base. Las líneas repetidas se suman. Si el total supera 99.999.999,99 responde `400`. Si el stock está entre 0 y la cantidad pedida, responde `409`. Responde `201` (`200` en un reintento idempotente). |
 | PATCH | /api/orders/:id/status | Sí | Staff | Cambia el estado del pedido y notifica al cliente. Body: `status`. Transiciones: hacia adelante dentro del flujo `PENDING` → `CONFIRMED` → `PREPARING` → `READY` → `DELIVERED` (se puede saltar pasos); a `CANCELLED` desde cualquier estado no final; nunca hacia atrás. `DELIVERED` y `CANCELLED` son finales. Repetir el estado actual responde `200` sin cambios. Una transición inválida responde `409`. |
 | PATCH | /api/orders/:id/notes | Sí | Staff | Actualiza la nota interna del pedido. Body: `notes` (máx. 2000). Vacía = borrar la nota. |
 
@@ -174,9 +174,9 @@ Montaje con `requireAuth`, `requireStaff` y `requireCapability('sales')`.
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
-| GET | /api/transactions | Sí | Staff | Lista movimientos contables (paginado, más recientes primero). Query: `type?` (`SALE`, `REFUND`, `PARTIAL`), `paymentMethod?` (`CASH`, `CARD`, `TRANSFER`, `QR`), `from?` y `to?` (fechas sobre `createdAt`), `page`/`pageSize` o `limit`/`offset`. `type` y `paymentMethod` son campos distintos y se combinan con AND. |
+| GET | /api/transactions | Sí | Staff | Lista movimientos contables (paginado, más recientes primero). Query: `type?` (`SALE`, `REFUND`, `PARTIAL`), `paymentMethod?` (`CASH`, `CARD`, `TRANSFER`, `QR`), `from?` y `to?` (sobre `createdAt`: `YYYY-MM-DD` es el día calendario argentino, de 00:00 a 24:00 hora AR, y ambos extremos son inclusivos; también se acepta un instante ISO completo; una fecha que no existe o con otro formato responde `400`), `page`/`pageSize` o `limit`/`offset`. `type` y `paymentMethod` son campos distintos y se combinan con AND. |
 | GET | /api/transactions/summary | Sí | Staff | Totales reales con los mismos filtros que el listado: `{ sales, partial, refunds, net, count, counts: { SALE, PARTIAL, REFUND } }`. `net` = ventas + parciales − reembolsos. |
-| POST | /api/transactions | Sí | ADMIN | Registra una transacción manual. Soporta `Idempotency-Key` (reintento responde `200`). Body: `amount` (mayor a 0), `type?` (por defecto `SALE`), `paymentMethod`, `reference?`, `notes?`. Dispara la automatización `pago_recibido` solo para `SALE` y `PARTIAL`. |
+| POST | /api/transactions | Sí | ADMIN | Registra una transacción manual. Soporta `Idempotency-Key` (reintento con el mismo contenido responde `200`; la misma clave con otro contenido —monto redondeado a centavos, tipo, método de pago, referencia o notas—, `409`). Body: `amount` (mayor a 0), `type?` (por defecto `SALE`), `paymentMethod`, `reference?`, `notes?`. Dispara la automatización `pago_recibido` solo para `SALE` y `PARTIAL`. |
 | GET | /api/transactions/export/csv | Sí | Staff | Exporta hasta 5000 movimientos a CSV, con el número de pedido asociado si lo hay. |
 
 ## Notificaciones — `/api/notifications`
@@ -219,7 +219,7 @@ Montaje sin middlewares. Escrituras exigen ADMIN.
 
 ## Estadísticas — `/api/stats`
 
-Montaje con `requireAuth` y `requireCapability('analytics')`. Las respuestas se cachean 30 segundos por negocio y rango.
+Montaje con `requireAuth`, `requireStaff` y `requireCapability('analytics')`: un `CLIENT` con JWT recibe `403` (antes podía leer ingresos y reservas). Las respuestas se cachean 30 segundos por negocio y rango.
 
 **Rango de fechas:** `overview`, `weekly` y `top-services` aceptan `?days=N` (1 a 366, días calendario que incluyen hoy) o `?from=YYYY-MM-DD&to=YYYY-MM-DD` (`to` es opcional y por defecto es hoy; las fechas futuras se recortan a hoy). `days` no se combina con `from`/`to`, y `to` exige `from`. Un rango inválido responde `400`. `dashboard` y `health` no aceptan rango.
 
@@ -422,13 +422,13 @@ Las invitaciones se envían por mail con un link de un solo uso. El token se gua
 
 ## Analítica — `/api/analytics`
 
-Montaje con `requireAuth` y `requireCapability('analytics')`. Todas las rutas (salvo `/funnel`) aceptan el rango `?days=N` o `?from&to`, con el mismo formato que `/api/stats`. Por defecto usan 30 días, salvo `/conversations` (7), `/timeseries` (14) y `/funnel`, que no acepta rango. Las respuestas se cachean 30 segundos por negocio.
+Montaje con `requireAuth`, `requireStaff` y `requireCapability('analytics')` (un `CLIENT` recibe `403`). Todas las rutas (salvo `/funnel`) aceptan el rango `?days=N` o `?from&to`, con el mismo formato que `/api/stats`. Por defecto usan 30 días, salvo `/conversations` (7), `/timeseries` (14) y `/funnel`, que no acepta rango. Las respuestas se cachean 30 segundos por negocio.
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
-| GET | /api/analytics/kpi | Sí | — | KPIs del período con variación contra el período anterior de igual largo. `monthlyBudget` devuelve siempre `50` (valor fijo en el código). |
+| GET | /api/analytics/kpi | Sí | — | KPIs del período con variación contra el período anterior de igual largo. `monthlyBudget` devuelve siempre `50` (valor fijo en el código). `avgSatisfaction` es una estimación, no calificaciones de clientes: la respuesta lleva `estimated: true` y `basis: "estado_de_conversaciones"`. |
 | GET | /api/analytics/conversations | Sí | — | Conversaciones por día (7 días por defecto). Responde una entrada por día con `date`, `day` y `count`. |
-| GET | /api/analytics/satisfaction | Sí | — | Distribución de satisfacción por estrellas, estimada a partir de los estados de las conversaciones y los tiempos de respuesta. Es una estimación. |
+| GET | /api/analytics/satisfaction | Sí | — | Distribución de satisfacción por estrellas, estimada a partir de los estados de las conversaciones y los tiempos de respuesta. Es una estimación: cada entrada lleva `estimated: true` y `basis: "estado_de_conversaciones"`. |
 | GET | /api/analytics/improvements | Sí | — | Sugerencias heurísticas: respuesta del bot mayor a 3 s, escalamiento a humano mayor al 20 %, reservas pendientes mayores al 30 %, bot con menos del 30 % de los mensajes, o sin conversaciones. |
 | GET | /api/analytics/costs | Sí | — | Costo estimado de IA por modelo. Es una estimación: el largo de los textos del bot dividido 4, repartido fijo 70 % / 30 % entre dos modelos con tarifas fijas. No es facturación real. |
 | GET | /api/analytics/metrics | Sí | — | Métricas de desempeño del bot: tiempo de respuesta, mensajes por conversación, tasa de resolución, escalaciones y reservas por bot. |
@@ -445,11 +445,11 @@ Montaje con `requireAuth` y `requireCapability('marketing')`. Las escrituras exi
 | GET | /api/campaigns | Sí | — | Lista las campañas del negocio (paginado). Query: `page`, `pageSize`. |
 | GET | /api/campaigns/recipients | Sí | — | Vista previa de los destinatarios: clientes con al menos una reserva en el negocio y con el dato de contacto que exige el canal. Query: `channel?` (`whatsapp`, `email`, `sms` o `telegram`). Responde `{ total, recipients }` (máx. 50 en la vista previa). |
 | POST | /api/campaigns | Sí | ADMIN | Crea una campaña. Body: `name` (1 a 200), `description?` (máx. 1000), `channel` (`whatsapp`, `email`, `sms` o `telegram`; por defecto `whatsapp`), `scheduledAt?` (ISO 8601, debe ser futura con 1 minuto de tolerancia). Sin fecha nace en `draft`; con fecha nace en `scheduled`. Responde `201`. |
-| PATCH | /api/campaigns/:id | Sí | ADMIN | Actualiza una campaña. Body: `name?`, `description?`, `status?` (`draft`, `scheduled`, `sent` o `cancelled`), `channel?`, `scheduledAt?` (ISO 8601 o `null` para quitar la programación). `400` si ya fue enviada o se está enviando. Programar sin fecha responde `400`. |
-| POST | /api/campaigns/:id/send | Sí | ADMIN | Envía la campaña ahora. Body: `message?` (máx. 2000; si falta se usa la descripción o el nombre). Hace un claim atómico (`draft` o `scheduled` pasa a `sending`) y encola el envío (con Redis responde `envio.enCola: true`; sin Redis corre inline). Solo WhatsApp y email tienen envío saliente real; `sms` y `telegram` cuentan todos sus destinatarios como fallidos. Al terminar queda `sent`; si agota 3 intentos, `failed`. Responde `400` si ya fue enviada o se está enviando. |
-| DELETE | /api/campaigns/:id | Sí | ADMIN | Elimina una campaña. Responde `204`. |
+| PATCH | /api/campaigns/:id | Sí | ADMIN | Actualiza una campaña. Body: `name?`, `description?`, `status?` (`draft`, `scheduled` o `cancelled`; `sent` y `sending` los fija solo el motor de envío), `channel?`, `scheduledAt?` (ISO 8601 futura o `null` para quitar la programación: con fecha pasa a `scheduled`, con `null` desde `scheduled` vuelve a `draft`). `400` si ya fue enviada o se está enviando. Pasar a `scheduled` sin fecha (ni en el body ni guardada) responde `400`. |
+| POST | /api/campaigns/:id/send | Sí | ADMIN | Envía la campaña ahora. Body: `message?` (máx. 2000; si falta se usa la descripción o el nombre). Hace un claim atómico (`draft` o `scheduled` pasa a `sending`) y encola el envío (con Redis responde `envio.enCola: true`; sin Redis corre inline). Solo WhatsApp y email tienen envío saliente real; `sms` y `telegram` cuentan todos sus destinatarios como fallidos. Al terminar queda `sent`; si agota 3 intentos, `failed`. Cada envío lleva un `runId` propio: un job viejo que sigue vivo no duplica mensajes (ver `docs/ESCALABILIDAD.md`). Responde `400` si ya fue enviada o se está enviando. |
+| DELETE | /api/campaigns/:id | Sí | ADMIN | Elimina una campaña. Responde `204`. Si se está enviando (`sending`) responde `409` y no borra nada. |
 
-**Campañas programadas:** un cron por minuto envía las campañas `scheduled` cuya fecha ya venció. Si la campaña lleva más de 6 horas de atraso, no se envía: pasa a `failed` para que el dueño decida reenviarla.
+**Campañas programadas:** un cron por minuto envía las campañas `scheduled` cuya fecha ya venció. Si la campaña lleva más de 6 horas de atraso, no se envía: pasa a `failed` para que el dueño decida reenviarla. Una campaña `sending` sin avance por más de 30 minutos también pasa a `failed` (reaper). Cada pase a `failed` emite el evento socket `campaign:failed` a la sala `business:<id>` con `{ campaign, envio?, reason }`, donde `reason` es `retries_exhausted`, `expired`, `stalled` o `error`.
 
 ## White-label — `/api/whitelabel`
 
@@ -497,7 +497,7 @@ Sin middleware de montaje. Cada ruta aplica `requireAuth`; las que configuran el
 
 ## Workflows (automatizaciones) — `/api/workflows`
 
-Sin middleware de montaje; cada ruta aplica `requireAuth`. Cada regla sigue el esquema trigger → condición → acción. Las escrituras y las ejecuciones exigen ADMIN, porque en modo en vivo producen efectos reales (por ejemplo, enviar un WhatsApp).
+Montaje con `requireAuth` y `requireStaff` (un `CLIENT` con JWT recibe `403`: antes podía leer las reglas del negocio). Cada regla sigue el esquema trigger → condición → acción. Las escrituras y las ejecuciones exigen ADMIN, porque en modo en vivo producen efectos reales (por ejemplo, enviar un WhatsApp).
 
 | Método | Ruta | Auth | Rol | Descripción |
 |--------|------|------|-----|-------------|
@@ -839,6 +839,10 @@ Sin middleware de montaje.
 | 409 | `TAKEN_BY_OTHER` | `/api/conversations/:id/take` | Otro agente ya tiene la conversación. Lo puede forzar un ADMIN con `?force=true`. |
 | 409 | `NOT_FAILED` | `/api/conversations/:id/reply/:messageId/retry` | El mensaje no tiene un envío fallido, o ya se está reintentando o enviando. |
 | 409 | `MAX_ATTEMPTS` | `/api/conversations/:id/reply/:messageId/retry` | Se alcanzó el tope de 5 intentos de envío. |
+| 409 | `PRODUCT_STALE` | `PUT /api/products/:id` | Se mandó `expectedUpdatedAt` y el producto cambió desde entonces: recargar y reintentar. |
+| 409 | (sin `code`) | `POST /api/orders`, `POST /api/transactions` | La `Idempotency-Key` ya se usó con otro contenido. |
+| 409 | (sin `code`) | `PATCH /api/bookings/:id/status` | La reserva está en un estado final (`CANCELLED`, `COMPLETED`, `NO_SHOW`) y no se reabre. |
+| 409 | (sin `code`) | `DELETE /api/campaigns/:id` | La campaña se está enviando (`sending`). |
 | 409 | `CATEGORY_IN_USE` | `DELETE /api/categories/:id` | La categoría tiene productos o servicios. Se puede borrar con `?detach=true`. |
 | 409 | `DUPLICATE_REQUEST` | `/api/mrgo/orchestrate`, `/run`, `/confirm` | Reintento de una acción en vivo con la misma `Idempotency-Key`. |
 | 403 | `PLAN_LIMIT_REACHED` | `POST /api/clients` | Se alcanzó el máximo de contactos del plan. |

@@ -100,6 +100,25 @@ Trabajo posterior a las olas:
 
 **Hallazgo de la base real (2026-11-13), actualizado 2026-11-14:** 27 de los 52 índices que declara el schema no existían en Supabase (incluidos 3 UNIQUE). El 2026-11-14 se aplicaron los 27 faltantes y 3 índices nuevos (2 de alta sobre `businesses` y el UNIQUE parcial de singleton). Según el commit `7ef2890` y los encabezados de los SQL en `docs/migraciones/`, esto está aplicado en la base real; la verificación en la base la hizo el dueño y no se re-consultó en esta revisión (no verificado en esta pasada). El encabezado de `indices-faltantes-schema.sql` tiene además una línea "NO APLICADO" que contradice la línea "APLICADO" de arriba: hay que corregirla. Los SQL siguen en `docs/migraciones/indices-faltantes-schema.sql` y `docs/migraciones/indices-propuestos.sql`.
 
+## Campañas y conversaciones: garantías anti-duplicado (verificado contra el código el 2026-11-17)
+
+Sin cambios de schema: todo se apoya en `sharedState` (Redis, con fallback en memoria) y en locks de Postgres.
+
+**Campañas (`services/campaigns/send.ts`, `dispatch.ts`, `events.ts`)**
+- **Claim atómico:** pasar a `sending` es un `UPDATE ... WHERE status` (manual: no `sent`/`sending`/`cancelled`; scheduler: `scheduled` con fecha vencida). Solo una instancia gana; la otra recibe 400/404 y el scheduler lo cuenta como `skipped`.
+- **`runId` por envío:** cada envío nuevo genera un `runId`, lo guarda como "envío vigente" (`sharedSet`, TTL 24 h) y lo viaja en el job. El cursor de progreso (a quién ya se le envió) es propio de ese `runId`. Un job viejo que sigue vivo (campaña reaped, cancelada, borrada o reenviada) comprueba el `runId` antes de cada lote, se corta solo y no toca el estado de la campaña: así un reenvío no duplica mensajes. Los jobs encolados sin `runId` (versión anterior) siguen funcionando con el cursor sin sufijo.
+- **Latido de 60 s:** mientras envía, el job toca `updatedAt` de la campaña al menos cada 60 s (además de reflejar `sentCount` cada 25 destinatarios), para que un envío lento pero vivo no parezca trabado. Si el latido no encuentra la fila en `sending`, el job se corta.
+- **Reaper de 30 min:** en cada tick del scheduler (`dispatchDueCampaigns`, bajo el lock de ese minuto) las campañas `sending` sin avance hace más de 30 min pasan a `failed`. El `UPDATE` incluye el `updatedAt` leído, así que si avanzó entre el listado y el pase no se pisa. Tope de 50 por tick.
+- **Expiración:** una campaña `scheduled` con más de 6 h de atraso pasa a `failed` en vez de enviarse; el `UPDATE` incluye `scheduledAt` para no pisar una reprogramación hecha entre el listado y el pase.
+- **Evento `campaign:failed`:** cada pase a `failed` emite `campaign:failed` a la sala `business:<id>` (`reason`: `retries_exhausted`, `expired`, `stalled` o `error`). Solo emite quien ganó el `UPDATE`, así que varias instancias no duplican el evento. Es best-effort y nunca lanza.
+- **Edición y borrado:** `PATCH` no puede fijar `sent` ni `sending`, ni programar sin fecha; `DELETE` de una campaña `sending` responde 409.
+- **Pendiente:** recuperar automáticamente una campaña `failed` a mitad de envío (hoy el dueño decide reenviarla), `campaign:progress` por socket y un `failureReason` persistido.
+
+**Conversaciones (`services/chatbot.ts`, `services/channels/inboundRetry.ts`)**
+- **Una conversación por contacto:** el alta es "buscar y, si no hay, crear". Como el schema no tiene `UNIQUE`, se serializa con un advisory lock transaccional por (negocio, canal, contacto) (`lockSingleton`, clave `conv-create:<canal>:<contacto>`) y se vuelve a buscar adentro con el lock tomado. Dos mensajes simultáneos del mismo contacto (dos webhooks, un reintento) comparten conversación. La búsqueda exige el mismo `realChannel`, así que voz, chat web y Messenger, que comparten el enum `WEBCHAT`, no se mezclan.
+- **`externalId` idempotente:** el mensaje del cliente se guarda con el id del canal (`MessageSid` o `mid`) en `Message.metadata.externalId`. Si el mismo `externalId` ya existe en esa conversación, se reutiliza el mensaje en vez de duplicarlo. El reintento de un webhook que falló decide con ese id si ya se persistió algo (`wasAnythingPersisted`); sin `externalId` (canales que no lo traen) cae al criterio conservador anterior.
+- **Respuestas humanas:** `POST /api/conversations/:id/reply` acepta `Idempotency-Key`, y un envío fallido se reintenta sin crear un mensaje nuevo (ver `docs/API.md`).
+
 ## Migraciones gateadas (requieren PR + migración, el schema sigue congelado hasta aprobarlo)
 Borradores en `docs/migraciones/` (ver arriba). Los índices de expresión sobre JSON siguen pendientes de validar con `EXPLAIN` sobre datos realistas.
 - Índices `businesses(phone)` y `businesses(whatsappNumber)` (alta): figuran aplicados (sección 1 de `indices-propuestos.sql`, según su encabezado y el commit `7ef2890`; no verificado en la base en esta pasada).
