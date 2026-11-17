@@ -15,6 +15,7 @@ import {
   UpdateOrderNotesInput,
 } from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { MAX_MONEY } from '../validators/transactions';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import { queueNotification } from '../services/notifications';
 import {
@@ -28,6 +29,33 @@ import {
 const router = Router();
 
 const ORDER_INCLUDE = { items: { include: { product: true } }, client: true } as const;
+
+/**
+ * Una Idempotency-Key repetida con un contenido DISTINTO no es un reintento sino
+ * una clave reutilizada por error: devolver el pedido anterior en silencio haría
+ * creer que se creó el pedido nuevo. Compara ítems (producto + cantidad), cliente
+ * y método de pago (el de la venta registrada); responde 409 si no coinciden.
+ * La nota no se compara porque puede editarse después de creado el pedido, y los
+ * precios tampoco (los fija el servidor y pueden cambiar entre intentos).
+ */
+async function assertSameOrderPayload(
+  db: Prisma.TransactionClient,
+  businessId: string,
+  userId: string,
+  prior: { id: string; clientId: string; items: { productId: string; quantity: number }[] },
+  data: CreateOrderInput,
+) {
+  const key = (items: { productId: string; quantity: number }[]) =>
+    items.map((i) => `${i.productId}:${i.quantity}`).sort().join('|');
+  let same = key(prior.items ?? []) === key(data.items) && prior.clientId === (data.clientId || userId);
+  if (same) {
+    const sale = await db.transaction.findFirst({ where: { orderId: prior.id, businessId }, select: { paymentMethod: true } });
+    if (sale && sale.paymentMethod !== data.paymentMethod) same = false;
+  }
+  if (!same) {
+    throw new AppError(409, 'Esa Idempotency-Key ya se usó con otro contenido. Generá una clave nueva para este pedido.');
+  }
+}
 
 /** Carga el pedido de una idempotency-key ya vista (o null). */
 async function loadIdempotentOrder(
@@ -118,16 +146,6 @@ router.post(
     const businessId = req.auth!.businessId;
     const idempotencyKey = readIdempotencyKey(req.header('Idempotency-Key'));
 
-    // Fast path: si ya procesamos esta clave, devolvemos el pedido existente sin
-    // crear nada (idempotencia ante doble-submit o reintento de red).
-    if (idempotencyKey) {
-      const prior = await loadIdempotentOrder(prisma, businessId, idempotencyKey);
-      if (prior) {
-        res.status(200).json(prior);
-        return;
-      }
-    }
-
     // Unifica líneas repetidas del mismo producto (suma cantidades): sin esto, un
     // producto cargado dos veces hacía fallar el chequeo de existencia de abajo.
     const merged = new Map<string, number>();
@@ -135,6 +153,17 @@ router.post(
       merged.set(item.productId, (merged.get(item.productId) ?? 0) + item.quantity);
     }
     data.items = [...merged].map(([productId, quantity]) => ({ productId, quantity }));
+
+    // Fast path: si ya procesamos esta clave, devolvemos el pedido existente sin
+    // crear nada (idempotencia ante doble-submit o reintento de red).
+    if (idempotencyKey) {
+      const prior = await loadIdempotentOrder(prisma, businessId, idempotencyKey);
+      if (prior) {
+        await assertSameOrderPayload(prisma, businessId, req.auth!.userId, prior, data);
+        res.status(200).json(prior);
+        return;
+      }
+    }
 
     // Los precios SIEMPRE salen de la base (nunca del cliente) y solo se venden
     // productos propios, activos y no borrados.
@@ -161,6 +190,12 @@ router.post(
       return sum + Number(product.price) * item.quantity;
     }, 0);
 
+    // Las columnas de dinero son Decimal(10,2): un total mayor reventaría en la base
+    // con un error sin mensaje útil. Se corta antes con un 400 claro.
+    if (totalPrice > MAX_MONEY) {
+      throw new AppError(400, 'El total del pedido supera el máximo permitido ($99.999.999,99). Dividilo en varios pedidos.');
+    }
+
     const result = await prisma.$transaction(async (tx) => {
       // Con idempotency-key: serializamos duplicados concurrentes de la MISMA
       // clave con un advisory lock y re-chequeamos dentro de la transacción
@@ -169,7 +204,10 @@ router.post(
         const lockKey = idempotencyLockKey(IDEMP_TYPE_ORDER, businessId, idempotencyKey);
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
         const dup = await loadIdempotentOrder(tx, businessId, idempotencyKey);
-        if (dup) return { order: dup, duplicated: true };
+        if (dup) {
+          await assertSameOrderPayload(tx, businessId, req.auth!.userId, dup, data);
+          return { order: dup, duplicated: true };
+        }
       }
 
       const newOrder = await tx.order.create({
@@ -203,7 +241,11 @@ router.post(
         },
       });
 
-      for (const item of data.items) {
+      // Se descuenta en orden estable (por productId): dos pedidos concurrentes con
+      // los mismos productos en distinto orden (A,B) y (B,A) tomaban locks de fila
+      // cruzados y Postgres abortaba uno por deadlock (40P01).
+      const itemsByProduct = [...data.items].sort((a, b) => (a.productId < b.productId ? -1 : a.productId > b.productId ? 1 : 0));
+      for (const item of itemsByProduct) {
         // Descuento con guarda atómica contra sobreventa concurrente. Permitimos
         // la venta si hay stock suficiente (`stock >= qty`) O si el stock es <= 0,
         // caso que tratamos como "sin control de inventario" (negocios de

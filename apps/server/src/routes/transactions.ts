@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { createTransactionSchema, CreateTransactionInput } from '../validators/transactions';
 import { paginationSchema, toSkipTake } from '../validators/common';
@@ -15,6 +15,7 @@ import {
   recordIdempotentKey,
 } from '../lib/idempotency';
 import { dispatchEvent } from '../services/workflows';
+import { arDayStartUtc } from '../services/analytics/time';
 
 const router = Router();
 
@@ -24,12 +25,49 @@ const router = Router();
  * y `paymentMethod` el método de cobro (CASH/CARD/TRANSFER/QR): son campos
  * distintos y no deben mezclarse.
  */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Fecha del filtro: `YYYY-MM-DD` (día calendario argentino, debe existir) o un instante ISO válido. */
+const dateParamSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (v) => {
+      if (DATE_ONLY.test(v)) {
+        const d = new Date(`${v}T12:00:00Z`);
+        // Debe existir en el calendario (descarta 2026-02-31 y 2026-13-01).
+        return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v);
+      }
+      return !Number.isNaN(new Date(v).getTime());
+    },
+    { message: 'Fecha inválida: usá el formato YYYY-MM-DD' },
+  );
+
 const transactionFiltersSchema = z.object({
   type: z.enum(['SALE', 'REFUND', 'PARTIAL']).optional(),
   paymentMethod: z.enum(['CASH', 'CARD', 'TRANSFER', 'QR']).optional(),
-  from: z.string().min(1).optional(),
-  to: z.string().min(1).optional(),
+  from: dateParamSchema.optional(),
+  to: dateParamSchema.optional(),
 });
+
+/**
+ * Rango de fechas. Con `YYYY-MM-DD` se interpreta como día calendario en hora de
+ * Argentina (UTC-3 fijo): `from` incluye desde las 00:00 AR de ese día y `to`
+ * INCLUYE todo ese día (límite exclusivo = 00:00 AR del día siguiente). Antes
+ * `new Date('YYYY-MM-DD')` era 00:00 UTC con `lte`: se perdía el último día
+ * entero y `from` arrancaba a las 21:00 del día anterior. Un instante ISO completo
+ * se respeta tal cual (gte / lte).
+ */
+function buildCreatedAtRange(from?: string, to?: string): Record<string, Date> {
+  const createdAt: Record<string, Date> = {};
+  if (from) createdAt.gte = DATE_ONLY.test(from) ? arDayStartUtc(from) : new Date(from);
+  if (to) {
+    if (DATE_ONLY.test(to)) createdAt.lt = new Date(arDayStartUtc(to).getTime() + DAY_MS);
+    else createdAt.lte = new Date(to);
+  }
+  return createdAt;
+}
 
 function buildTransactionWhere(businessId: string, query: Record<string, unknown>) {
   const { type, paymentMethod, from, to } = transactionFiltersSchema.parse({
@@ -42,13 +80,19 @@ function buildTransactionWhere(businessId: string, query: Record<string, unknown
 
   if (type) where.type = type;
   if (paymentMethod) where.paymentMethod = paymentMethod;
-  if (from || to) {
-    const createdAt: Record<string, Date> = {};
-    if (from) createdAt.gte = new Date(from);
-    if (to) createdAt.lte = new Date(to);
-    where.createdAt = createdAt;
-  }
+  if (from || to) where.createdAt = buildCreatedAtRange(from, to);
   return where;
+}
+
+/**
+ * Escapa una celda CSV (RFC 4180) y neutraliza inyección de fórmulas: si empieza
+ * con `= + - @`, tab o retorno de carro le antepone una comilla simple para que
+ * Excel/Sheets no lo ejecuten.
+ */
+function csvCell(value: string | number | null | undefined): string {
+  const raw = value == null ? '' : String(value);
+  const guarded = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${guarded.replace(/"/g, '""')}"`;
 }
 
 router.get(
@@ -128,6 +172,26 @@ router.get(
   })
 );
 
+/**
+ * Una Idempotency-Key repetida con un contenido DISTINTO no es un reintento: es un
+ * error del cliente (clave reutilizada). Devolver el cobro anterior en silencio
+ * haría creer que se registró el monto nuevo, así que se responde 409.
+ */
+function assertSamePayload(
+  prior: { amount: unknown; type: string; paymentMethod: string; reference: string | null; notes: string | null },
+  data: CreateTransactionInput,
+) {
+  const same =
+    Number(prior.amount) === data.amount &&
+    prior.type === data.type &&
+    prior.paymentMethod === data.paymentMethod &&
+    (prior.reference ?? null) === (data.reference ?? null) &&
+    (prior.notes ?? null) === (data.notes ?? null);
+  if (!same) {
+    throw new AppError(409, 'Esa Idempotency-Key ya se usó con otro contenido. Generá una clave nueva para este cobro.');
+  }
+}
+
 router.post(
   '/',
   requireAuth,
@@ -145,6 +209,7 @@ router.post(
       if (priorId) {
         const prior = await prisma.transaction.findFirst({ where: { id: priorId, businessId } });
         if (prior) {
+          assertSamePayload(prior, data);
           res.status(200).json(prior);
           return;
         }
@@ -158,7 +223,10 @@ router.post(
         const dupId = await findIdempotentEntityId(tx, businessId, IDEMP_TYPE_TRANSACTION, idempotencyKey);
         if (dupId) {
           const dup = await tx.transaction.findFirst({ where: { id: dupId, businessId } });
-          if (dup) return { txn: dup, duplicated: true };
+          if (dup) {
+            assertSamePayload(dup, data);
+            return { txn: dup, duplicated: true };
+          }
         }
       }
 
@@ -206,8 +274,8 @@ router.get(
         t.type,
         t.amount.toString(),
         t.paymentMethod,
-        `"${(t.reference || '').replace(/"/g, '""')}"`,
-        `"${(t.notes || '').replace(/"/g, '""')}"`,
+        csvCell(t.reference),
+        csvCell(t.notes),
         t.order?.id || '',
       ].join(',')
     ).join('\n');

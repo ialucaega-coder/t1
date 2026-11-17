@@ -15,7 +15,7 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(),
       updateMany: vi.fn(), findFirstOrThrow: vi.fn(),
     },
-    transaction: { create: vi.fn() },
+    transaction: { create: vi.fn(), findFirst: vi.fn() },
     connection: { findFirst: vi.fn(), create: vi.fn() },
     $transaction: vi.fn(),
     $executeRaw: vi.fn(),
@@ -59,6 +59,9 @@ const payload = {
   items: [{ productId: 'prod_1', quantity: 2 }],
   paymentMethod: 'CASH',
 };
+
+// Pedido previo equivalente a `payload` (mismos ítems y cliente por defecto = usuario autenticado).
+const PRIOR_ORDER = { clientId: 'user_1', items: [{ productId: 'prod_1', quantity: 2 }] };
 
 describe('routes/orders — POST / (idempotencia)', () => {
   const app = buildApp();
@@ -105,7 +108,7 @@ describe('routes/orders — POST / (idempotencia)', () => {
   it('replay con la misma clave devuelve el pedido existente sin recrear (fast path)', async () => {
     // Ya existe una Connection para esa clave apuntando a order_1.
     mock(prisma.connection.findFirst).mockResolvedValue({ config: { key: 'abc-123', entityId: 'order_1' } });
-    mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_1', totalPrice: 2000 });
+    mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_1', totalPrice: 2000, ...PRIOR_ORDER });
 
     const res = await request(app)
       .post('/api/orders')
@@ -128,7 +131,7 @@ describe('routes/orders — POST / (idempotencia)', () => {
     mock(prisma.connection.findFirst)
       .mockResolvedValueOnce(null) // fast path
       .mockResolvedValueOnce({ config: { key: 'race-1', entityId: 'order_existing' } }); // dentro de la tx
-    mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_existing', totalPrice: 2000 });
+    mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_existing', totalPrice: 2000, ...PRIOR_ORDER });
 
     const res = await request(app)
       .post('/api/orders')
@@ -206,6 +209,99 @@ describe('routes/orders — POST / (alta manual: precios y productos del servido
     expect(res.status).toBe(404);
     expect(mock(prisma.user.findFirst).mock.calls[0][0].where).toMatchObject({ id: 'cli_otro_negocio', businessId: 'biz_1' });
     expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('routes/orders — POST / (orden de locks, tope de total, clave con otro contenido)', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.order.create).mockResolvedValue({ id: 'order_1', totalPrice: 3000 });
+    mock(prisma.transaction.create).mockResolvedValue({ id: 'tx_1' });
+    mock(prisma.transaction.findFirst).mockResolvedValue({ paymentMethod: 'CASH' });
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    mock(prisma.connection.create).mockResolvedValue({ id: 'conn_1' });
+    mock(prisma.$executeRaw).mockResolvedValue(undefined);
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
+    mock(prisma.product.findMany).mockResolvedValue([
+      { id: 'prod_a', price: 100, name: 'A', businessId: 'biz_1' },
+      { id: 'prod_b', price: 200, name: 'B', businessId: 'biz_1' },
+    ]);
+  });
+
+  const stockOrder = () => mock(prisma.product.updateMany).mock.calls.map((c) => c[0].where.id);
+
+  it('descuenta stock en orden estable por productId: (A,B) y (B,A) toman los locks igual', async () => {
+    await request(app).post('/api/orders').send({
+      items: [{ productId: 'prod_b', quantity: 1 }, { productId: 'prod_a', quantity: 1 }], paymentMethod: 'CASH',
+    });
+    expect(stockOrder()).toEqual(['prod_a', 'prod_b']);
+
+    vi.clearAllMocks();
+    mock(prisma.order.create).mockResolvedValue({ id: 'order_2', totalPrice: 300 });
+    mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
+    mock(prisma.product.findMany).mockResolvedValue([
+      { id: 'prod_a', price: 100, name: 'A', businessId: 'biz_1' },
+      { id: 'prod_b', price: 200, name: 'B', businessId: 'biz_1' },
+    ]);
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    await request(app).post('/api/orders').send({
+      items: [{ productId: 'prod_a', quantity: 1 }, { productId: 'prod_b', quantity: 1 }], paymentMethod: 'CASH',
+    });
+    expect(stockOrder()).toEqual(['prod_a', 'prod_b']);
+  });
+
+  it('un total que no entra en Decimal(10,2) da 400 claro y no crea nada', async () => {
+    mock(prisma.product.findMany).mockResolvedValue([{ id: 'prod_a', price: 99_999_999, name: 'A', businessId: 'biz_1' }]);
+    const res = await request(app).post('/api/orders').send({ items: [{ productId: 'prod_a', quantity: 2 }], paymentMethod: 'CASH' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/máximo permitido/);
+    expect(prisma.order.create).not.toHaveBeenCalled();
+    expect(prisma.transaction.create).not.toHaveBeenCalled();
+  });
+
+  it('rechaza notas de más de 2000 caracteres al crear', async () => {
+    const res = await request(app).post('/api/orders').send({
+      items: [{ productId: 'prod_a', quantity: 1 }], paymentMethod: 'CASH', notes: 'a'.repeat(2001),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  describe('misma Idempotency-Key con otro contenido', () => {
+    const replay = (body: object) => {
+      mock(prisma.connection.findFirst).mockResolvedValue({ config: { key: 'k1', entityId: 'order_1' } });
+      mock(prisma.order.findFirst).mockResolvedValue({
+        id: 'order_1', totalPrice: 300, clientId: 'user_1', items: [{ productId: 'prod_a', quantity: 1 }, { productId: 'prod_b', quantity: 1 }],
+      });
+      return request(app).post('/api/orders').set('Idempotency-Key', 'k1').send(body);
+    };
+    const same = { items: [{ productId: 'prod_b', quantity: 1 }, { productId: 'prod_a', quantity: 1 }], paymentMethod: 'CASH' };
+
+    it('mismo contenido (aunque en otro orden de líneas) es un replay 200', async () => {
+      const res = await replay(same);
+      expect(res.status).toBe(200);
+      expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('otras cantidades devuelven 409 y no crean nada', async () => {
+      const res = await replay({ ...same, items: [{ productId: 'prod_a', quantity: 5 }, { productId: 'prod_b', quantity: 1 }] });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/Idempotency-Key/);
+      expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('otros productos devuelven 409', async () => {
+      const res = await replay({ ...same, items: [{ productId: 'prod_z', quantity: 1 }] });
+      expect(res.status).toBe(409);
+    });
+
+    it('otro método de pago devuelve 409', async () => {
+      const res = await replay({ ...same, paymentMethod: 'CARD' });
+      expect(res.status).toBe(409);
+    });
   });
 });
 
