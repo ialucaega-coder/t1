@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/api/http-client', () => ({ httpClient: { get: vi.fn() } }));
 
 import {
-  rangeParams, rangeQuery, rangeKey, validateCustomRange, inclusiveDays, MAX_RANGE_DAYS,
+  rangeParams, rangeQuery, rangeKey, validateCustomRange, inclusiveDays, MAX_RANGE_DAYS, todayArgentinaKey,
 } from '@/lib/date-range';
 import { httpClient } from '@/lib/api/http-client';
 import * as analyticsApi from '@/lib/api/analytics';
@@ -57,5 +57,22 @@ describe('lib/date-range', () => {
       '/stats/weekly?days=90',
       '/stats/top-services',
     ]);
+  });
+});
+
+describe('lib/date-range: todayArgentinaKey', () => {
+  it('a las 22:00 AR (01:00Z del día siguiente) sigue siendo el día de Argentina, no el de UTC', () => {
+    const now = new Date('2026-11-17T01:00:00Z'); // 22:00 del 16/11 en Argentina
+    expect(now.toISOString().split('T')[0]).toBe('2026-11-17'); // el viejo cálculo UTC
+    expect(todayArgentinaKey(now)).toBe('2026-11-16');
+  });
+
+  it('pasa al día siguiente recién a las 00:00 AR (03:00Z)', () => {
+    expect(todayArgentinaKey(new Date('2026-11-17T02:59:59Z'))).toBe('2026-11-16');
+    expect(todayArgentinaKey(new Date('2026-11-17T03:00:00Z'))).toBe('2026-11-17');
+  });
+
+  it('a mediodía coincide con la fecha UTC', () => {
+    expect(todayArgentinaKey(new Date('2026-11-16T15:00:00Z'))).toBe('2026-11-16');
   });
 });

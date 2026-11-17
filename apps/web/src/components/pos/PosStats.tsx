@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { httpClient } from '@/lib/api/http-client';
+import { todayArgentinaKey } from '@/lib/date-range';
 import {
   DollarSign, ShoppingCart, TrendingUp, Users,
   Banknote, CreditCard, ArrowRightLeft, QrCode,
@@ -46,8 +47,9 @@ export function PosStats() {
   async function loadStats() {
     setLoading(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&pageSize=500`);
+      // Día de hoy en hora argentina (no UTC): de 21:00 a 24:00 AR el UTC ya es "mañana".
+      const today = todayArgentinaKey();
+      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&to=${today}&pageSize=500`);
       const txs: TransactionRecord[] = res.data || [];
 
       const byMethod: Record<string, { count: number; total: number }> = {};

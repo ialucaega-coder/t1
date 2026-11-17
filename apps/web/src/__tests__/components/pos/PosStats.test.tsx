@@ -26,6 +26,17 @@ const tx = (over: Record<string, unknown>) => ({
 beforeEach(() => vi.clearAllMocks());
 
 describe('components/pos/PosStats', () => {
+  it('pide las ventas del día argentino (22:00 AR = 01:00Z del día siguiente) con from y to', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T01:00:00Z'));
+    get.mockResolvedValue({ data: [] });
+    render(<PosStats />);
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    const url = get.mock.calls[0][0] as string;
+    expect(url).toContain('from=2026-11-16&to=2026-11-16');
+    expect(url).not.toContain('2026-11-17');
+  });
+
   it('agrega KPIs y totales por método a partir de las transacciones', async () => {
     get.mockResolvedValue({
       data: [

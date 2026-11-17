@@ -57,6 +57,24 @@ export function todayLocalKey(now: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Zona horaria del negocio (Argentina: UTC-3 fijo, sin horario de verano). Igual a ANALYTICS_TZ del server. */
+export const BUSINESS_TZ = 'America/Argentina/Buenos_Aires';
+
+/**
+ * Fecha `YYYY-MM-DD` de un instante en hora de Argentina, sin depender de la zona
+ * del navegador ni del servidor. A las 22:00 AR (01:00Z del día siguiente)
+ * `toISOString()` daría la fecha de mañana; esto da la de hoy. Es la que espera la
+ * API para `from`/`to` (el server las interpreta como días argentinos).
+ */
+export function todayArgentinaKey(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
 /** Días entre dos fechas `YYYY-MM-DD`, ambas incluidas. */
 export function inclusiveDays(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;

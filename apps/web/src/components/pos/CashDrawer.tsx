@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { httpClient } from '@/lib/api/http-client';
+import { todayArgentinaKey } from '@/lib/date-range';
 import {
   Wallet, Lock, Unlock, Clock, AlertTriangle,
   Plus, Minus, DollarSign, Calculator,
@@ -61,8 +62,9 @@ export function CashDrawer() {
 
   async function loadMovements() {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&pageSize=100`);
+      // Día de hoy en hora argentina (no UTC): de 21:00 a 24:00 AR el UTC ya es "mañana".
+      const today = todayArgentinaKey();
+      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&to=${today}&pageSize=100`);
       const txs: CashMovement[] = (res.data || []).map((t: TransactionRecord) => ({
         id: t.id,
         type: (t.type === 'SALE' ? 'SALE' : (t.notes?.includes('Retiro') ? 'WITHDRAWAL' : t.notes?.includes('Ingreso') ? 'DEPOSIT' : 'SALE')) as CashMovement['type'],
