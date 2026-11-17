@@ -7,6 +7,7 @@
  * Marca. Usamos un mensaje con intención CATALOG para evitar la llamada a la IA.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
@@ -783,8 +784,19 @@ describe('services/chatbot — altas de conversación sin duplicados (advisory l
     // findFirst: busca en el "DB" en memoria por contacto (y devuelve null si no hay).
     mock(prisma.conversation.findFirst).mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
       await new Promise((r) => setTimeout(r, 2)); // ventana de carrera entre lookup y alta
-      return store.find((c) => c.businessId === where.businessId && (where.contactPhone === undefined || c.contactPhone === where.contactPhone)
-        && (where.metadata === undefined || (c.metadata as { subscriberId?: string } | undefined)?.subscriberId === (where.metadata as { equals: string }).equals)) ?? null;
+      // Aplana where + AND[...] en una sola lista de condiciones.
+      const conds = [where, ...(((where.AND as Record<string, unknown>[]) ?? []))];
+      const get = (k: string) => conds.map((c) => c[k]).find((v) => v !== undefined);
+      const metaFilters = conds.map((c) => c.metadata as { path: string[]; equals: unknown } | undefined).filter(Boolean) as { path: string[]; equals: unknown }[];
+      return store.find((c) => {
+        if (c.businessId !== get('businessId')) return false;
+        if (get('contactPhone') !== undefined && c.contactPhone !== get('contactPhone')) return false;
+        const meta = (c.metadata ?? {}) as Record<string, unknown>;
+        return metaFilters.every((f) => {
+          const v = meta[f.path[0]];
+          return f.equals === Prisma.AnyNull ? v === undefined : v === f.equals;
+        });
+      }) ?? null;
     });
     mock(prisma.conversation.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
       await new Promise((r) => setTimeout(r, 2));
@@ -823,7 +835,56 @@ describe('services/chatbot — altas de conversación sin duplicados (advisory l
     expect(String(key)).toContain('conv-create:WHATSAPP:phone:+549111');
     expect(String(key)).toContain('biz_1');
     const where = mock(prisma.conversation.findFirst).mock.calls[0][0].where;
-    expect(where).toMatchObject({ businessId: 'biz_1', contactPhone: '+549111', status: { in: ['OPEN', 'HANDOFF'] } });
+    expect(where).toMatchObject({ businessId: 'biz_1', status: { in: ['OPEN', 'HANDOFF'] } });
+    expect(where.AND).toContainEqual({ contactPhone: '+549111' });
+  });
+
+  describe('no se mezclan canales que comparten el enum WEBCHAT (VOICE / MESSENGER / WEB)', () => {
+    const phone = '+549333';
+
+    it('una llamada (VOICE) NO se cuelga de una conversación WEBCHAT abierta del mismo teléfono', async () => {
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_1', contactPhone: phone });
+      const voice = await processMessage('biz_1', 'hola, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', contactPhone: phone });
+
+      expect(store).toHaveLength(2);
+      expect(store[1]).toMatchObject({ metadata: { realChannel: 'VOICE' } });
+      expect(voice.conversationId).toBe(store[1].id);
+    });
+
+    it('un chat WEB NO se cuelga de una conversación de VOZ abierta del mismo teléfono (sentido inverso)', async () => {
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', contactPhone: phone });
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_1', contactPhone: phone });
+
+      expect(store).toHaveLength(2);
+      expect(store[1].metadata).toBeUndefined();
+    });
+
+    it('MESSENGER y VOICE tampoco se mezclan entre sí', async () => {
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'MESSENGER', { botId: 'bot_1', contactPhone: phone });
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', contactPhone: phone });
+
+      expect(store.map((c) => (c.metadata as { realChannel?: string }).realChannel)).toEqual(['MESSENGER', 'VOICE']);
+    });
+
+    it('el mismo canal SÍ se reutiliza: dos llamadas simultáneas del mismo teléfono quedan en una conversación', async () => {
+      const [a, b] = await Promise.all([
+        processMessage('biz_1', 'hola, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', contactPhone: phone }),
+        processMessage('biz_1', 'sigo acá, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', contactPhone: phone }),
+      ]);
+
+      expect(store).toHaveLength(1);
+      expect(a.conversationId).toBe(b.conversationId);
+    });
+
+    it('el filtro de realChannel viaja DENTRO del lock: VOICE exige el valor, WEB exige que esté ausente', async () => {
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', contactPhone: phone });
+      await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_1', contactPhone: '+549444' });
+
+      const voiceWhere = mock(prisma.conversation.findFirst).mock.calls[0][0].where;
+      const webWhere = mock(prisma.conversation.findFirst).mock.calls[1][0].where;
+      expect(voiceWhere.AND).toContainEqual({ metadata: { path: ['realChannel'], equals: 'VOICE' } });
+      expect(webWhere.AND).toContainEqual({ metadata: { path: ['realChannel'], equals: Prisma.AnyNull } });
+    });
   });
 
   it('contactos distintos NO se bloquean entre sí: crean una conversación cada uno', async () => {

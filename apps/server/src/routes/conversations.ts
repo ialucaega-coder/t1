@@ -514,7 +514,11 @@ router.post(
 
     // Tope de intentos: evita que un cliente que no responde (o un loop) dispare
     // envíos reales sin fin. El primer envío cuenta como intento 1.
-    const attemptsSoFar = typeof prev.deliveryAttempts === 'number' ? prev.deliveryAttempts : 1;
+    // Mensajes viejos sin `deliveryAttempts`: cuentan como 1 intento hecho (el
+    // original) para el tope y el contador, pero el CLAIM exige que la clave siga
+    // AUSENTE (no que valga 1), si no un mensaje viejo daba siempre 409.
+    const hasAttemptsKey = typeof prev.deliveryAttempts === 'number';
+    const attemptsSoFar = hasAttemptsKey ? (prev.deliveryAttempts as number) : 1;
     if (attemptsSoFar >= MAX_DELIVERY_ATTEMPTS) {
       return res.status(409).json({
         error: `Ya se intentó enviar este mensaje ${attemptsSoFar} veces. Revisá la conexión del canal o escribilo de nuevo como un mensaje nuevo.`,
@@ -542,7 +546,7 @@ router.post(
         conversationId: conversation.id,
         AND: [
           { metadata: { path: ['deliveryStatus'], equals: retryFrom } },
-          { metadata: { path: ['deliveryAttempts'], equals: attemptsSoFar } },
+          { metadata: { path: ['deliveryAttempts'], equals: hasAttemptsKey ? attemptsSoFar : Prisma.AnyNull } },
           ...(prev.deliveryStartedAt ? [{ metadata: { path: ['deliveryStartedAt'], equals: prev.deliveryStartedAt } }] : []),
         ],
       },

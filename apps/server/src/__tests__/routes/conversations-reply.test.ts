@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
+import { Prisma } from '@prisma/client';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
@@ -647,6 +648,21 @@ describe('atención: /take, /close y reintentos (estados atómicos)', () => {
 
       expect([a.status, b.status].sort()).toEqual([200, 409]);
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    });
+
+    it('un mensaje VIEJO sin deliveryAttempts se puede reintentar: el claim exige la clave ausente (no == 1) y cuenta como 1 intento', async () => {
+      const old = new Date(Date.now() - 120_000).toISOString();
+      const msg = humanMsg({ deliveryStatus: 'failed', deliveryStartedAt: old });
+      delete (msg.metadata as Record<string, unknown>).deliveryAttempts;
+      m(prisma.message.findFirst).mockResolvedValue(msg);
+
+      const res = await post('/api/conversations/c1/reply/m1/retry');
+
+      expect(res.status).toBe(200);
+      const and = m(prisma.message.updateMany).mock.calls[0][0].where.AND;
+      expect(and).toContainEqual({ metadata: { path: ['deliveryAttempts'], equals: Prisma.AnyNull } });
+      expect(and).not.toContainEqual({ metadata: { path: ['deliveryAttempts'], equals: 1 } });
+      expect(m(prisma.message.update).mock.calls[0][0].data.metadata).toMatchObject({ deliveryAttempts: 2 });
     });
 
     it('un pending reciente (< 60 s) todavía se está enviando: 409 y no reenvía', async () => {

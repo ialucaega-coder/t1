@@ -8,6 +8,9 @@ import {
 } from './keyboards';
 import type { Context } from 'grammy';
 import { sharedGet, sharedSet, sharedDel } from '../../lib/sharedState';
+import { createBooking } from '../bookings/create';
+import { HH_MM_REGEX, computeEndTime, minutesToTime, overlaps, timeToMinutes } from '../bookings/time';
+import { AppError } from '../../middleware/errorHandler';
 
 // ────────────────────────────────────────────────────────────────
 // Estado conversacional para el flujo de reserva por Telegram.
@@ -26,6 +29,8 @@ export interface BookingState {
   professionalName?: string;
   date?: string;       // YYYY-MM-DD
   startTime?: string;  // HH:mm
+  /** Horarios (HH:mm) que se le ofrecieron al cliente: el callback `time:` solo vale si está acá. */
+  slots?: string[];
 }
 
 // Estado por chat en el almacén compartido (Redis si hay REDIS_URL, memoria si no).
@@ -211,10 +216,20 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   const state = await getState(ctx);
   if (!state || !state.professionalId || !state.serviceId) return;
 
+  // El `dateStr` viene del callback_data (lo controla quien manda el update): se
+  // valida el formato y que sea una fecha real antes de usarlo.
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? new Date(dateStr) : null;
+  if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== dateStr) {
+    await ctx.reply('⚠️ Esa fecha no es válida. Elegí una del listado:', { reply_markup: dateKeyboard() });
+    return;
+  }
   state.date = dateStr;
 
-  const selectedDate = new Date(dateStr + 'T00:00:00');
-  const dayOfWeek = selectedDate.getDay(); // 0=Dom, 1=Lun, ...
+  // La fecha es un día de calendario (sin hora): se interpreta en UTC, igual que al
+  // guardar la reserva (`createBooking`), para que el día de la semana, la
+  // disponibilidad y el alta hablen del MISMO día sin depender de la zona del server.
+  const selectedDate = parsedDate;
+  const dayOfWeek = selectedDate.getUTCDay(); // 0=Dom, 1=Lun, ...
 
   // Obtener horarios del profesional para ese día
   const schedules = await prisma.schedule.findMany({
@@ -237,11 +252,15 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   if (!service) return;
 
   // Obtener reservas existentes para ese día y profesional
+  // Mismo criterio que el alta (`createBooking`): del negocio y todo lo que no esté
+  // CANCELADO ocupa el horario (también COMPLETED / NO_SHOW), así no se ofrece un
+  // slot que después el alta rechazaría.
   const existingBookings = await prisma.booking.findMany({
     where: {
+      businessId: state.businessId,
       professionalId: state.professionalId,
       date: selectedDate,
-      status: { in: ['PENDING', 'CONFIRMED'] },
+      status: { notIn: ['CANCELLED'] },
     },
     select: { startTime: true, endTime: true },
   });
@@ -249,28 +268,24 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   // Generar slots disponibles
   const slots: string[] = [];
   for (const sched of schedules) {
-    const [startH, startM] = sched.startTime.split(':').map(Number);
-    const [endH, endM] = sched.endTime.split(':').map(Number);
-    const schedStart = startH * 60 + startM;
-    const schedEnd = endH * 60 + endM;
+    const schedStart = timeToMinutes(sched.startTime);
+    const schedEnd = timeToMinutes(sched.endTime);
+    if (Number.isNaN(schedStart) || Number.isNaN(schedEnd)) continue; // horario mal cargado: se ignora
 
     for (let mins = schedStart; mins + service.duration <= schedEnd; mins += 30) {
-      const slotStart = `${Math.floor(mins / 60).toString().padStart(2, '0')}:${(mins % 60).toString().padStart(2, '0')}`;
-      const slotEndMins = mins + service.duration;
-      const slotEnd = `${Math.floor(slotEndMins / 60).toString().padStart(2, '0')}:${(slotEndMins % 60).toString().padStart(2, '0')}`;
+      const slotStart = minutesToTime(mins);
+      let slotEnd: string;
+      try {
+        slotEnd = computeEndTime(slotStart, service.duration); // valida HH:mm y que no cruce la medianoche
+      } catch {
+        continue;
+      }
 
-      // Verificar que no colisione con reservas existentes
-      const hasConflict = existingBookings.some((b) => {
-        const [bsH, bsM] = b.startTime.split(':').map(Number);
-        const [beH, beM] = b.endTime.split(':').map(Number);
-        const bStart = bsH * 60 + bsM;
-        const bEnd = beH * 60 + beM;
-        const sStart = mins;
-        const sEnd = slotEndMins;
-        return sStart < bEnd && sEnd > bStart;
-      });
+      // Verificar que no colisione con reservas existentes (comparación en MINUTOS,
+      // no de strings: '9:00' < '10:00' falla como texto).
+      const hasConflict = existingBookings.some((b) => overlaps({ startTime: slotStart, endTime: slotEnd }, b));
 
-      if (!hasConflict) {
+      if (!hasConflict && !slots.includes(slotStart)) {
         slots.push(slotStart);
       }
     }
@@ -283,6 +298,7 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   }
 
   state.step = 'select_time';
+  state.slots = slots;
   await setState(ctx, state);
 
   await ctx.reply('🕐 Elegí un horario:', {
@@ -298,6 +314,13 @@ export async function handleTimeSelected(ctx: Context, time: string): Promise<vo
   const chatId = ctx.chat!.id;
   const state = await getState(ctx);
   if (!state) return;
+
+  // `time` viene del callback_data (lo controla quien manda el update): tiene que
+  // ser HH:mm válido Y uno de los horarios que se le ofrecieron a este chat.
+  if (!HH_MM_REGEX.test(time) || !state.slots?.includes(time)) {
+    await ctx.reply('⚠️ Ese horario no está disponible. Elegí uno del listado o empezá de nuevo con /reservar');
+    return;
+  }
 
   state.startTime = time;
   state.step = 'confirm';
@@ -345,18 +368,6 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
   }
 
   try {
-    const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId, deletedAt: null } });
-    if (!service) {
-      await ctx.reply('⚠️ Servicio no encontrado.');
-      await clearState(ctx);
-      return;
-    }
-
-    // Calcular hora de fin
-    const [h, m] = state.startTime.split(':').map(Number);
-    const endMins = h * 60 + m + service.duration;
-    const endTime = `${Math.floor(endMins / 60).toString().padStart(2, '0')}:${(endMins % 60).toString().padStart(2, '0')}`;
-
     // Buscar o crear usuario-cliente para este chat de Telegram
     const telegramUser = ctx.from;
     const clientName = telegramUser
@@ -382,51 +393,39 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
       });
     }
 
-    // Reserva atómica: mismo patrón que el chat web. Tomamos un advisory lock
-    // transaccional por (negocio, profesional, día) y re-chequeamos el solape
-    // DENTRO de la transacción, con el lock tomado. Sin esto, dos reservas
-    // concurrentes del mismo recurso (ej: dos chats confirmando a la vez) podían
-    // crear un doble booking porque no hay @@unique en el schema (congelado).
-    // pg_advisory_xact_lock se libera solo al commit/rollback.
-    // Valores ya garantizados no-nulos por el guard de arriba; los capturamos en
-    // locales porque el narrowing de TS no sobrevive dentro del closure de la tx.
-    const { businessId, serviceId, professionalId, date, startTime } = state;
-    const lockKey = `booking:${businessId}:${professionalId}:${date}`;
-    const booking = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-
-      const sameDayBookings = await tx.booking.findMany({
-        where: {
-          businessId,
-          date: new Date(date),
-          status: { notIn: ['CANCELLED'] },
-          professionalId,
-        },
-        select: { startTime: true, endTime: true },
-      });
-      const overlaps = sameDayBookings.some((b) => startTime < b.endTime && endTime > b.startTime);
-      if (overlaps) return null;
-
-      return tx.booking.create({
-        data: {
-          date: new Date(date),
-          startTime,
-          endTime,
-          totalPrice: service.price,
+    // El alta usa el MISMO motor que el panel y las automatizaciones
+    // (`services/bookings/create`): valida servicio / cliente / profesional del
+    // negocio, calcula el fin con `computeEndTime` (HH:mm estricto, sin cruzar la
+    // medianoche), y crea con advisory lock por (negocio, profesional, día) +
+    // re-chequeo de solape en MINUTOS dentro de la transacción. `actingUserId`
+    // vacío fuerza validar que el cliente sea del negocio.
+    let booking;
+    try {
+      booking = await createBooking(
+        state.businessId,
+        {
+          serviceId: state.serviceId,
+          date: state.date,
+          startTime: state.startTime,
+          professionalId: state.professionalId,
+          clientId: client.id,
           source: 'TELEGRAM',
           notes: `Reserva desde Telegram — @${telegramUser?.username || chatId}`,
-          clientId: client.id,
-          professionalId,
-          serviceId,
-          businessId,
         },
-      });
-    });
-
-    if (!booking) {
-      await clearState(ctx);
-      await ctx.reply('⚠️ Ese horario se acaba de ocupar. Empezá de nuevo con /reservar y elegí otro.');
-      return;
+        '',
+      );
+    } catch (err) {
+      if (err instanceof AppError && err.statusCode === 409) {
+        await clearState(ctx);
+        await ctx.reply('⚠️ Ese horario se acaba de ocupar. Empezá de nuevo con /reservar y elegí otro.');
+        return;
+      }
+      if (err instanceof AppError && (err.statusCode === 400 || err.statusCode === 404)) {
+        await clearState(ctx);
+        await ctx.reply('⚠️ No se pudo crear la reserva con esos datos. Empezá de nuevo con /reservar');
+        return;
+      }
+      throw err;
     }
 
     await clearState(ctx);

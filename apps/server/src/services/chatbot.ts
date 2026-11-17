@@ -922,15 +922,25 @@ async function getOrCreateConversation(
   // y se re-busca ADENTRO con el lock tomado (patrón de lib/singletonLock).
   return prisma.$transaction(async (tx) => {
     await lockSingleton(tx, businessId, `conv-create:${channelMap[channel]}:${contactKey}`);
+    // VOICE, MESSENGER y WEB comparten el enum WEBCHAT: lo que los distingue es
+    // `metadata.realChannel`. Se exige que coincida (o que esté AUSENTE para WEB), si
+    // no una llamada se colgaba de una conversación de chat/Messenger abierta del
+    // mismo teléfono y viceversa.
+    const realChannelFilter: Prisma.ConversationWhereInput = realChannel
+      ? { metadata: { path: ['realChannel'], equals: realChannel } }
+      : { metadata: { path: ['realChannel'], equals: Prisma.AnyNull } };
     const dup = await tx.conversation.findFirst({
       where: {
         businessId,
         channel: channelMap[channel] as any,
         status: { in: ['OPEN', 'HANDOFF'] },
         ...(options.botId ? { botId: options.botId } : {}),
-        ...(options.contactPhone
-          ? { contactPhone: options.contactPhone }
-          : { metadata: { path: ['subscriberId'], equals: options.subscriberId } }),
+        AND: [
+          options.contactPhone
+            ? { contactPhone: options.contactPhone }
+            : { metadata: { path: ['subscriberId'], equals: options.subscriberId } },
+          realChannelFilter,
+        ],
       },
       orderBy: { updatedAt: 'desc' },
     });

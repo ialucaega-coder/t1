@@ -53,6 +53,7 @@ async function seed(step: string) {
     professionalName: 'Pro',
     date: '2030-05-01',
     startTime: '10:00',
+    slots: ['10:00'],
   } as never);
 }
 
@@ -91,13 +92,12 @@ describe('telegram: servicios dados de baja', () => {
   });
 
   it('confirmar: con el servicio dado de baja no crea la reserva', async () => {
+    // La alta pasa por el motor compartido (createBooking): un servicio inexistente o dado de baja da 404.
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'u1' });
     await seed('confirm');
     const ctx = buildCtx();
     await handleConfirmation(ctx, true);
-    expect(prisma.service.findFirst).toHaveBeenCalledWith({
-      where: { id: 's_borrado', businessId: 'biz_1', deletedAt: null },
-    });
     expect(prisma.booking.create).not.toHaveBeenCalled();
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Servicio no encontrado'));
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('No se pudo crear la reserva'));
   });
 });
