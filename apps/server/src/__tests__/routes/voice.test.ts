@@ -254,6 +254,46 @@ describe('routes/voice', () => {
       expect(twiml.hangup).toHaveBeenCalled();
     });
 
+    it('la búsqueda de conversación filtra por canal VOICE (metadata.realChannel) y número', async () => {
+      (resolveBusinessByNumber as ReturnType<typeof vi.fn>).mockResolvedValue('biz_1');
+      (loadVoiceSettings as ReturnType<typeof vi.fn>).mockResolvedValue(CFG);
+      (prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c_voz' });
+      (processMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ text: 'ok', actions: [] });
+
+      await request(app)
+        .post('/api/voice/respond')
+        .type('form')
+        .send({ To: '+5491100000000', From: '+5491111111111', SpeechResult: 'hola' });
+
+      expect((prisma.conversation.findFirst as ReturnType<typeof vi.fn>).mock.calls[0][0].where).toMatchObject({
+        businessId: 'biz_1',
+        contactPhone: '+5491111111111',
+        metadata: { path: ['realChannel'], equals: 'VOICE' },
+      });
+      expect(processMessage).toHaveBeenCalledWith('biz_1', 'hola', 'VOICE', expect.objectContaining({ conversationId: 'c_voz' }));
+    });
+
+    it.each(['', 'anonymous', 'restricted', '+266696687', '+86282452253'])(
+      'con From %j (vacío/anónimo) NO reusa conversaciones: arranca una nueva sin historial de otro llamante',
+      async (from) => {
+        (resolveBusinessByNumber as ReturnType<typeof vi.fn>).mockResolvedValue('biz_1');
+        (loadVoiceSettings as ReturnType<typeof vi.fn>).mockResolvedValue(CFG);
+        (processMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ text: 'ok', actions: [] });
+
+        await request(app)
+          .post('/api/voice/respond')
+          .type('form')
+          .send({ To: '+5491100000000', From: from, CallSid: 'CA123', SpeechResult: 'hola' });
+
+        expect(prisma.conversation.findFirst).not.toHaveBeenCalled();
+        const opts = (processMessage as ReturnType<typeof vi.fn>).mock.calls[0][3];
+        expect(opts.conversationId).toBeUndefined();
+        // Sin teléfono compartido; la continuidad dentro de la misma llamada va por CallSid.
+        expect(opts.contactPhone).toBeUndefined();
+        expect(opts.subscriberId).toBe('voice-call:CA123');
+      }
+    );
+
     it('repregunta cuando no hubo transcripción (SpeechResult vacío)', async () => {
       (resolveBusinessByNumber as ReturnType<typeof vi.fn>).mockResolvedValue('biz_1');
 

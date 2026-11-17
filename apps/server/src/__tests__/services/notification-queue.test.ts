@@ -125,6 +125,41 @@ describe('cola notification-send: handler', () => {
     expect(mock(prisma.notification.create).mock.calls[0][0].data).toMatchObject({ type: 'ORDER_STATUS', userId: 'c1' });
   });
 
+  it('order-status avisa el estado del JOB aunque el pedido ya haya avanzado (no el actual)', async () => {
+    // El pedido ya está ENTREGADO, pero este job es el aviso de CONFIRMADO.
+    mock(prisma.order.findFirst).mockResolvedValue({ ...orderRow, status: 'DELIVERED' });
+
+    await processNotificationJob({ event: 'order-status', id: 'o1', businessId: 'biz_1', status: 'CONFIRMED' });
+
+    expect(mock(prisma.notification.create).mock.calls[0][0].data).toMatchObject({ title: 'Pedido confirmado' });
+  });
+
+  it('order-status sin status en el job cae al estado actual del pedido', async () => {
+    mock(prisma.order.findFirst).mockResolvedValue({ ...orderRow, status: 'READY' });
+
+    await processNotificationJob({ event: 'order-status', id: 'o1', businessId: 'biz_1' });
+
+    expect(mock(prisma.notification.create).mock.calls[0][0].data).toMatchObject({ title: 'Pedido listo para retirar' });
+  });
+
+  it('booking-confirmed se descarta si la reserva ya está cancelada (no dice "confirmada")', async () => {
+    mock(prisma.booking.findFirst).mockResolvedValue({ ...bookingRow, status: 'CANCELLED' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(processNotificationJob({ event: 'booking-confirmed', id: 'b1', businessId: 'biz_1' })).resolves.toBeUndefined();
+
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('booking-confirmed sigue avisando cuando la reserva está confirmada', async () => {
+    mock(prisma.booking.findFirst).mockResolvedValue({ ...bookingRow, status: 'CONFIRMED' });
+
+    await processNotificationJob({ event: 'booking-confirmed', id: 'b1', businessId: 'biz_1' });
+
+    expect(mock(prisma.notification.create).mock.calls[0][0].data).toMatchObject({ type: 'BOOKING_CONFIRMED' });
+  });
+
   it('si la DB falla LANZA, así la cola reintenta', async () => {
     mock(prisma.booking.findFirst).mockRejectedValue(new Error('db caída'));
 

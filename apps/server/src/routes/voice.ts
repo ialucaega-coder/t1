@@ -37,6 +37,16 @@ import {
 } from '../services/voice/config';
 import { requireAuth, requireRole } from '../middleware/auth';
 
+/** Valores que Twilio manda en From cuando el llamante oculta o no tiene número (dígitos). */
+const TWILIO_ANONYMOUS_NUMBERS = new Set(['266696687', '86282452253', '464', '7378742833', '2442', '3466', '559']);
+
+/** ¿El From identifica a un llamante real? Vacío, 'anonymous'/'restricted'/'unknown' y los números reservados de Twilio no. */
+export function isIdentifiableCaller(from: string): boolean {
+  const digits = from.replace(/\D/g, '');
+  if (!digits) return false;
+  return !TWILIO_ANONYMOUS_NUMBERS.has(digits);
+}
+
 const router = Router();
 
 // Twilio postea formularios url-encoded.
@@ -216,11 +226,26 @@ router.post(
     }
 
     // Reutilizamos la conversación de voz abierta con este número (continuidad
-    // entre turnos de la misma llamada / llamadas recientes).
-    const existing = await prisma.conversation.findFirst({
-      where: { businessId, contactPhone: from, status: { in: ['OPEN', 'HANDOFF'] } },
-      orderBy: { updatedAt: 'desc' },
-    });
+    // entre turnos de la misma llamada / llamadas recientes). Solo conversaciones
+    // del canal VOICE (metadata.realChannel: se persisten como WEBCHAT) y solo si
+    // el número es identificable: con From vacío o anónimo (Twilio manda
+    // 'anonymous', '+266696687', etc.) TODOS los anónimos compartirían el mismo
+    // "número" y un llamante vería el historial de otro. En ese caso arranca una
+    // conversación nueva, y la continuidad dentro de la misma llamada se hace por
+    // CallSid (subscriberId), sin historial de otros.
+    const identifiable = isIdentifiableCaller(from);
+    const callSid: string = (req.body.CallSid || '').toString().trim();
+    const existing = identifiable
+      ? await prisma.conversation.findFirst({
+          where: {
+            businessId,
+            contactPhone: from,
+            status: { in: ['OPEN', 'HANDOFF'] },
+            metadata: { path: ['realChannel'], equals: 'VOICE' },
+          },
+          orderBy: { updatedAt: 'desc' },
+        })
+      : null;
 
     let responseText = 'Disculpá, tuve un inconveniente. ¿Podés repetirlo?';
     let escalate = false;
@@ -228,7 +253,7 @@ router.post(
     try {
       const result = await processMessage(businessId, speech, 'VOICE', {
         conversationId: existing?.id,
-        contactPhone: from,
+        ...(identifiable ? { contactPhone: from } : callSid ? { subscriberId: `voice-call:${callSid}` } : {}),
         systemPromptExtra: cfg.persona,
       });
       // Con un humano a cargo el aviso se throttlea (puede venir vacío): en una

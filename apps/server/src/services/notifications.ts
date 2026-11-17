@@ -257,7 +257,15 @@ export async function processNotificationJob(job: NotificationJob): Promise<void
       return;
     }
     if (job.event === 'booking-created') await sendBookingCreated(booking);
-    else if (job.event === 'booking-confirmed') await sendBookingConfirmed(booking);
+    else if (job.event === 'booking-confirmed') {
+      // El aviso se manda un rato después de encolarlo: si mientras tanto la reserva
+      // se canceló, decir "confirmada" sería falso. Se relee el estado y se descarta.
+      if (booking.status === 'CANCELLED') {
+        console.warn('[Notifications] La reserva ya está cancelada; se descarta el aviso de confirmación.', { id: job.id });
+        return;
+      }
+      await sendBookingConfirmed(booking);
+    }
     else await sendBookingCancelled(booking);
     return;
   }
@@ -271,7 +279,12 @@ export async function processNotificationJob(job: NotificationJob): Promise<void
     return;
   }
   if (job.event === 'order-created') await sendOrderCreated(order);
-  else await sendOrderStatusUpdate(order);
+  else {
+    // Se notifica el estado del EVENTO (job.status), no el actual del pedido: si el
+    // pedido avanzó (CONFIRMED -> DELIVERED) antes de procesar el job, cada aviso
+    // debe decir el estado que lo originó (el jobId ya es idempotente por estado).
+    await sendOrderStatusUpdate({ ...order, status: job.status ?? order.status });
+  }
 }
 
 defineQueue<NotificationJob>(NOTIFICATION_QUEUE, processNotificationJob, { concurrency: 5 });
