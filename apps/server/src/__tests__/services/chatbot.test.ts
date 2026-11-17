@@ -12,10 +12,12 @@ vi.mock('../../lib/prisma', () => ({
   prisma: {
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
+    $executeRaw: vi.fn(),
     conversation: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     bot: { findFirst: vi.fn(), create: vi.fn() },
     message: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
     service: { findMany: vi.fn() },
+    professional: { count: vi.fn() },
     product: { findMany: vi.fn() },
     skill: { findMany: vi.fn() },
     user: { findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
@@ -757,5 +759,151 @@ describe('services/chatbot — robustez entre guardar el USER y el BOT', () => {
       expect(res.botPaused).toBe(true);
       expect(botMessages()).toHaveLength(0);
     });
+  });
+});
+
+
+describe('services/chatbot — altas de conversación sin duplicados (advisory lock)', () => {
+  const store: Array<Record<string, unknown>> = [];
+  let lockTail: Promise<void> = Promise.resolve();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store.length = 0;
+    lockTail = Promise.resolve();
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    // $transaction emula el advisory lock: serializa las transacciones (una por vez).
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => {
+      const run = lockTail.then(() => cb(prisma));
+      lockTail = run.then(() => undefined, () => undefined);
+      return run;
+    });
+    mock(prisma.$executeRaw).mockResolvedValue(1);
+    mock(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+    // findFirst: busca en el "DB" en memoria por contacto (y devuelve null si no hay).
+    mock(prisma.conversation.findFirst).mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
+      await new Promise((r) => setTimeout(r, 2)); // ventana de carrera entre lookup y alta
+      return store.find((c) => c.businessId === where.businessId && (where.contactPhone === undefined || c.contactPhone === where.contactPhone)
+        && (where.metadata === undefined || (c.metadata as { subscriberId?: string } | undefined)?.subscriberId === (where.metadata as { equals: string }).equals)) ?? null;
+    });
+    mock(prisma.conversation.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      await new Promise((r) => setTimeout(r, 2));
+      const row = { id: `c_${store.length + 1}`, status: 'OPEN', ...data };
+      store.push(row);
+      return row;
+    });
+    mock(prisma.conversation.findUnique).mockImplementation(async ({ where }: { where: { id: string } }) => store.find((c) => c.id === where.id) ?? null);
+    mock(prisma.conversation.update).mockResolvedValue({});
+    mock(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'm', ...data }));
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse: vi.fn().mockResolvedValue('respuesta del bot') });
+  });
+
+  it('dos primeros mensajes simultáneos del mismo contacto crean UNA sola conversación', async () => {
+    const opts = { botId: 'bot_1', contactPhone: '+549111' };
+
+    const [a, b] = await Promise.all([
+      processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', opts),
+      processMessage('biz_1', 'hola de nuevo, ¿tienen novedades?', 'WHATSAPP', opts),
+    ]);
+
+    expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+    expect(store).toHaveLength(1);
+    expect(a.conversationId).toBe(b.conversationId);
+  });
+
+  it('el alta toma un advisory lock por (negocio, canal, contacto) y re-busca adentro', async () => {
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { botId: 'bot_1', contactPhone: '+549111' });
+
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+    const [, key] = mock(prisma.$executeRaw).mock.calls[0];
+    expect(String(key)).toContain('conv-create:WHATSAPP:phone:+549111');
+    expect(String(key)).toContain('biz_1');
+    const where = mock(prisma.conversation.findFirst).mock.calls[0][0].where;
+    expect(where).toMatchObject({ businessId: 'biz_1', contactPhone: '+549111', status: { in: ['OPEN', 'HANDOFF'] } });
+  });
+
+  it('contactos distintos NO se bloquean entre sí: crean una conversación cada uno', async () => {
+    await Promise.all([
+      processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { botId: 'bot_1', contactPhone: '+549111' }),
+      processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { botId: 'bot_1', contactPhone: '+549222' }),
+    ]);
+
+    expect(store).toHaveLength(2);
+  });
+
+  it('el mismo teléfono en OTRO negocio es otra conversación (multi-tenant)', async () => {
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { botId: 'bot_1', contactPhone: '+549111' });
+    await processMessage('biz_2', 'hola, ¿tienen novedades?', 'WHATSAPP', { botId: 'bot_2', contactPhone: '+549111' });
+
+    expect(store.map((c) => c.businessId)).toEqual(['biz_1', 'biz_2']);
+  });
+
+  it('dos altas simultáneas del mismo suscriptor (ManyChat) también quedan en una conversación', async () => {
+    const [a, b] = await Promise.all([
+      processMessage('biz_1', 'hola, ¿tienen novedades?', 'MESSENGER', { botId: 'bot_1', subscriberId: 'sub_1' }),
+      processMessage('biz_1', 'otra vez, ¿tienen novedades?', 'MESSENGER', { botId: 'bot_1', subscriberId: 'sub_1' }),
+    ]);
+
+    expect(store).toHaveLength(1);
+    expect(a.conversationId).toBe(b.conversationId);
+  });
+
+  it('sin identificador del contacto (widget anónimo) no hay lock y se crea directo', async () => {
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_1' });
+
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(prisma.conversation.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('services/chatbot — intención HUMAN exige una frase, no la palabra "persona" suelta', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    mock(prisma.conversation.create).mockResolvedValue({ id: 'c_new', businessId: 'biz_1', status: 'OPEN', metadata: null });
+    mock(prisma.conversation.findFirst).mockResolvedValue(null);
+    mock(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: null });
+    mock(prisma.conversation.update).mockResolvedValue({});
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.$queryRaw).mockResolvedValue([{ id: 'c_new' }]);
+    mock(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'm', ...data }));
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+    mock(prisma.user.findMany).mockResolvedValue([]);
+    mock(prisma.professional.count).mockResolvedValue(1);
+    mock(prisma.notification.create).mockResolvedValue({});
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse: vi.fn().mockResolvedValue('respuesta del bot') });
+  });
+
+  const intentOf = async (text: string) => (await processMessage('biz_1', text, 'WEB', { botId: 'bot_1' })).intent;
+
+  it.each([
+    'quiero un turno para 2 personas',
+    'somos 3 personas, ¿tienen mesa?',
+    'La persona que viene mañana es mi hermano',
+  ])('"%s" NO deriva a un humano', async (text) => {
+    expect(await intentOf(text)).not.toBe('HUMAN');
+  });
+
+  it('un turno para 2 personas sigue siendo BOOKING', async () => {
+    expect(await intentOf('quiero un turno para 2 personas')).toBe('BOOKING');
+  });
+
+  it.each([
+    'quiero hablar con una persona',
+    'necesito hablar con una persona real',
+    'pasame con una persona por favor',
+    'quiero una persona que me atienda',
+    'me atiende una persona de verdad?',
+    'quiero hablar con un humano',
+    'necesito un operador',
+  ])('"%s" SÍ deriva a un humano', async (text) => {
+    expect(await intentOf(text)).toBe('HUMAN');
   });
 });

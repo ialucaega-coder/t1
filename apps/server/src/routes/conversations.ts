@@ -14,6 +14,18 @@ import { deliverToChannel, type DeliveryStatus } from '../services/channels/deli
 import { mutateConversation, transitionAttention } from '../services/conversationState';
 import { IDEMP_TYPE_MRGO, readIdempotencyKey, claimIdempotentKey, releaseIdempotentKey } from '../lib/idempotency';
 
+/**
+ * Emite por socket sin poder romper el request: un fallo del socket NO debe dejar
+ * un 500 ni el mensaje `pending` cuando el envío ya se hizo.
+ */
+function safeEmit(businessId: string, event: string, payload: unknown): void {
+  try {
+    getIO()?.to(`business:${businessId}`).emit(event, payload);
+  } catch (err) {
+    console.error(`No se pudo emitir ${event} por socket:`, (err as Error).message);
+  }
+}
+
 /** Respuesta para acciones que no aplican a una conversación cerrada. */
 const CLOSED_CONVERSATION_ERROR = {
   error: 'La conversación está cerrada: no se puede responder ni tomar.',
@@ -335,13 +347,31 @@ async function deliverAndRecord(
     });
     saved = updated.metadata ?? saved;
   } catch (err) {
-    console.error('No se pudo registrar el resultado de entrega del mensaje:', (err as Error).message);
+    // El envío YA ocurrió (o falló) y no se repite. Si no se pudo registrar el
+    // resultado el mensaje quedaría `pending` aunque salió: se loguea con los datos
+    // para auditar y se intenta UNA escritura condicional (solo si sigue `pending`).
+    // El estado real igual vuelve en la respuesta HTTP de este request.
+    console.error('No se pudo registrar el resultado de entrega del mensaje:', {
+      messageId: message.id,
+      deliveryStatus: result.status,
+      error: (err as Error).message,
+    });
+    try {
+      await prisma.message.updateMany({
+        where: { id: message.id, metadata: { path: ['deliveryStatus'], equals: 'pending' } },
+        data: { metadata: finalMeta as unknown as Prisma.InputJsonObject },
+      });
+    } catch (err2) {
+      console.error('Tampoco se pudo marcar el resultado de entrega (queda pending):', {
+        messageId: message.id,
+        deliveryStatus: result.status,
+        error: (err2 as Error).message,
+      });
+    }
   }
 
   // Los otros agentes ven el cambio de estado (enviado/falló) sin recargar.
-  getIO()?.to(`business:${conversation.businessId}`).emit('conversation:updated', {
-    conversationId: conversation.id,
-  });
+  safeEmit(conversation.businessId, 'conversation:updated', { conversationId: conversation.id });
 
   return { result, metadata: saved };
 }
@@ -427,10 +457,7 @@ router.post(
       throw err;
     }
 
-    getIO()?.to(`business:${conversation.businessId}`).emit('conversation:new-message', {
-      conversationId: conversation.id,
-      message,
-    });
+    safeEmit(conversation.businessId, 'conversation:new-message', { conversationId: conversation.id, message });
 
     const { result, metadata } = await deliverAndRecord(conversation, message, baseMeta);
 
@@ -545,9 +572,7 @@ router.patch(
     const outcome = await transitionAttention(req.params.id as string, req.auth!.businessId, { type: 'close' });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found or already closed' });
 
-    getIO()?.to(`business:${req.auth!.businessId}`).emit('conversation:closed', {
-      conversationId: req.params.id,
-    });
+    safeEmit(req.auth!.businessId, 'conversation:closed', { conversationId: req.params.id });
 
     res.json({ success: true });
   })
@@ -586,9 +611,7 @@ router.patch(
     });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
-      conversationId,
-    });
+    safeEmit(businessId, 'conversation:updated', { conversationId });
 
     res.json({ metadata: publicMetadata(outcome.metadata) });
   })
@@ -622,9 +645,7 @@ router.patch(
     });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
-      conversationId,
-    });
+    safeEmit(businessId, 'conversation:updated', { conversationId });
 
     res.json({ metadata: publicMetadata(outcome.metadata) });
   })
@@ -660,9 +681,7 @@ router.post(
     });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
-      conversationId,
-    });
+    safeEmit(businessId, 'conversation:updated', { conversationId });
 
     res.json({ note, metadata: publicMetadata(outcome.metadata) });
   })
@@ -799,9 +818,7 @@ router.post(
     });
     if (!outcome.ok) return res.status(404).json({ error: 'Conversation not found' });
 
-    getIO()?.to(`business:${businessId}`).emit('conversation:updated', {
-      conversationId,
-    });
+    safeEmit(businessId, 'conversation:updated', { conversationId });
 
     res.json(score);
   })

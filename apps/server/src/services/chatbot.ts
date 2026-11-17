@@ -16,6 +16,7 @@ import { loadFaqItems, buildFaqPrompt } from './faq/config';
 import { loadSystemPrompt } from './ai/system-prompt';
 import { getMessageQuota } from './billing/quota';
 import { dispatchEvent } from './workflows';
+import { lockSingleton } from '../lib/singletonLock';
 import type { ConversationAttribution } from './whatsapp/attribution';
 import {
   isBotSilenced,
@@ -220,9 +221,23 @@ function detectIntent(message: string): ChatIntent {
 
   const bookingKeywords = ['turno', 'cita', 'reserva', 'agendar', 'reservar', 'disponibilidad', 'horario libre'];
   const catalogKeywords = ['precio', 'catálogo', 'catalogo', 'servicios', 'productos', 'menú', 'menu', 'cuánto cuesta', 'cuanto cuesta'];
-  const humanKeywords = ['humano', 'persona', 'hablar con alguien', 'operador', 'no entiendo', 'ayuda urgente'];
+  const humanKeywords = ['humano', 'hablar con alguien', 'operador', 'no entiendo', 'ayuda urgente'];
+  // "persona" suelta NO alcanza ("turno para 2 personas", "somos 3 personas"): hace
+  // falta una frase que pida atención de alguien del equipo.
+  const humanPhrases = [
+    /\b(hablar|comunicar\w*|contactar\w*|pasa\w*|derivar\w*)\b[^.?!]{0,25}\b(con|a)\s+(una|un|alguna|otra)?\s*persona\b/,
+    /\b(quiero|necesito|prefiero|pido)\b[^.?!]{0,20}\b(una|alguna)\s+persona\b/,
+    /\bpersona\s+(real|de verdad|de carne y hueso)\b/,
+    /\batend(er|iera|ido|ida)\b[^.?!]{0,15}\buna\s+persona\b/,
+    /\buna\s+persona\s+(que me|me)\s+(atienda|responda|ayude)\b/,
+  ];
 
-  if (humanKeywords.some((kw) => normalized.includes(kw))) return 'HUMAN';
+  if (
+    humanKeywords.some((kw) => normalized.includes(kw)) ||
+    humanPhrases.some((re) => re.test(normalized))
+  ) {
+    return 'HUMAN';
+  }
   if (bookingKeywords.some((kw) => normalized.includes(kw))) return 'BOOKING';
   if (catalogKeywords.some((kw) => normalized.includes(kw))) return 'CATALOG';
   return 'FAQ';
@@ -882,16 +897,45 @@ async function getOrCreateConversation(
   if (options.subscriberId) metadata.subscriberId = options.subscriberId;
   if (options.attribution) metadata.attribution = options.attribution;
 
-  return prisma.conversation.create({
-    data: {
-      businessId,
-      botId,
-      channel: channelMap[channel] as any,
-      contactName: options.contactName,
-      contactPhone: options.contactPhone,
-      status: 'OPEN',
-      ...(Object.keys(metadata).length ? { metadata: metadata as Prisma.InputJsonValue } : {}),
-    },
+  const createData = {
+    businessId,
+    botId,
+    channel: channelMap[channel] as any,
+    contactName: options.contactName,
+    contactPhone: options.contactPhone,
+    status: 'OPEN' as const,
+    ...(Object.keys(metadata).length ? { metadata: metadata as Prisma.InputJsonValue } : {}),
+  };
+
+  // Sin identificador del contacto (widget anónimo) no hay con qué deduplicar.
+  const contactKey = options.contactPhone
+    ? `phone:${options.contactPhone}`
+    : options.subscriberId
+    ? `sub:${options.subscriberId}`
+    : null;
+  if (!contactKey) return prisma.conversation.create({ data: createData });
+
+  // Lookup + alta son un "buscar y si no hay, crear": sin serializar, dos primeros
+  // mensajes simultáneos del mismo contacto (dos webhooks, un reintento) veían "no
+  // existe" y creaban DOS conversaciones. El schema está congelado (sin UNIQUE), así
+  // que se serializa con un advisory lock transaccional por (negocio, canal, contacto)
+  // y se re-busca ADENTRO con el lock tomado (patrón de lib/singletonLock).
+  return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, `conv-create:${channelMap[channel]}:${contactKey}`);
+    const dup = await tx.conversation.findFirst({
+      where: {
+        businessId,
+        channel: channelMap[channel] as any,
+        status: { in: ['OPEN', 'HANDOFF'] },
+        ...(options.botId ? { botId: options.botId } : {}),
+        ...(options.contactPhone
+          ? { contactPhone: options.contactPhone }
+          : { metadata: { path: ['subscriberId'], equals: options.subscriberId } }),
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (dup) return dup;
+    return tx.conversation.create({ data: createData });
   });
 }
 

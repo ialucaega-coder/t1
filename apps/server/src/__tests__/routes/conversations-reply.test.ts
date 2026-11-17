@@ -676,3 +676,68 @@ describe('atención: /take, /close y reintentos (estados atómicos)', () => {
     });
   });
 });
+
+
+describe('robustez de /reply ante fallos posteriores al envío', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m(prisma.conversation.findFirst).mockResolvedValue(waConversation);
+    m(prisma.conversation.update).mockImplementation(async ({ data }: { data: { status?: string; metadata?: unknown } }) => ({ status: data.status ?? 'OPEN', metadata: data.metadata }));
+    m(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    m(prisma.$queryRaw).mockResolvedValue([{ id: 'c1' }]);
+    m(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: null });
+    m(prisma.user.findFirst).mockResolvedValue({ name: 'Ana Agente' });
+    m(prisma.business.findFirst).mockResolvedValue({ whatsappNumber: '+14155550100', phone: null });
+    m(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'm1', createdAt: new Date(), ...data }));
+    m(prisma.message.updateMany).mockResolvedValue({ count: 1 });
+    m(sendWhatsApp).mockResolvedValue('SM1');
+  });
+
+  it('si falla registrar el resultado del envío: responde el estado real, hace UNA escritura condicional y no reenvía', async () => {
+    m(prisma.message.update).mockRejectedValue(new Error('db caída'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deliveryStatus).toBe('sent');
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    // Escritura condicional: solo pisa si el mensaje sigue `pending`.
+    expect(m(prisma.message.updateMany).mock.calls[0][0].where).toMatchObject({
+      id: 'm1', metadata: { path: ['deliveryStatus'], equals: 'pending' },
+    });
+    expect(m(prisma.message.updateMany).mock.calls[0][0].data.metadata).toMatchObject({ deliveryStatus: 'sent' });
+    // El log lleva el id del mensaje para poder auditarlo.
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('registrar el resultado'), expect.objectContaining({ messageId: 'm1', deliveryStatus: 'sent' }));
+    err.mockRestore();
+  });
+
+  it('si tampoco se puede marcar, igual responde 200 con el estado real (queda pending, logueado)', async () => {
+    m(prisma.message.update).mockRejectedValue(new Error('db caída'));
+    m(prisma.message.updateMany).mockRejectedValue(new Error('db caída'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deliveryStatus).toBe('sent');
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('queda pending'), expect.objectContaining({ messageId: 'm1' }));
+    err.mockRestore();
+  });
+
+  it('si el socket falla al emitir, no hay 500: el mensaje se envía y se registra igual', async () => {
+    const { getIO } = await import('../../lib/socket');
+    m(getIO).mockReturnValue({ to: () => ({ emit: () => { throw new Error('socket caído'); } }) });
+    m(prisma.message.update).mockImplementation(async ({ data }: { data: { metadata: unknown } }) => ({ metadata: data.metadata }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await post('/api/conversations/c1/reply', { text: 'Hola' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deliveryStatus).toBe('sent');
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(m(prisma.message.update).mock.calls[0][0].data.metadata).toMatchObject({ deliveryStatus: 'sent' });
+    m(getIO).mockReturnValue(null);
+    err.mockRestore();
+  });
+});
