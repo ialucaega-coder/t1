@@ -346,7 +346,7 @@ describe('routes/campaigns', () => {
         expect.objectContaining({ data: { status: 'sending' } })
       );
       expect(prisma.campaign.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'c1' }, data: { status: 'sent', sentCount: 2 } })
+        expect.objectContaining({ where: { id: 'c1', businessId: 'biz_1', status: 'sending' }, data: { status: 'sent', sentCount: 2 } })
       );
     });
 

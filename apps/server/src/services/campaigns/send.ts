@@ -38,11 +38,32 @@ const RECIPIENT_BATCH = 500;
 /** Cada cuántos destinatarios se refleja el progreso en `sentCount` (visible en el panel). */
 const PROGRESS_EVERY = 25;
 const CURSOR_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Latido del envío: cada tanto (no solo cada 25 destinatarios) se toca `updatedAt`
+ * de la campaña para que el reaper no confunda un envío lento pero vivo con uno
+ * trabado. Bien por debajo de STALLED_SENDING_MS.
+ */
+const HEARTBEAT_MS = 60 * 1000;
 
 interface CampaignJob {
   businessId: string;
   id: string;
   message?: string;
+  /**
+   * Identidad de ESTE envío. Si la campaña se reenvía (p. ej. después de que el
+   * reaper la marcó failed), el job viejo que quedó en la cola ya no es el vigente y
+   * se corta solo en vez de duplicar mensajes. Los jobs sin runId (encolados por una
+   * versión anterior) se consideran vigentes.
+   */
+  runId?: string;
+}
+
+/** El envío quedó obsoleto (campaña ya no 'sending' o reemplazado por otro envío): se corta sin reintentar. */
+class StaleCampaignRun extends Error {
+  constructor() {
+    super('stale campaign run');
+    this.name = 'StaleCampaignRun';
+  }
 }
 
 /** Progreso persistido (Redis/memoria) para poder retomar un envío interrumpido. */
@@ -53,7 +74,28 @@ interface Cursor {
   tries: number;
 }
 
-const cursorKey = (businessId: string, id: string) => `campaign:${businessId}:${id}:cursor`;
+// El cursor y la marca del envío vigente van por runId: un job viejo que sigue vivo
+// nunca pisa ni borra el progreso del envío nuevo (antes compartían la misma clave).
+const cursorKey = (businessId: string, id: string, runId?: string) =>
+  `campaign:${businessId}:${id}${runId ? `:${runId}` : ''}:cursor`;
+const runKey = (businessId: string, id: string) => `campaign:${businessId}:${id}:run`;
+
+/** ¿Este job es el envío vigente de la campaña? Sin marca en el estado compartido se asume que sí. */
+async function isCurrentRun(businessId: string, id: string, runId?: string): Promise<boolean> {
+  if (!runId) return true;
+  const current = await sharedGet<string>(runKey(businessId, id));
+  return !current || current === runId;
+}
+
+/**
+ * Corta el envío si ya no es el vigente o la campaña dejó de estar 'sending'
+ * (reaper -> failed, cancelada, borrada, reenviada). Se llama antes de cada lote.
+ */
+async function assertRunActive(businessId: string, id: string, runId?: string): Promise<void> {
+  if (!(await isCurrentRun(businessId, id, runId))) throw new StaleCampaignRun();
+  const row = await prisma.campaign.findFirst({ where: { id, businessId, status: 'sending' }, select: { id: true } });
+  if (!row) throw new StaleCampaignRun();
+}
 
 /**
  * Resultado del último envío inline (sin Redis) para devolverlo al caller.
@@ -104,12 +146,16 @@ export async function sendCampaign(
     const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
     if (!campaign) throw new AppError(404, 'Campaign not found'); // defensivo: no debería ocurrir tras el claim
 
-    await sharedDel(cursorKey(businessId, id)); // envío nuevo: sin progreso previo
+    // Envío nuevo: runId propio (cursor propio, vacío). NO se borra el cursor de otro
+    // envío: si hay un job viejo aún vivo, conserva el suyo y se corta al ver que ya
+    // no es el vigente.
+    const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    await sharedSet(runKey(businessId, id), runId, CURSOR_TTL_MS);
 
     inlineWanted.add(id);
     const how = await enqueue<CampaignJob>(
       CAMPAIGN_QUEUE,
-      { businessId, id, message },
+      { businessId, id, message, runId },
       // El dedupe de doble disparo ya lo hace el claim atómico de arriba; el jobId es
       // único por envío (si fuera fijo por campaña, reenviar una campaña 'failed'
       // chocaría con el job viejo retenido en la cola). Reintentos con backoff; cada
@@ -202,26 +248,38 @@ function isSupportedChannel(channel: string): boolean {
  * mientras queden intentos (BullMQ reintenta y se retoma desde el cursor); al
  * agotarlos la campaña pasa a 'failed' en vez de quedar 'sending' para siempre.
  */
-async function runCampaignJob({ businessId, id, message }: CampaignJob): Promise<void> {
-  const key = cursorKey(businessId, id);
+async function runCampaignJob({ businessId, id, message, runId }: CampaignJob): Promise<void> {
+  const key = cursorKey(businessId, id, runId);
   const prev = (await sharedGet<Cursor>(key)) ?? { processed: 0, enviados: 0, fallidos: 0, tries: 0 };
   const cursor: Cursor = { ...prev, tries: prev.tries + 1 };
   await sharedSet(key, cursor, CURSOR_TTL_MS);
 
   try {
-    const result = await deliverCampaign(businessId, id, message, cursor);
+    const result = await deliverCampaign(businessId, id, message, cursor, runId);
     if (inlineWanted.has(id)) inlineResults.set(id, result);
     await sharedDel(key);
   } catch (err) {
+    if (err instanceof StaleCampaignRun) {
+      // Obsoleto (reaper, cancelación o reenvío): no se reintenta ni se toca el estado de la campaña.
+      console.warn(`[Campaigns] el envío de ${id} quedó obsoleto: se corta sin enviar más.`);
+      await sharedDel(key);
+      return;
+    }
     console.error(`[Campaigns] envío de ${id} falló (intento ${cursor.tries}/${MAX_ATTEMPTS}):`, describeError(err));
     if (cursor.tries < MAX_ATTEMPTS) throw err; // BullMQ reintenta (inline: no hay reintento)
-    await prisma.campaign
-      .updateMany({ where: { id, businessId }, data: { status: 'failed', sentCount: cursor.enviados } })
-      .catch(() => undefined);
-    await emitCampaignFailed(businessId, id, 'retries_exhausted', {
-      enviados: cursor.enviados,
-      fallidos: cursor.fallidos,
-    });
+    // Solo si este sigue siendo el envío vigente (no se marca failed un envío nuevo).
+    if (await isCurrentRun(businessId, id, runId)) {
+      await prisma.campaign
+        .updateMany({
+          where: { id, businessId, status: 'sending' },
+          data: { status: 'failed', sentCount: cursor.enviados },
+        })
+        .catch(() => undefined);
+      await emitCampaignFailed(businessId, id, 'retries_exhausted', {
+        enviados: cursor.enviados,
+        fallidos: cursor.fallidos,
+      });
+    }
     await sharedDel(key);
   }
 }
@@ -234,6 +292,7 @@ async function deliverCampaign(
   id: string,
   message: string | undefined,
   cursor: Cursor,
+  runId?: string,
 ): Promise<SendCampaignResult> {
   const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
   if (!campaign) throw new AppError(404, 'Campaign not found');
@@ -257,7 +316,8 @@ async function deliverCampaign(
   } else {
     const senderNumber = channel === 'whatsapp' ? await resolveBusinessSender(businessId) : undefined;
     const waReady = channel === 'whatsapp' ? whatsapp.isConfigured() : true;
-    const key = cursorKey(businessId, id);
+    const key = cursorKey(businessId, id, runId);
+    let lastBeat = Date.now();
 
     // Por lotes de ids; dentro de cada lote, orden por id: el orden global es
     // determinista, así `cursor.processed` (destinatarios ya tratados) identifica
@@ -265,6 +325,8 @@ async function deliverCampaign(
     // saltean las filas ya tratadas.
     let index = 0;
     for (let start = 0; start < clientIds.length; start += RECIPIENT_BATCH) {
+      // Antes de cada lote: la campaña tiene que seguir 'sending' y este job ser el vigente.
+      await assertRunActive(businessId, id, runId);
       const batchIds = clientIds.slice(start, start + RECIPIENT_BATCH);
       const recipients = await prisma.user.findMany({
         where: { id: { in: batchIds }, businessId },
@@ -299,8 +361,15 @@ async function deliverCampaign(
 
         cursor.processed = index;
         await sharedSet(key, cursor, CURSOR_TTL_MS); // checkpoint por destinatario
-        if (cursor.processed % PROGRESS_EVERY === 0) {
-          await prisma.campaign.update({ where: { id }, data: { sentCount: cursor.enviados } });
+        // Progreso + latido: cada 25 destinatarios O cada minuto (lo que ocurra primero).
+        // Si la campaña ya no está 'sending' (count 0), este envío quedó obsoleto.
+        if (cursor.processed % PROGRESS_EVERY === 0 || Date.now() - lastBeat >= HEARTBEAT_MS) {
+          lastBeat = Date.now();
+          const beat = await prisma.campaign.updateMany({
+            where: { id, businessId, status: 'sending' },
+            data: { sentCount: cursor.enviados },
+          });
+          if (beat.count === 0 || !(await isCurrentRun(businessId, id, runId))) throw new StaleCampaignRun();
         }
       }
     }
@@ -308,11 +377,20 @@ async function deliverCampaign(
 
   const { enviados, fallidos } = cursor;
 
-  // Cierre: 'sent' + conteo final.
-  const updated = await prisma.campaign.update({
-    where: { id },
-    data: { status: 'sent', sentCount: enviados },
-  });
+  // Cierre: 'sent' + conteo final, SOLO si la campaña sigue 'sending' y este es el envío
+  // vigente (antes era un update sin guarda que pisaba un 'failed'/'cancelled').
+  if (!(await isCurrentRun(businessId, id, runId))) throw new StaleCampaignRun();
+  let updated;
+  try {
+    updated = await prisma.campaign.update({
+      where: { id, businessId, status: 'sending' },
+      data: { status: 'sent', sentCount: enviados },
+    });
+  } catch (err) {
+    // P2025: la campaña ya no estaba 'sending' (reaper, cancelación, borrado, reenvío).
+    if ((err as { code?: string }).code === 'P2025') throw new StaleCampaignRun();
+    throw err;
+  }
 
   getIO()?.to(`business:${businessId}`).emit('campaign:sent', {
     campaign: updated,

@@ -149,6 +149,108 @@ describe('services/campaigns/send', () => {
   });
 });
 
+describe('services/campaigns/send: envío obsoleto, latido y cursor (M2)', () => {
+  it('si la campaña ya no está sending (reaper/cancelación) el job NO envía nada ni la marca failed', async () => {
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    // La lectura de la campaña funciona, pero la guarda status:'sending' no encuentra fila.
+    mock(prisma.campaign.findFirst).mockImplementation(async ({ where }: { where: { status?: string } }) =>
+      where.status === 'sending' ? null : { id: 'c1', status: 'failed', channel: 'whatsapp', name: 'Promo', description: 'Hola' }
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
+    expect(prisma.campaign.update).not.toHaveBeenCalled();
+    expect(emitFailed).not.toHaveBeenCalled();
+    // Solo el claim: no hay ningún updateMany a failed/sent.
+    expect(prisma.campaign.updateMany).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('el cierre usa guarda status:sending: si ya no lo estaba no la pisa ni reintenta (no duplica envíos)', async () => {
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    mock(prisma.campaign.update).mockRejectedValue(Object.assign(new Error('no row'), { code: 'P2025' }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(prisma.campaign.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'c1', businessId: BIZ, status: 'sending' } })
+    );
+    // Cada destinatario recibió el mensaje UNA vez (la obsolescencia no se reintenta).
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(2);
+    expect(emitFailed).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('latido por tiempo: toca updatedAt de la campaña sending aunque no lleguen a 25 destinatarios', async () => {
+    vi.useFakeTimers();
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    mock(whatsapp.sendMessage).mockImplementation(async () => {
+      vi.advanceTimersByTime(61_000); // cada envío "tarda" más de un minuto
+      return 'SID';
+    });
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c1', businessId: BIZ, status: 'sending' },
+      data: { sentCount: 1 },
+    });
+  });
+
+  it('si el latido ve que la campaña ya no está sending, corta el envío (no sigue mandando)', async () => {
+    vi.useFakeTimers();
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    mock(prisma.campaign.updateMany).mockResolvedValueOnce({ count: 1 }).mockResolvedValue({ count: 0 });
+    mock(whatsapp.sendMessage).mockImplementation(async () => {
+      vi.advanceTimersByTime(61_000);
+      return 'SID';
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    expect(emitFailed).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('un reenvío reemplaza al envío viejo: el job viejo (otro runId) se corta al ver que ya no es el vigente', async () => {
+    vi.useFakeTimers();
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    mock(whatsapp.sendMessage).mockImplementation(async () => {
+      // Mientras este job corre, un reenvío nuevo toma el envío vigente de la campaña.
+      cache.set(`ss:campaign:${BIZ}:c1:run`, 'run-nuevo', 3_600_000);
+      vi.advanceTimersByTime(61_000);
+      return 'SID';
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    expect(prisma.campaign.update).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('no borra el cursor de un job aún vivo: un envío nuevo usa su propio cursor', async () => {
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    const liveCursor = { processed: 1, enviados: 1, fallidos: 0, tries: 1 };
+    cache.set(`ss:campaign:${BIZ}:c1:run-viejo:cursor`, liveCursor, 60_000);
+    // Y el cursor sin runId de versiones anteriores tampoco se toca.
+    cache.set(`ss:campaign:${BIZ}:c1:cursor`, liveCursor, 60_000);
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(cache.get(`ss:campaign:${BIZ}:c1:run-viejo:cursor`)).toEqual(liveCursor);
+    expect(cache.get(`ss:campaign:${BIZ}:c1:cursor`)).toEqual(liveCursor);
+    // El envío nuevo arrancó de cero: mandó a los 2 destinatarios.
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('failStalledCampaigns (reaper)', () => {
   const NOW = new Date('2026-11-17T12:00:00Z');
   const old = new Date(NOW.getTime() - STALLED_SENDING_MS - 60_000);
