@@ -98,41 +98,98 @@ export async function sendCampaign(
     throw new AppError(exists ? 400 : 404, exists ? 'Campaign already sent' : 'Campaign not found');
   }
 
-  const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
-  if (!campaign) throw new AppError(404, 'Campaign not found'); // defensivo: no debería ocurrir tras el claim
+  // Desde acá la campaña está en 'sending': si algo lanza (leer la campaña, encolar,
+  // el job inline) NO puede quedar así para siempre sin que nadie la termine.
+  try {
+    const campaign = await prisma.campaign.findFirst({ where: { id, businessId } });
+    if (!campaign) throw new AppError(404, 'Campaign not found'); // defensivo: no debería ocurrir tras el claim
 
-  await sharedDel(cursorKey(businessId, id)); // envío nuevo: sin progreso previo
+    await sharedDel(cursorKey(businessId, id)); // envío nuevo: sin progreso previo
 
-  inlineWanted.add(id);
-  const how = await enqueue<CampaignJob>(
-    CAMPAIGN_QUEUE,
-    { businessId, id, message },
-    // El dedupe de doble disparo ya lo hace el claim atómico de arriba; el jobId es
-    // único por envío (si fuera fijo por campaña, reenviar una campaña 'failed'
-    // chocaría con el job viejo retenido en la cola). Reintentos con backoff; cada
-    // uno retoma desde el cursor.
-    { jobId: `campaign_${id}_${Date.now()}`, attempts: MAX_ATTEMPTS, backoffMs: 5000 },
-  );
+    inlineWanted.add(id);
+    const how = await enqueue<CampaignJob>(
+      CAMPAIGN_QUEUE,
+      { businessId, id, message },
+      // El dedupe de doble disparo ya lo hace el claim atómico de arriba; el jobId es
+      // único por envío (si fuera fijo por campaña, reenviar una campaña 'failed'
+      // chocaría con el job viejo retenido en la cola). Reintentos con backoff; cada
+      // uno retoma desde el cursor.
+      { jobId: `campaign_${id}_${Date.now()}`, attempts: MAX_ATTEMPTS, backoffMs: 5000 },
+    );
 
-  inlineWanted.delete(id);
-  if (how === 'queued') {
-    inlineResults.delete(id); // el worker (otro proceso o este) no debe dejar basura
+    inlineWanted.delete(id);
+    if (how === 'queued') {
+      inlineResults.delete(id); // el worker (otro proceso o este) no debe dejar basura
+      return {
+        ...campaign,
+        status: 'sending',
+        envio: { enviados: 0, fallidos: 0, canalSoportado: isSupportedChannel(campaign.channel), enCola: true },
+      };
+    }
+
+    // Inline: el job ya terminó; devolvemos su resultado.
+    const result = inlineResults.get(id);
+    inlineResults.delete(id);
+    if (result) return result;
+    const final = await prisma.campaign.findFirst({ where: { id, businessId } });
     return {
-      ...campaign,
-      status: 'sending',
-      envio: { enviados: 0, fallidos: 0, canalSoportado: isSupportedChannel(campaign.channel), enCola: true },
+      ...(final ?? campaign),
+      envio: { enviados: final?.sentCount ?? 0, fallidos: 0, canalSoportado: isSupportedChannel(campaign.channel) },
     };
+  } catch (err) {
+    inlineWanted.delete(id);
+    inlineResults.delete(id);
+    await failAfterClaim(businessId, id);
+    throw err;
   }
+}
 
-  // Inline: el job ya terminó; devolvemos su resultado.
-  const result = inlineResults.get(id);
-  inlineResults.delete(id);
-  if (result) return result;
-  const final = await prisma.campaign.findFirst({ where: { id, businessId } });
-  return {
-    ...(final ?? campaign),
-    envio: { enviados: final?.sentCount ?? 0, fallidos: 0, canalSoportado: isSupportedChannel(campaign.channel) },
-  };
+/** Sin avance (updatedAt) por más de esto, una campaña 'sending' se considera trabada. */
+export const STALLED_SENDING_MS = 30 * 60 * 1000;
+const STALLED_BATCH = 50;
+
+/**
+ * Una excepción posterior al claim deja la campaña en 'failed' (antes quedaba
+ * 'sending' para siempre y ni el scheduler ni el usuario podían reenviarla).
+ * Solo toca filas que siguen 'sending' (no pisa un 'sent' ya cerrado). Nunca lanza.
+ */
+async function failAfterClaim(businessId: string, id: string): Promise<void> {
+  try {
+    const upd = await prisma.campaign.updateMany({
+      where: { id, businessId, status: 'sending' },
+      data: { status: 'failed' },
+    });
+    if (upd.count > 0) await emitCampaignFailed(businessId, id, 'error');
+  } catch {
+    /* el reaper (failStalledCampaigns) lo recoge más tarde */
+  }
+}
+
+/**
+ * Reaper: pasa a 'failed' las campañas 'sending' sin avance hace más de 30 min
+ * (proceso caído a mitad de un envío, job perdido). El progreso toca `updatedAt`
+ * (sentCount cada 25 destinatarios), así que un envío vivo no se marca. Lo llama el
+ * scheduler en cada tick (`dispatchDueCampaigns`). Devuelve cuántas marcó.
+ */
+export async function failStalledCampaigns(now: Date = new Date()): Promise<number> {
+  const stalled = await prisma.campaign.findMany({
+    where: { status: 'sending', updatedAt: { lt: new Date(now.getTime() - STALLED_SENDING_MS) } },
+    select: { id: true, businessId: true, updatedAt: true },
+    take: STALLED_BATCH,
+  });
+  let failed = 0;
+  for (const c of stalled) {
+    // Con el updatedAt leído en el WHERE: si avanzó entre el listado y acá, no se pisa.
+    const upd = await prisma.campaign.updateMany({
+      where: { id: c.id, businessId: c.businessId, status: 'sending', updatedAt: c.updatedAt },
+      data: { status: 'failed' },
+    });
+    if (upd.count > 0) {
+      failed++;
+      await emitCampaignFailed(c.businessId, c.id, 'stalled');
+    }
+  }
+  return failed;
 }
 
 function isSupportedChannel(channel: string): boolean {

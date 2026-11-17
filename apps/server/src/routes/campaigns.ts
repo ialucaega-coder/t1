@@ -33,7 +33,8 @@ const sendCampaignSchema = z.object({
 const updateCampaignSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
-  status: z.enum(['draft', 'scheduled', 'sent', 'cancelled']).optional(),
+  // 'sent' y 'sending' los fija el motor de envío: un PATCH no puede marcar una campaña como enviada.
+  status: z.enum(['draft', 'scheduled', 'cancelled']).optional(),
   channel: z.enum(['whatsapp', 'email', 'sms', 'telegram']).optional(),
   // null = quitar la programación (vuelve a borrador).
   scheduledAt: z.string().datetime().nullable().optional(),
@@ -145,10 +146,14 @@ router.patch(
       nextWhen = null;
       if (!nextStatus && existing.status === 'scheduled') nextStatus = 'draft';
     }
-    if (nextStatus === 'scheduled' && nextWhen === undefined) {
-      // Pasar a 'scheduled' sin fecha nunca se enviaría: exigimos la fecha.
-      const row = await prisma.campaign.findFirst({ where: { id, businessId }, select: { scheduledAt: true } });
-      if (!row?.scheduledAt) throw new AppError(400, 'Para programar la campaña indicá la fecha');
+    if (nextStatus === 'scheduled') {
+      // Pasar a 'scheduled' sin fecha nunca se enviaría: exigimos la fecha, también si
+      // el body trae `scheduledAt: null` (antes quedaba 'scheduled' con fecha nula).
+      if (nextWhen === null) throw new AppError(400, 'Para programar la campaña indicá la fecha');
+      if (nextWhen === undefined) {
+        const row = await prisma.campaign.findFirst({ where: { id, businessId }, select: { scheduledAt: true } });
+        if (!row?.scheduledAt) throw new AppError(400, 'Para programar la campaña indicá la fecha');
+      }
     }
 
     const upd = await prisma.campaign.updateMany({
@@ -178,10 +183,18 @@ router.delete(
   requireAuth,
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
-    const del = await prisma.campaign.deleteMany({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
-    });
-    if (del.count === 0) return res.status(404).json({ error: 'Campaign not found' });
+    const id = String(req.params.id);
+    const businessId = req.auth!.businessId;
+    // No se borra una campaña que se está enviando: el job seguiría mandando mensajes
+    // sin campaña a la que reportar. La condición va en el propio DELETE (atómica).
+    const del = await prisma.campaign.deleteMany({ where: { id, businessId, status: { not: 'sending' } } });
+    if (del.count === 0) {
+      const current = await prisma.campaign.findFirst({ where: { id, businessId }, select: { status: true } });
+      if (current?.status === 'sending') {
+        throw new AppError(409, 'La campaña se está enviando: esperá a que termine para eliminarla');
+      }
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     res.status(204).send();
   })
 );

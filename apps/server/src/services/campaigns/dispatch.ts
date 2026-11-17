@@ -18,7 +18,7 @@
 import { prisma } from '../../lib/prisma';
 import { sharedTryLock } from '../../lib/sharedState';
 import { AppError } from '../../middleware/errorHandler';
-import { sendCampaign } from './send';
+import { sendCampaign, failStalledCampaigns } from './send';
 import { emitCampaignFailed } from './events';
 
 /** Más de esto de atraso → no se envía sola. */
@@ -39,6 +39,11 @@ export async function dispatchDueCampaigns(now: Date = new Date()): Promise<Disp
     return { due: 0, sent: 0, expired: 0, skipped: 0 };
   }
 
+  // Reaper: campañas 'sending' sin avance hace >30 min pasan a 'failed' (best-effort).
+  await failStalledCampaigns(now).catch((err) =>
+    console.error('[campaigns] reaper de envíos trabados falló:', (err as Error).message)
+  );
+
   const due = await prisma.campaign.findMany({
     where: { status: 'scheduled', scheduledAt: { lte: now } },
     select: { id: true, businessId: true, scheduledAt: true },
@@ -52,7 +57,8 @@ export async function dispatchDueCampaigns(now: Date = new Date()): Promise<Disp
     try {
       if (lateMs > MAX_LATE_MS) {
         const upd = await prisma.campaign.updateMany({
-          where: { id: c.id, businessId: c.businessId, status: 'scheduled' },
+          // scheduledAt en el WHERE: si el dueño la reprogramó entre el listado y acá, no se pisa.
+          where: { id: c.id, businessId: c.businessId, status: 'scheduled', scheduledAt: c.scheduledAt },
           data: { status: 'failed' },
         });
         if (upd.count > 0) {

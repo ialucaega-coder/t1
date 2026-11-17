@@ -7,7 +7,11 @@ vi.mock('../../../lib/prisma', () => ({
   prisma: { campaign: { findMany: vi.fn(), updateMany: vi.fn() } },
 }));
 const sendCampaign = vi.fn();
-vi.mock('../../../services/campaigns/send', () => ({ sendCampaign: (...a: unknown[]) => sendCampaign(...a) }));
+const failStalled = vi.fn();
+vi.mock('../../../services/campaigns/send', () => ({
+  sendCampaign: (...a: unknown[]) => sendCampaign(...a),
+  failStalledCampaigns: (...a: unknown[]) => failStalled(...a),
+}));
 const emitFailed = vi.fn();
 vi.mock('../../../services/campaigns/events', () => ({ emitCampaignFailed: (...a: unknown[]) => emitFailed(...a) }));
 const tryLock = vi.fn();
@@ -25,6 +29,7 @@ describe('dispatchDueCampaigns', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     tryLock.mockResolvedValue(true);
+    failStalled.mockResolvedValue(0);
   });
 
   it('envía las vencidas con claim scheduledOnly', async () => {
@@ -49,6 +54,36 @@ describe('dispatchDueCampaigns', () => {
     expect(sendCampaign).not.toHaveBeenCalled();
     expect(m(prisma.campaign.updateMany).mock.calls[0][0].data).toEqual({ status: 'failed' });
     expect(emitFailed).toHaveBeenCalledWith('b1', 'c1', 'expired');
+  });
+
+  it('al vencerla pasa a failed SOLO si scheduledAt sigue igual (no pisa una campaña reprogramada)', async () => {
+    const scheduledAt = at(MAX_LATE_MS + 1000);
+    m(prisma.campaign.findMany).mockResolvedValue([{ id: 'c1', businessId: 'b1', scheduledAt }]);
+    m(prisma.campaign.updateMany).mockResolvedValue({ count: 0 });
+
+    await dispatchDueCampaigns(NOW);
+
+    expect(m(prisma.campaign.updateMany).mock.calls[0][0].where).toEqual({
+      id: 'c1', businessId: 'b1', status: 'scheduled', scheduledAt,
+    });
+  });
+
+  it('en cada tick corre el reaper de envíos trabados', async () => {
+    m(prisma.campaign.findMany).mockResolvedValue([]);
+    await dispatchDueCampaigns(NOW);
+    expect(failStalled).toHaveBeenCalledWith(NOW);
+  });
+
+  it('si el reaper falla igual despacha las campañas vencidas', async () => {
+    failStalled.mockRejectedValue(new Error('db'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    m(prisma.campaign.findMany).mockResolvedValue([{ id: 'c1', businessId: 'b1', scheduledAt: at(60_000) }]);
+    sendCampaign.mockResolvedValue({});
+
+    const r = await dispatchDueCampaigns(NOW);
+
+    expect(r.sent).toBe(1);
+    err.mockRestore();
   });
 
   it('no emite campaign:failed si otra instancia ya la tomó (count 0)', async () => {

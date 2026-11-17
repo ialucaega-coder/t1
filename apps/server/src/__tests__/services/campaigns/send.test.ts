@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../../lib/prisma', () => ({
   prisma: {
-    campaign: { findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    campaign: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     booking: { findMany: vi.fn() },
     user: { findMany: vi.fn() },
     business: { findUnique: vi.fn() },
@@ -25,7 +25,7 @@ vi.mock('../../../services/campaigns/events', () => ({ emitCampaignFailed: (...a
 import { prisma } from '../../../lib/prisma';
 import * as whatsapp from '../../../services/whatsapp/client';
 import { cache } from '../../../lib/cache';
-import { sendCampaign } from '../../../services/campaigns/send';
+import { sendCampaign, failStalledCampaigns, STALLED_SENDING_MS } from '../../../services/campaigns/send';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 const BIZ = 'biz_1';
@@ -123,5 +123,65 @@ describe('services/campaigns/send', () => {
     mock(prisma.user.findMany).mockResolvedValue(users);
     await sendCampaign(BIZ, 'c1');
     expect(emitFailed).not.toHaveBeenCalled();
+  });
+
+  it('una excepción DESPUÉS del claim deja la campaña en failed (no queda sending para siempre)', async () => {
+    // El claim (updateMany) funciona; leer la campaña revienta.
+    mock(prisma.campaign.findFirst).mockRejectedValueOnce(new Error('db down'));
+
+    await expect(sendCampaign(BIZ, 'c1')).rejects.toThrow('db down');
+
+    expect(prisma.campaign.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'c1', businessId: BIZ, status: 'sending' },
+      data: { status: 'failed' },
+    });
+    expect(emitFailed).toHaveBeenCalledWith(BIZ, 'c1', 'error');
+  });
+
+  it('un 400 del claim (ya enviada) NO marca la campaña como failed', async () => {
+    mock(prisma.campaign.updateMany).mockResolvedValueOnce({ count: 0 });
+    mock(prisma.campaign.findFirst).mockResolvedValueOnce({ id: 'c1' });
+
+    await expect(sendCampaign(BIZ, 'c1')).rejects.toThrow('Campaign already sent');
+
+    expect(prisma.campaign.updateMany).toHaveBeenCalledTimes(1);
+    expect(emitFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('failStalledCampaigns (reaper)', () => {
+  const NOW = new Date('2026-11-17T12:00:00Z');
+  const old = new Date(NOW.getTime() - STALLED_SENDING_MS - 60_000);
+
+  it('busca campañas sending sin avance hace más de 30 min y las pasa a failed', async () => {
+    mock(prisma.campaign.findMany).mockResolvedValue([{ id: 'c9', businessId: BIZ, updatedAt: old }]);
+
+    const n = await failStalledCampaigns(NOW);
+
+    expect(n).toBe(1);
+    expect(mock(prisma.campaign.findMany).mock.calls[0][0].where).toEqual({
+      status: 'sending',
+      updatedAt: { lt: new Date(NOW.getTime() - STALLED_SENDING_MS) },
+    });
+    // El updatedAt leído va en el WHERE: si avanzó entre medio, no se pisa.
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c9', businessId: BIZ, status: 'sending', updatedAt: old },
+      data: { status: 'failed' },
+    });
+    expect(emitFailed).toHaveBeenCalledWith(BIZ, 'c9', 'stalled');
+  });
+
+  it('si la campaña avanzó entre el listado y el UPDATE (count 0) no la marca ni emite', async () => {
+    mock(prisma.campaign.findMany).mockResolvedValue([{ id: 'c9', businessId: BIZ, updatedAt: old }]);
+    mock(prisma.campaign.updateMany).mockResolvedValue({ count: 0 });
+
+    expect(await failStalledCampaigns(NOW)).toBe(0);
+    expect(emitFailed).not.toHaveBeenCalled();
+  });
+
+  it('sin campañas trabadas no toca nada', async () => {
+    mock(prisma.campaign.findMany).mockResolvedValue([]);
+    expect(await failStalledCampaigns(NOW)).toBe(0);
+    expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
   });
 });

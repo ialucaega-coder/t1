@@ -1,12 +1,12 @@
 /**
  * Eventos en tiempo real de campañas (sala `business:<id>`).
  *  - `campaign:sent`   → { campaign, envio: { enviados, fallidos } }  (lo emite send.ts)
- *  - `campaign:failed` → { campaign, envio?, reason }  (envío sin reintentos o vencida)
+ *  - `campaign:failed` → { campaign, envio?, reason }  (sin reintentos, vencida, trabada o con error al despachar)
  */
 import { prisma } from '../../lib/prisma';
 import { getIO } from '../../lib/socket';
 
-export type CampaignFailReason = 'retries_exhausted' | 'expired';
+export type CampaignFailReason = 'retries_exhausted' | 'expired' | 'stalled' | 'error';
 
 /** Avisa al panel que la campaña pasó a 'failed'. Nunca lanza (es solo notificación). */
 export async function emitCampaignFailed(
