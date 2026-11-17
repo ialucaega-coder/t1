@@ -46,8 +46,9 @@ router.post(
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`apply-template:${businessId}`}, 0))`;
 
       // 1) Servicios: crear solo los que no existan (idempotente por nombre).
+      // Sin los dados de baja (deletedAt): un servicio borrado no debe bloquear recrearlo.
       const existingServices = await tx.service.findMany({
-        where: { businessId },
+        where: { businessId, deletedAt: null },
         select: { name: true, sortOrder: true },
       });
       const existingNames = new Set(existingServices.map((s) => s.name.trim().toLowerCase()));

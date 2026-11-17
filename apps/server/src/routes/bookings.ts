@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
@@ -17,9 +17,12 @@ import { csvCell } from '../services/bookings/csv';
 
 const router = Router();
 
+// Listado y exportación son del panel (solo staff): traen nombre, email y teléfono de
+// TODOS los clientes del negocio. Un CLIENT con JWT no puede listarlos ni exportarlos.
 router.get(
   '/',
   requireAuth,
+  requireStaff,
   asyncHandler(async (req, res) => {
     const { date, status, professionalId, page, pageSize } = req.query;
     const where: Record<string, unknown> = { businessId: req.auth!.businessId };
@@ -111,6 +114,7 @@ router.post(
 router.get(
   '/export/csv',
   requireAuth,
+  requireStaff,
   asyncHandler(async (req, res) => {
     const bookings = await prisma.booking.findMany({
       where: { businessId: req.auth!.businessId },

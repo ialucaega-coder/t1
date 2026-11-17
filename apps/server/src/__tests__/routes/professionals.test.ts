@@ -185,7 +185,7 @@ describe('routes/professionals', () => {
 
       expect(res.status).toBe(200);
       expect(prisma.service.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'svc_1', businessId: 'biz_1' } })
+        expect.objectContaining({ where: { id: 'svc_1', businessId: 'biz_1', deletedAt: null } })
       );
       // 09:00-10:00 entra; 09:30 y 10:00 pisan el turno de 10:00; 10:30-11:30 se pasa del cierre (11:00).
       expect(res.body.slots).toEqual(['09:00']);
@@ -194,6 +194,17 @@ describe('routes/professionals', () => {
     it('sin serviceId mantiene las franjas de 30 min', async () => {
       const res = await get({ date: '2026-01-05' });
       expect(res.body.slots).toEqual(['09:00', '09:30', '10:00', '10:30']);
+    });
+
+    it('no ofrece un servicio dado de baja: el lookup excluye deletedAt y devuelve 404', async () => {
+      mock(prisma.service.findFirst).mockResolvedValue(null);
+
+      const res = await get({ date: '2026-01-05', serviceId: 'svc_baja' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.service.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'svc_baja', businessId: 'biz_1', deletedAt: null } })
+      );
     });
 
     it('devuelve 404 si el serviceId es de otro negocio', async () => {

@@ -119,6 +119,22 @@ describe('routes/industryTemplates', () => {
       expect(prisma.template.create).toHaveBeenCalledTimes(1);
     });
 
+    it('al deduplicar por nombre ignora los servicios dados de baja (deletedAt) para poder recrearlos', async () => {
+      (prisma.service.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (prisma.service.createMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 3 });
+      (prisma.template.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (prisma.template.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'tpl_1' });
+      (prisma.skill.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      await request(app)
+        .post(`/api/plantillas-negocio/${VALID_TEMPLATE_ID}/aplicar`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(prisma.service.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { businessId: 'biz_1', deletedAt: null } })
+      );
+    });
+
     it('no re-crea servicios ya existentes (idempotencia por nombre)', async () => {
       // Simula que TODOS los servicios de la plantilla ya existen: no debe crear ninguno.
       // Para eso devolvemos como existentes los nombres que la plantilla trae.

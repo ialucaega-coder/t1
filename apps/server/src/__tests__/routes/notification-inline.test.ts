@@ -25,6 +25,7 @@ vi.mock('../../middleware/auth', () => ({
     req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
     next();
   },
+  requireStaff: (_req: Request, _res: Response, next: NextFunction) => next(),
   requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 

@@ -92,7 +92,8 @@ router.get(
     let serviceDuration: number | null = null;
     if (serviceId) {
       const service = await prisma.service.findFirst({
-        where: { id: String(serviceId), businessId },
+        // Un servicio dado de baja (deletedAt) no se ofrece: 404 como si no existiera.
+        where: { id: String(serviceId), businessId, deletedAt: null },
         select: { duration: true },
       });
       if (!service) throw new AppError(404, 'Service not found');

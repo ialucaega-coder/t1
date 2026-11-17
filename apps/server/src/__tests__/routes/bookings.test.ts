@@ -44,6 +44,13 @@ vi.mock('../../middleware/auth', () => ({
     req.auth = { userId: 'user_1', businessId: 'biz_1', role };
     next();
   },
+  requireStaff: (req: Request, res: Response, next: NextFunction) => {
+    if (!['ADMIN', 'PROFESSIONAL'].includes(req.auth?.role ?? '')) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    next();
+  },
   requireRole:
     (...roles: string[]) =>
     (req: Request, res: Response, next: NextFunction) => {
@@ -354,6 +361,36 @@ describe('routes/bookings', () => {
       expect(prisma.booking.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: expect.objectContaining({ date: new Date('2026-01-05') }) })
       );
+    });
+  });
+
+  describe('GET /api/bookings: solo staff (PII de todos los clientes)', () => {
+    it('un CLIENT no puede listar las reservas del negocio (403)', async () => {
+      const res = await request(app).get('/api/bookings').set('x-test-role', 'CLIENT');
+
+      expect(res.status).toBe(403);
+      expect(prisma.booking.findMany).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL sí puede listar (200)', async () => {
+      (prisma.booking.count as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+
+      const res = await request(app).get('/api/bookings').set('x-test-role', 'PROFESSIONAL');
+
+      expect(res.status).toBe(200);
+    });
+
+    it('un CLIENT no puede exportar el CSV (403, sin consultar la base)', async () => {
+      const res = await request(app).get('/api/bookings/export/csv').set('x-test-role', 'CLIENT');
+
+      expect(res.status).toBe(403);
+      expect(prisma.booking.findMany).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL sí puede exportar el CSV (200)', async () => {
+      const res = await request(app).get('/api/bookings/export/csv').set('x-test-role', 'PROFESSIONAL');
+
+      expect(res.status).toBe(200);
     });
   });
 
