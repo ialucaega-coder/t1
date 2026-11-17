@@ -6,7 +6,7 @@
  * Prisma (en memoria, con un mutex que emula el advisory lock). Los valores son
  * todos falsos.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import crypto from 'crypto';
@@ -361,6 +361,10 @@ describe('webhook MercadoPago — cuerpos inválidos y límites', () => {
 
 describe('webhook MercadoPago — topes que un tercero no puede agotar (H1)', () => {
   const app = buildApp();
+  // Los contadores son por minuto: se fija la hora (a mitad de un minuto) para que un
+  // bucle largo no cruce el borde del minuto y parta el conteo (test intermitente).
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-17T12:00:10Z') }); });
+  afterEach(() => { vi.useRealTimers(); });
   const SECRET = 'clave-secreta-falsa';
   const sign = (id: string, reqId: string, ts: string) =>
     `ts=${ts},v1=${crypto.createHmac('sha256', SECRET).update(`id:${id};request-id:${reqId};ts:${ts};`).digest('hex')}`;
@@ -389,6 +393,24 @@ describe('webhook MercadoPago — topes que un tercero no puede agotar (H1)', ()
     const real = await post(app, 'biz_1', '203.0.113.9').send(notif());
     expect(real.status).toBe(200);
     expect(db.state.transactions).toHaveLength(1);
+  });
+
+  it('repeticiones de un pago YA registrado (duplicados verificados) NO consumen el tope del negocio', async () => {
+    mock(fetchPayment).mockImplementation(async (_token: string, id: string) => mpPayment({ id }));
+    expect((await post(app, 'biz_1', '203.0.113.1').send(notif(123))).status).toBe(200);
+    expect(db.state.transactions).toHaveLength(1);
+
+    // MercadoPago (o un tercero con el id real) reenvía el mismo pago muchas veces.
+    for (let i = 0; i < WH_MAX_PER_BUSINESS + 20; i++) {
+      const r = await post(app, 'biz_1', `9.9.${Math.floor(i / 250)}.${i % 250}`).send(notif(123));
+      expect(r.status).toBe(200);
+    }
+    expect(db.state.transactions).toHaveLength(1);
+
+    // Un pago NUEVO y legítimo sigue entrando (antes recibía 429 con el cupo gastado).
+    const fresh = await post(app, 'biz_1', '203.0.113.2').send(notif(124));
+    expect(fresh.status).toBe(200);
+    expect(db.state.transactions).toHaveLength(2);
   });
 
   it('el contador del negocio sí corta (429) cuando hay demasiados avisos verificados', async () => {

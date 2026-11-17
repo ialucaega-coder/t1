@@ -73,9 +73,10 @@ export async function processPaymentNotification(
   cfg: MpConfig,
   paymentId: string,
   /**
-   * Se llama una vez que MercadoPago reconoció el pago (aviso verificado). Si
-   * devuelve false se corta con `rate_limited`: así el tope por negocio solo
-   * cuenta avisos reales y no se puede agotar con avisos falsos.
+   * Se llama una vez que MercadoPago reconoció el pago (aviso verificado) y que NO
+   * es un duplicado de un pago ya registrado. Si devuelve false se corta con
+   * `rate_limited`: así el tope por negocio solo cuenta avisos reales y nuevos, y no
+   * se puede agotar con avisos falsos ni con repeticiones de pagos ya procesados.
    */
   onVerified?: () => Promise<boolean>,
 ): Promise<PaymentOutcome> {
@@ -85,6 +86,14 @@ export async function processPaymentNotification(
   // MercadoPago de ESTE negocio (se consulta con su propio token).
   const payment: MpPayment | null = await fetchPayment(cfg.accessToken, paymentId);
   if (!payment || payment.id !== paymentId) return { result: 'ignored', reason: 'pago_no_reconocido' };
+
+  // Un pago ya registrado (reintento de MercadoPago o reenvío de un aviso real) es
+  // un duplicado: se responde ANTES de contar el tope por negocio, así las
+  // repeticiones de pagos legítimos no consumen el cupo de avisos nuevos.
+  const key = `mp:${payment.id}`;
+  if (await findIdempotentEntityId(prisma, businessId, MP_PAYMENT_IDEMP_TYPE, key)) {
+    return { result: 'duplicate' };
+  }
   if (onVerified && !(await onVerified())) return { result: 'rate_limited' };
 
   if (payment.status !== 'approved') return { result: 'ignored', reason: `estado_${payment.status || 'desconocido'}` };
@@ -120,7 +129,6 @@ export async function processPaymentNotification(
     });
   }
 
-  const key = `mp:${payment.id}`;
   const notes =
     `Cobro con MercadoPago (pago #${payment.id})` +
     (cobro.description ? ` — ${cobro.description}` : '') +
