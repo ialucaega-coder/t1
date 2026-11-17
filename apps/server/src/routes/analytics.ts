@@ -64,6 +64,13 @@ export function attributionBase(
     )`;
 }
 
+/**
+ * La "satisfacción" NO viene de calificaciones de clientes (no se piden): se estima según
+ * cómo terminan las conversaciones. Estos campos estables lo declaran en la respuesta.
+ */
+export const SATISFACTION_BASIS = 'estado_de_conversaciones' as const;
+const ESTIMATED = { estimated: true as const, basis: SATISFACTION_BASIS };
+
 /** Etiquetas en español para cada etapa del embudo (orden de LIFECYCLE_STAGES). */
 const STAGE_LABELS: Record<LifecycleStage, string> = {
   NEW: 'Nuevo',
@@ -142,6 +149,8 @@ router.get(
       conversionRate,
       conversionChange: parseFloat((conversionRate - prevConversionRate).toFixed(1)),
       monthlyBudget: 50,
+      // `avgSatisfaction` es una estimación (fórmula sobre el estado de las conversaciones), no calificaciones reales.
+      ...ESTIMATED,
       range: { from: range.keys[0], to: range.keys[range.keys.length - 1], days: range.days, custom: range.custom },
     });
   })
@@ -202,11 +211,11 @@ router.get(
     const total = closed + handoff + open;
     if (total === 0) {
       return res.json([
-        { stars: 5, count: 0, color: '#22c55e' },
-        { stars: 4, count: 0, color: '#84cc16' },
-        { stars: 3, count: 0, color: '#eab308' },
-        { stars: 2, count: 0, color: '#f97316' },
-        { stars: 1, count: 0, color: '#ef4444' },
+        { stars: 5, count: 0, color: '#22c55e', ...ESTIMATED },
+        { stars: 4, count: 0, color: '#84cc16', ...ESTIMATED },
+        { stars: 3, count: 0, color: '#eab308', ...ESTIMATED },
+        { stars: 2, count: 0, color: '#f97316', ...ESTIMATED },
+        { stars: 1, count: 0, color: '#ef4444', ...ESTIMATED },
       ]);
     }
 
@@ -217,11 +226,11 @@ router.get(
     const star1 = Math.round(handoff * 0.4);
 
     res.json([
-      { stars: 5, count: star5, color: '#22c55e' },
-      { stars: 4, count: star4, color: '#84cc16' },
-      { stars: 3, count: star3, color: '#eab308' },
-      { stars: 2, count: star2, color: '#f97316' },
-      { stars: 1, count: star1, color: '#ef4444' },
+      { stars: 5, count: star5, color: '#22c55e', ...ESTIMATED },
+      { stars: 4, count: star4, color: '#84cc16', ...ESTIMATED },
+      { stars: 3, count: star3, color: '#eab308', ...ESTIMATED },
+      { stars: 2, count: star2, color: '#f97316', ...ESTIMATED },
+      { stars: 1, count: star1, color: '#ef4444', ...ESTIMATED },
     ]);
   })
 );

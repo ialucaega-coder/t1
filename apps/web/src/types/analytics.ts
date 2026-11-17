@@ -10,6 +10,10 @@ export interface AnalyticsKpi {
   monthlyBudget: number;
   /** Período que cubren los números (días calendario en hora de Argentina). */
   range?: { from: string; to: string; days: number; custom: boolean };
+  /** La satisfacción es una estimación (no hay calificaciones de clientes). */
+  estimated?: true;
+  /** En qué se basa la estimación (p. ej. 'estado_de_conversaciones'). */
+  basis?: string;
 }
 
 export interface AnalyticsConversation {
@@ -20,9 +24,12 @@ export interface AnalyticsConversation {
 }
 
 export interface AnalyticsSatisfaction {
+  /** Nivel 1..5 de la distribución ESTIMADA (no son calificaciones reales). */
   stars: number;
   count: number;
   color: string;
+  estimated?: true;
+  basis?: string;
 }
 
 export interface AnalyticsImprovement {

@@ -145,4 +145,38 @@ describe('routes/analytics — rango de fechas', () => {
     expect(a.body.totalConversations).toBe(5);
     expect(b.body.totalConversations).toBe(9);
   });
+
+  describe('satisfacción estimada', () => {
+    it('/satisfaction marca cada ítem como estimado (basis: estado_de_conversaciones) sin cambiar los demás campos', async () => {
+      mock(prisma.conversation.count).mockImplementation(async ({ where }: { where: { status?: string } }) =>
+        where.status === 'CLOSED' ? 10 : where.status === 'OPEN' ? 5 : 5,
+      );
+
+      const res = await request(app).get('/api/analytics/satisfaction');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(5);
+      for (const item of res.body) {
+        expect(item.estimated).toBe(true);
+        expect(item.basis).toBe('estado_de_conversaciones');
+      }
+      // Los campos de siempre siguen igual: 5★ = cerradas, 4★ = 60% de las abiertas.
+      expect(res.body[0]).toMatchObject({ stars: 5, count: 10, color: '#22c55e' });
+      expect(res.body[1]).toMatchObject({ stars: 4, count: 3 });
+    });
+
+    it('/satisfaction sin conversaciones también viene marcado como estimado', async () => {
+      const res = await request(app).get('/api/analytics/satisfaction');
+
+      expect(res.body.every((i: { estimated: boolean; count: number }) => i.estimated === true && i.count === 0)).toBe(true);
+    });
+
+    it('/kpi declara que la satisfacción es estimada', async () => {
+      const res = await request(app).get('/api/analytics/kpi');
+
+      expect(res.body.estimated).toBe(true);
+      expect(res.body.basis).toBe('estado_de_conversaciones');
+      expect(res.body.avgSatisfaction).toBeTypeOf('number');
+    });
+  });
 });

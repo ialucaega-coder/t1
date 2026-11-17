@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Star, Zap, AlertTriangle, Plus, Trash2, Send, Clock, CheckCircle2, LineChart, Filter, ChevronDown } from 'lucide-react';
+import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Activity, Zap, AlertTriangle, Plus, Trash2, Send, Clock, CheckCircle2, LineChart, Filter, ChevronDown } from 'lucide-react';
 import { useAnalytics } from '@/hooks/use-analytics';
 import type { AnalyticsTimeseriesPoint, AnalyticsFunnel, AnalyticsAttribution } from '@/types/analytics';
 import { useCampaigns } from '@/hooks/use-campaigns';
@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { DateRangeBar } from '@/components/common/DateRangeBar';
 import { DEFAULT_RANGE, rangeKey, todayLocalKey, type RangeSelection } from '@/lib/date-range';
 import { downloadCsv } from '@/lib/csv';
+import { SATISFACTION_LABEL, SATISFACTION_HELP, satisfactionLevelLabel, costLabels } from '@/lib/satisfaction';
 import { buildAnalyticsRows, exportFilename } from '@/lib/export-rows';
 
 // Clave de localStorage para recordar qué mejoras se aplicaron/ignoraron. Son
@@ -68,6 +69,7 @@ function BarChart({ data }: { data: { day: string; count: number }[] }) {
 
 function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: number; color: string }[]; avgScore: number }) {
   const total = data.reduce((s, d) => s + d.count, 0);
+  if (total === 0) return <p className="text-xs text-slate-500">Sin conversaciones en el período para estimar.</p>;
   const r = 60;
   const circumference = 2 * Math.PI * r;
   let offset = 0;
@@ -86,13 +88,13 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
           return segment;
         })}
         <text x={80} y={76} textAnchor="middle" fill="white" className="text-2xl font-bold">{avgScore}</text>
-        <text x={80} y={94} textAnchor="middle" fill="#94A3B8" className="text-[10px]">promedio</text>
+        <text x={80} y={94} textAnchor="middle" fill="#94A3B8" className="text-[10px]">estimado</text>
       </svg>
       <div className="space-y-1">
         {data.map((d) => (
           <div key={d.stars} className="flex items-center gap-2 text-xs">
             <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: d.color }} />
-            <span className="text-slate-400">{d.stars}★</span>
+            <span className="text-slate-400">{satisfactionLevelLabel(d.stars)}</span>
             <span className="text-white font-medium">{d.count}</span>
             <span className="text-slate-500">({Math.round((d.count / total) * 100)}%)</span>
           </div>
@@ -286,6 +288,7 @@ export default function AnalisisPage() {
   const rangeBar = (
     <DateRangeBar value={range} onChange={setRange} onExport={handleExport} exportDisabled={isLoading || activeTab === 'campanas'} />
   );
+  const costText = costLabels(range);
   const vsLabel = kpi.range?.custom ? 'vs período ant.' : 'vs mes ant.';
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [campaignName, setCampaignName] = useState('');
@@ -344,14 +347,15 @@ export default function AnalisisPage() {
           </p>
         </div>
         <div className="card-accent">
-          <div className="flex items-center gap-2 mb-1"><Star className="h-4 w-4 text-yellow-400" /><span className="text-[10px] text-slate-500">SATISFACCIÓN</span></div>
+          <div className="flex items-center gap-2 mb-1"><Activity className="h-4 w-4 text-yellow-400" /><span className="text-[10px] text-slate-500 uppercase">{SATISFACTION_LABEL}</span></div>
           <p className="text-2xl font-bold text-white">{kpi.avgSatisfaction}<span className="text-sm text-slate-500">/5</span></p>
           <p className={`text-[10px] ${kpi.satisfactionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
             {kpi.satisfactionChange >= 0 ? '+' : ''}{kpi.satisfactionChange} {vsLabel}
           </p>
+          <p className="text-[10px] text-slate-500 mt-1 leading-snug">{SATISFACTION_HELP}</p>
         </div>
         <div className="card-accent">
-          <div className="flex items-center gap-2 mb-1"><DollarSign className="h-4 w-4 text-emerald-400" /><span className="text-[10px] text-slate-500">COSTO IA</span></div>
+          <div className="flex items-center gap-2 mb-1"><DollarSign className="h-4 w-4 text-emerald-400" /><span className="text-[10px] text-slate-500 uppercase">{costText.cost}</span></div>
           <p className="text-2xl font-bold text-white">${kpi.monthlyAiCost}</p>
           <p className="text-[10px] text-slate-400">de ${kpi.monthlyBudget} presupuesto</p>
         </div>
@@ -380,7 +384,7 @@ export default function AnalisisPage() {
       {activeTab === 'insights' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card-accent"><h3 className="font-semibold text-white mb-4">Conversaciones por día</h3><BarChart data={conversations} /></div>
-          <div className="card-accent"><h3 className="font-semibold text-white mb-4">Satisfacción del cliente</h3><SatisfactionRing data={satisfaction} avgScore={kpi.avgSatisfaction} /></div>
+          <div className="card-accent"><h3 className="font-semibold text-white mb-1">{SATISFACTION_LABEL}</h3><p className="text-[11px] text-slate-500 mb-4">{SATISFACTION_HELP}</p><SatisfactionRing data={satisfaction} avgScore={kpi.avgSatisfaction} /></div>
         </div>
       )}
 
@@ -473,7 +477,7 @@ export default function AnalisisPage() {
           <h3 className="font-semibold text-white mb-4">Desglose de costos IA</h3>
           <div className="mb-4">
             <div className="flex justify-between text-xs mb-1">
-              <span className="text-slate-400">Presupuesto mensual</span>
+              <span className="text-slate-400">{costText.budget}</span>
               <span className="text-white">${kpi.monthlyAiCost} / ${kpi.monthlyBudget}</span>
             </div>
             <div className="h-2 bg-surface-100 rounded-full overflow-hidden">

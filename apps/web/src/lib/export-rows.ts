@@ -6,6 +6,7 @@
  */
 import type { CsvCell } from '@/lib/csv';
 import { rangeLabel, type RangeSelection } from '@/lib/date-range';
+import { SATISFACTION_LABEL, SATISFACTION_HELP, satisfactionLevelLabel, costLabels } from '@/lib/satisfaction';
 import type {
   AnalyticsKpi,
   AnalyticsConversation,
@@ -58,8 +59,8 @@ export function buildAnalyticsRows(d: AnalyticsExportData): CsvRow[] {
 
   rows.push(
     ['Resumen', 'Conversaciones', d.kpi.totalConversations, fmtChange(d.kpi.conversationsChange)],
-    ['Resumen', 'Satisfacción (de 5)', d.kpi.avgSatisfaction, fmtChange(d.kpi.satisfactionChange, '')],
-    ['Resumen', 'Costo IA estimado (USD)', d.kpi.monthlyAiCost, fmtChange(d.kpi.aiCostChange)],
+    ['Resumen', `${SATISFACTION_LABEL} (de 5)`, d.kpi.avgSatisfaction, `estimada; ${SATISFACTION_HELP} ${fmtChange(d.kpi.satisfactionChange, '')}`],
+    ['Resumen', `${costLabels(d.range).cost} (USD, estimado)`, d.kpi.monthlyAiCost, fmtChange(d.kpi.aiCostChange)],
     ['Resumen', 'Conversión de reservas (%)', d.kpi.conversionRate, fmtChange(d.kpi.conversionChange)],
   );
 
@@ -69,7 +70,7 @@ export function buildAnalyticsRows(d: AnalyticsExportData): CsvRow[] {
   switch (d.tab) {
     case 'insights':
       conversationsByDay();
-      d.satisfaction.forEach((s) => rows.push(['Satisfacción', `${s.stars} estrellas`, s.count, '']));
+      d.satisfaction.forEach((s) => rows.push([SATISFACTION_LABEL, satisfactionLevelLabel(s.stars), s.count, 'estimada']));
       break;
     case 'estadisticas':
       conversationsByDay();

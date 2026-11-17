@@ -41,6 +41,26 @@ describe('lib/export-rows — Análisis', () => {
     expect(rows.some((r) => r[0] === 'Costos IA (estimados)')).toBe(false);
   });
 
+  it('la satisfacción sale rotulada como estimada (KPI y distribución), sin estrellas', () => {
+    const rows = buildAnalyticsRows(base({
+      satisfaction: [{ stars: 5, count: 7, color: '#fff' }],
+    }));
+    const kpiRow = rows.find((r) => r[0] === 'Resumen' && String(r[1]).startsWith('Satisfacción'))!;
+    expect(kpiRow[1]).toBe('Satisfacción estimada (de 5)');
+    expect(String(kpiRow[3])).toMatch(/^estimada;/);
+    expect(rows).toContainEqual(['Satisfacción estimada', 'Nivel 5 de 5', 7, 'estimada']);
+    expect(toCsv(rows)).not.toContain('★');
+    expect(toCsv(rows)).not.toMatch(/estrellas/);
+  });
+
+  it('el costo IA del resumen dice "mensual" sin rango y "del período" con rango', () => {
+    const sinRango = buildAnalyticsRows(base({ range: { kind: 'default' } }));
+    const conRango = buildAnalyticsRows(base({ range: { kind: 'preset', days: 30 } }));
+    expect(sinRango.some((r) => r[1] === 'Costo IA mensual (USD, estimado)')).toBe(true);
+    expect(conRango.some((r) => r[1] === 'Costo IA del período (USD, estimado)')).toBe(true);
+    expect(conRango.some((r) => /mensual/i.test(String(r[1])))).toBe(false);
+  });
+
   it('pestaña costos: un renglón por modelo más el total', () => {
     const rows = buildAnalyticsRows(base({ tab: 'costos', costs: [{ model: 'Claude Sonnet', tokens: 1000, cost: 0.5 }] }));
     expect(rows).toContainEqual(['Costos IA (estimados)', 'Claude Sonnet', 0.5, '1000 tokens']);
