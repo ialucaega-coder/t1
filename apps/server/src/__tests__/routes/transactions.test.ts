@@ -303,6 +303,22 @@ describe('routes/transactions — POST / (misma Idempotency-Key, otro contenido)
     const res = await request(app).post('/api/transactions').set('Idempotency-Key', 'pay-1').send(payload);
     expect(res.status).toBe(200);
   });
+
+  it('un monto con más de 2 decimales (10.005, guardado como 10.01) es un replay legítimo, no 409', async () => {
+    mock(prisma.transaction.findFirst).mockResolvedValue({
+      id: 'tx_1', amount: '10.01', type: 'SALE', paymentMethod: 'CASH', reference: null, notes: null,
+    });
+    const res = await request(app).post('/api/transactions').set('Idempotency-Key', 'pay-1').send({ ...payload, amount: 10.005 });
+    expect(res.status).toBe(200);
+  });
+
+  it('otro monto sigue dando 409 aunque difiera en centavos (10.02 vs 10.01)', async () => {
+    mock(prisma.transaction.findFirst).mockResolvedValue({
+      id: 'tx_1', amount: '10.01', type: 'SALE', paymentMethod: 'CASH', reference: null, notes: null,
+    });
+    const res = await request(app).post('/api/transactions').set('Idempotency-Key', 'pay-1').send({ ...payload, amount: 10.02 });
+    expect(res.status).toBe(409);
+  });
 });
 
 describe('routes/transactions — GET /export/csv (inyección de fórmulas)', () => {

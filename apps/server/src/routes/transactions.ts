@@ -172,6 +172,12 @@ router.get(
   })
 );
 
+/** Redondea a centavos como Postgres (mitad hacia arriba para positivos), sin errores de punto flotante. */
+function roundCents(n: number): number {
+  const str = String(n);
+  return str.includes('e') ? Math.round(n * 100) / 100 : Math.round(Number(`${str}e2`)) / 100;
+}
+
 /**
  * Una Idempotency-Key repetida con un contenido DISTINTO no es un reintento: es un
  * error del cliente (clave reutilizada). Devolver el cobro anterior en silencio
@@ -182,7 +188,9 @@ function assertSamePayload(
   data: CreateTransactionInput,
 ) {
   const same =
-    Number(prior.amount) === data.amount &&
+    // La columna es Decimal(10,2): lo guardado ya está redondeado a centavos, así que
+    // el monto del reintento se redondea igual (10.005 -> 10.01) antes de comparar.
+    roundCents(Number(prior.amount)) === roundCents(data.amount) &&
     prior.type === data.type &&
     prior.paymentMethod === data.paymentMethod &&
     (prior.reference ?? null) === (data.reference ?? null) &&

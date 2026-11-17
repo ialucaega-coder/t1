@@ -28,7 +28,10 @@ import {
 
 const router = Router();
 
-const ORDER_INCLUDE = { items: { include: { product: true } }, client: true } as const;
+// El cliente es un User: NUNCA se incluye completo (traería passwordHash, 2FA, etc.).
+// Solo los campos no sensibles que usa el panel y las notificaciones.
+const CLIENT_SELECT = { id: true, name: true, phone: true, email: true } as const;
+const ORDER_INCLUDE = { items: { include: { product: true } }, client: { select: CLIENT_SELECT } } as const;
 
 /**
  * Una Idempotency-Key repetida con un contenido DISTINTO no es un reintento sino

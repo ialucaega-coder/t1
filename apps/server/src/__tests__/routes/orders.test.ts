@@ -305,6 +305,62 @@ describe('routes/orders — POST / (orden de locks, tope de total, clave con otr
   });
 });
 
+describe('routes/orders — el cliente nunca se devuelve completo (sin passwordHash)', () => {
+  const app = buildApp();
+  const SAFE_CLIENT = { select: { id: true, name: true, phone: true, email: true } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.order.create).mockResolvedValue({ id: 'order_1', totalPrice: 100 });
+    mock(prisma.transaction.create).mockResolvedValue({ id: 'tx_1' });
+    mock(prisma.connection.findFirst).mockResolvedValue(null);
+    mock(prisma.$executeRaw).mockResolvedValue(undefined);
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
+    mock(prisma.product.findMany).mockResolvedValue([{ id: 'prod_a', price: 100, name: 'A', businessId: 'biz_1' }]);
+    mock(prisma.order.findMany).mockResolvedValue([]);
+    mock(prisma.order.count).mockResolvedValue(0);
+    mock(prisma.order.findFirst).mockResolvedValue({ status: 'PENDING', id: 'order_1' });
+    mock(prisma.order.updateMany).mockResolvedValue({ count: 1 });
+    mock(prisma.order.findFirstOrThrow).mockResolvedValue({ id: 'order_1', status: 'CONFIRMED', totalPrice: 1, clientId: 'c' });
+  });
+
+  /** Ningún include del cliente puede ser `true` (traería el User completo con passwordHash). */
+  const clientIncludes = (calls: unknown[][]) =>
+    calls.map((c) => (c[0] as { include?: { client?: unknown } }).include?.client);
+
+  it('POST /: el create incluye el cliente con select exacto y sin campos sensibles', async () => {
+    await request(app).post('/api/orders').send({ items: [{ productId: 'prod_a', quantity: 1 }], paymentMethod: 'CASH' });
+    expect(clientIncludes(mock(prisma.order.create).mock.calls)).toEqual([SAFE_CLIENT]);
+  });
+
+  it('PATCH /:id/notes: el pedido devuelto incluye el cliente con select exacto', async () => {
+    await request(app).patch('/api/orders/order_1/notes').send({ notes: 'x' });
+    expect(clientIncludes(mock(prisma.order.findFirstOrThrow).mock.calls)).toEqual([SAFE_CLIENT]);
+  });
+
+  it('PATCH /:id/status: el cliente se selecciona sin campos sensibles', async () => {
+    await request(app).patch('/api/orders/order_1/status').send({ status: 'CONFIRMED' });
+    const client = clientIncludes(mock(prisma.order.findFirstOrThrow).mock.calls)[0] as { select: Record<string, boolean> };
+    expect(client).not.toBe(true);
+    expect(Object.keys(client.select)).not.toContain('passwordHash');
+  });
+
+  it('GET /: el listado selecciona solo campos no sensibles del cliente', async () => {
+    await request(app).get('/api/orders');
+    const client = clientIncludes(mock(prisma.order.findMany).mock.calls)[0] as { select: Record<string, boolean> };
+    expect(client).not.toBe(true);
+    expect(Object.keys(client.select).sort()).toEqual(['id', 'name', 'phone']);
+  });
+
+  it('la replay idempotente también carga el cliente con select seguro', async () => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ config: { key: 'k', entityId: 'order_1' } });
+    mock(prisma.order.findFirst).mockResolvedValue({ id: 'order_1', clientId: 'user_1', items: [{ productId: 'prod_a', quantity: 1 }] });
+    await request(app).post('/api/orders').set('Idempotency-Key', 'k').send({ items: [{ productId: 'prod_a', quantity: 1 }], paymentMethod: 'CASH' });
+    expect(clientIncludes(mock(prisma.order.findFirst).mock.calls)).toContainEqual(SAFE_CLIENT);
+  });
+});
+
 describe('routes/orders — GET / (búsqueda y filtro por estado)', () => {
   const app = buildApp();
 
