@@ -75,6 +75,25 @@ describe('middleware/rateLimit', () => {
     expect(resA2.status).toHaveBeenCalledWith(429);
   });
 
+  it('los buckets auth y api son independientes para la misma IP', () => {
+    const authLimiter = rateLimit(1, 'auth');
+    const apiLimiter = rateLimit(1, 'api');
+    const next = vi.fn() as unknown as NextFunction;
+    const ip = '5.5.5.5';
+
+    // 1er request de auth: permitido; 2do: bloqueado (max=1 en bucket 'auth').
+    authLimiter(createMockReq(ip), createMockRes(), next);
+    const resAuth2 = createMockRes();
+    authLimiter(createMockReq(ip), resAuth2, next);
+    expect(resAuth2.status).toHaveBeenCalledWith(429);
+
+    // Aunque 'auth' esté agotado para esa IP, el bucket 'api' sigue libre:
+    // antes compartían contador y el login bloqueaba a la API (y viceversa).
+    const resApi1 = createMockRes();
+    apiLimiter(createMockReq(ip), resApi1, next);
+    expect(resApi1.status).not.toHaveBeenCalled();
+  });
+
   it('usa remoteAddress cuando req.ip no esta definido', () => {
     const middleware = rateLimit(5);
     const req = { ip: undefined, socket: { remoteAddress: '9.9.9.9' } } as unknown as Request;

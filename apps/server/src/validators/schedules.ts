@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchSchema } from './patch';
 
 /** Creación de un bloque de horario para un profesional. */
 export const createScheduleSchema = z.object({
@@ -10,7 +11,7 @@ export const createScheduleSchema = z.object({
 });
 
 /** Actualización parcial de un bloque de horario. */
-export const updateScheduleSchema = createScheduleSchema.partial();
+export const updateScheduleSchema = patchSchema(createScheduleSchema);
 
 export type CreateScheduleInput = z.infer<typeof createScheduleSchema>;
 export type UpdateScheduleInput = z.infer<typeof updateScheduleSchema>;

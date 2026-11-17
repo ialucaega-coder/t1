@@ -1,12 +1,12 @@
-# Seguridad — Local B
+# Seguridad — Mr. Go Assistance
 
 Este documento describe la arquitectura de seguridad de la plataforma
-SaaS Local B, el flujo de autenticación, las medidas de protección de
+SaaS Mr. Go Assistance, el flujo de autenticación, las medidas de protección de
 datos implementadas y cómo reportar vulnerabilidades.
 
 ## 1. Arquitectura de seguridad
 
-Local B es un monorepo con dos aplicaciones principales:
+Mr. Go Assistance es un monorepo con dos aplicaciones principales:
 
 - `apps/server` — API REST en Express.js (Node.js + TypeScript)
 - `apps/web` — Frontend en Next.js 14 (App Router)
@@ -114,7 +114,7 @@ Local B es un monorepo con dos aplicaciones principales:
 
 ## 4. Reportar una vulnerabilidad
 
-Si encontrás una vulnerabilidad de seguridad en Local B, por favor
+Si encontrás una vulnerabilidad de seguridad en Mr. Go Assistance, por favor
 **no la reportes en un issue público**. Escribinos directamente a:
 
 **security@localb.app**

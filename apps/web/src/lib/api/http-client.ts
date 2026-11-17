@@ -1,9 +1,15 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
+// Timeout por request. Sin esto, una API lenta o caída deja las secciones que
+// dependen del fetch colgadas indefinidamente (spinner infinito). Con el
+// AbortController cortamos a los N ms y lanzamos un error claro que el hook
+// convierte en su estado de error/fallback.
+export const REQUEST_TIMEOUT_MS = 20000;
+
 // Nombre de la cookie "espejo" del token, en el dominio del propio
 // frontend (no es la cookie httpOnly que emite la API, que vive en
 // otro dominio/puerto y por lo tanto no es visible para Next.js).
-// El middleware de Next (apps/web/src/middleware.ts) solo puede leer
+// El proxy de Next (apps/web/src/proxy.ts, ex-middleware) solo puede leer
 // cookies, nunca localStorage, así que reflejamos aquí la presencia
 // del token para poder proteger rutas a nivel de edge/servidor. No
 // es una fuente de verdad de seguridad: la validación real del JWT
@@ -42,7 +48,11 @@ export class HttpClient {
     return this.token;
   }
 
-  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    options: RequestInit = {},
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     const token = this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -53,17 +63,45 @@ export class HttpClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`${API_URL}${path}`, {
-      ...options,
-      headers,
-    });
+    // Aborta el request si supera `timeoutMs` (evita spinners infinitos cuando
+    // el backend está lento o caído). Las llamadas largas (loop de IA) pasan el
+    // suyo: con el global de 20 s se cortaba el cliente mientras el server
+    // seguía ejecutando, y un reintento podía repetir acciones reales.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let res: Response;
+    try {
+      res = await fetch(`${API_URL}${path}`, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new Error('La solicitud tardó demasiado. Revisá tu conexión e intentá de nuevo.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (res.status === 401) {
-      this.setToken(null);
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+      // En los endpoints de autenticación, un 401 es un resultado esperado
+      // (credenciales inválidas), NO una sesión vencida. No redirigimos ni
+      // limpiamos token: propagamos el mensaje del backend para que la pantalla
+      // de login lo muestre. Antes, todo 401 hacía una recarga dura a /login,
+      // así que el error nunca llegaba a verse y se vaciaba el formulario.
+      const isAuthAttempt = path.startsWith('/auth/login') || path.startsWith('/auth/register');
+      if (!isAuthAttempt) {
+        this.setToken(null);
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login';
+        }
+        throw new Error('Unauthorized');
       }
-      throw new Error('Unauthorized');
+      const body = await res.json().catch(() => ({ error: 'Credenciales inválidas' }));
+      throw new Error(body.error || 'Credenciales inválidas');
     }
 
     if (!res.ok) {
@@ -75,23 +113,40 @@ export class HttpClient {
     return res.json();
   }
 
+  // GET en vuelo por (token + ruta). Varios componentes que piden lo mismo a la vez
+  // (p. ej. Header y una página con useNotifications) comparten UN solo request. Se
+  // vacía en cuanto sale una escritura: un GET posterior a un POST/PUT/PATCH/DELETE
+  // nunca reutiliza una respuesta anterior a la escritura.
+  private inflight = new Map<string, Promise<unknown>>();
+
   get<T>(path: string) {
-    return this.request<T>(path);
+    const key = `${this.getToken() ?? ''}|${path}`;
+    const existing = this.inflight.get(key);
+    if (existing) return existing as Promise<T>;
+    const p = this.request<T>(path).finally(() => {
+      if (this.inflight.get(key) === p) this.inflight.delete(key);
+    });
+    this.inflight.set(key, p);
+    return p;
   }
 
-  post<T>(path: string, body: unknown) {
-    return this.request<T>(path, { method: 'POST', body: JSON.stringify(body) });
+  post<T>(path: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number) {
+    this.inflight.clear();
+    return this.request<T>(path, { method: 'POST', body: JSON.stringify(body), headers }, timeoutMs);
   }
 
   put<T>(path: string, body: unknown) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
   }
 
   patch<T>(path: string, body: unknown) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
   }
 
   delete<T>(path: string) {
+    this.inflight.clear();
     return this.request<T>(path, { method: 'DELETE' });
   }
 }

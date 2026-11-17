@@ -31,7 +31,7 @@ export const MOCK_MARKETPLACE_ITEMS: MarketplaceItem[] = [
     reviews: 124,
     price: 'Gratis',
     installed: true,
-    author: 'Local B',
+    author: 'Mr. Go Assistance',
     icon: 'calendar',
   },
   {
@@ -43,7 +43,7 @@ export const MOCK_MARKETPLACE_ITEMS: MarketplaceItem[] = [
     reviews: 89,
     price: '$9.99/mes',
     installed: false,
-    author: 'Local B',
+    author: 'Mr. Go Assistance',
     icon: 'shopping-bag',
   },
   {
@@ -91,7 +91,7 @@ export const MOCK_MARKETPLACE_ITEMS: MarketplaceItem[] = [
     reviews: 45,
     price: 'Gratis',
     installed: true,
-    author: 'Local B',
+    author: 'Mr. Go Assistance',
     icon: 'message-square',
   },
   {

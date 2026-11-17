@@ -5,23 +5,16 @@ import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react';
 import { statsApi } from '@/lib/api/index';
 import type { HealthIndicator } from '@/lib/api/stats';
 
-const FALLBACK_INDICATORS: HealthIndicator[] = [
-  { key: 'confirmation_rate', label: 'Tasa de confirmación', value: '—', numericValue: 0, good: true, change: 0 },
-  { key: 'no_show_rate', label: 'Tasa de no-show', value: '—', numericValue: 0, good: true, change: 0 },
-  { key: 'cancellation_rate', label: 'Tasa de cancelación', value: '—', numericValue: 0, good: true, change: 0 },
-  { key: 'retention_rate', label: 'Retención mensual', value: '—', numericValue: 0, good: true, change: 0 },
-  { key: 'new_clients', label: 'Clientes nuevos (30d)', value: '—', numericValue: 0, good: true, change: 0 },
-];
-
 export function HealthIndicators() {
-  const [indicators, setIndicators] = useState<HealthIndicator[]>(FALLBACK_INDICATORS);
+  const [indicators, setIndicators] = useState<HealthIndicator[]>([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     statsApi
       .getHealthIndicators()
       .then((res) => setIndicators(res.indicators))
-      .catch(() => {})
+      .catch(() => setFailed(true))
       .finally(() => setLoading(false));
   }, []);
 
@@ -34,6 +27,10 @@ export function HealthIndicators() {
           <Loader2 className="h-4 w-4 animate-spin mr-2" />
           <span className="text-sm">Calculando...</span>
         </div>
+      ) : failed ? (
+        <p role="alert" className="text-sm text-red-400 py-2">
+          No se pudieron calcular los indicadores. Recargá la página para reintentar.
+        </p>
       ) : (
         <div className="space-y-4">
           {indicators.map((item) => {

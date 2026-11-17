@@ -22,6 +22,16 @@ export type AuditEventType =
   | 'AUTH_REGISTER'
   | 'AUTH_LOGOUT'
   | 'AUTH_ACCOUNT_LOCKED'
+  | 'AUTH_2FA_ENABLED'
+  | 'AUTH_2FA_DISABLED'
+  | 'AUTH_2FA_RECOVERY_USED'
+  | 'AUTH_2FA_RECOVERY_REGENERATED'
+  | 'AUTH_INVITE_ACCEPTED'
+  | 'AUTH_INVITE_REJECTED'
+  | 'TEAM_INVITE_SENT'
+  | 'TEAM_INVITE_REVOKED'
+  | 'TEAM_ROLE_CHANGED'
+  | 'TEAM_MEMBER_REMOVED'
   | 'DATA_CREATE'
   | 'DATA_UPDATE'
   | 'DATA_DELETE'
@@ -86,7 +96,7 @@ export function recordAuditEvent(event: AuditEvent): void {
 export function auditAuthEvent(
   type: Extract<
     AuditEventType,
-    'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_FAILURE' | 'AUTH_REGISTER' | 'AUTH_LOGOUT' | 'AUTH_ACCOUNT_LOCKED'
+    'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_FAILURE' | 'AUTH_REGISTER' | 'AUTH_LOGOUT' | 'AUTH_ACCOUNT_LOCKED' | 'AUTH_2FA_ENABLED' | 'AUTH_2FA_DISABLED' | 'AUTH_2FA_RECOVERY_USED' | 'AUTH_2FA_RECOVERY_REGENERATED' | 'AUTH_INVITE_ACCEPTED' | 'AUTH_INVITE_REJECTED'
   >,
   req: Request,
   extra: { userId?: string; businessId?: string; metadata?: Record<string, unknown> } = {}

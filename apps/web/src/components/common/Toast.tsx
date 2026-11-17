@@ -45,7 +45,7 @@ const iconColors: Record<ToastType, string> = {
 
 function ToastMessage({ item, onRemove }: { item: ToastItem; onRemove: (id: string) => void }) {
   const Icon = icons[item.type];
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     timerRef.current = setTimeout(() => onRemove(item.id), item.duration ?? 4000);

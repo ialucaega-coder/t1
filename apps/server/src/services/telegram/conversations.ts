@@ -7,11 +7,12 @@ import {
   confirmationKeyboard,
 } from './keyboards';
 import type { Context } from 'grammy';
+import { sharedGet, sharedSet, sharedDel } from '../../lib/sharedState';
 
 // ────────────────────────────────────────────────────────────────
 // Estado conversacional para el flujo de reserva por Telegram.
 //
-// Cada chat tiene un estado temporal (en memoria) que guía el
+// Cada chat tiene un estado temporal (compartido, ver abajo) que guía el
 // flujo: selección de servicio → profesional → fecha → hora →
 // confirmación → grabado en DB.
 // ────────────────────────────────────────────────────────────────
@@ -27,19 +28,31 @@ export interface BookingState {
   startTime?: string;  // HH:mm
 }
 
-// Almacén en memoria de estados por chatId
-const states = new Map<number, BookingState>();
+// Estado por chat en el almacén compartido (Redis si hay REDIS_URL, memoria si no).
+// Antes vivía en un Map del proceso, sin TTL y con clave solo `chatId`:
+//  - con varias instancias el callback de un botón podía caer en una que no tenía
+//    el estado y el flujo se rompía;
+//  - un mismo usuario hablando con los bots de DOS negocios pisaba su `businessId`;
+//  - el Map crecía sin límite.
+// Ahora la clave incluye el id del bot de Telegram (un bot = un negocio) y el
+// estado vence solo a los 30 min de inactividad (cada set renueva el TTL).
+const STATE_TTL_MS = 30 * 60 * 1000;
 
-export function getState(chatId: number): BookingState | undefined {
-  return states.get(chatId);
+/** Clave del estado: bot (negocio) + chat. `ctx.me` es el propio bot de Telegram. */
+function stateKey(ctx: Context): string {
+  return `tg-booking:${ctx.me?.id ?? 'bot'}:${ctx.chat!.id}`;
 }
 
-export function setState(chatId: number, state: BookingState): void {
-  states.set(chatId, state);
+export async function getState(ctx: Context): Promise<BookingState | undefined> {
+  return sharedGet<BookingState>(stateKey(ctx));
 }
 
-export function clearState(chatId: number): void {
-  states.delete(chatId);
+export async function setState(ctx: Context, state: BookingState): Promise<void> {
+  await sharedSet(stateKey(ctx), state, STATE_TTL_MS);
+}
+
+export async function clearState(ctx: Context): Promise<void> {
+  await sharedDel(stateKey(ctx));
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -57,7 +70,7 @@ export async function startBookingFlow(ctx: Context, businessId: string): Promis
     return;
   }
 
-  setState(ctx.chat!.id, { step: 'select_service', businessId });
+  await setState(ctx, { step: 'select_service', businessId });
 
   const mapped = services.map((s) => ({
     id: s.id,
@@ -77,11 +90,13 @@ export async function startBookingFlow(ctx: Context, businessId: string): Promis
 
 export async function handleServiceSelected(ctx: Context, serviceId: string): Promise<void> {
   const chatId = ctx.chat!.id;
-  const state = getState(chatId);
+  const state = await getState(ctx);
   if (!state) return;
 
-  const service = await prisma.service.findUnique({
-    where: { id: serviceId },
+  // `serviceId` viene de callback_data (controlable por el cliente): se acota al
+  // negocio del chat para que no resuelva un servicio de otro tenant.
+  const service = await prisma.service.findFirst({
+    where: { id: serviceId, businessId: state.businessId },
     include: {
       professionals: {
         where: { isAvailable: true },
@@ -104,7 +119,7 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
     state.professionalId = prof.id;
     state.professionalName = prof.user.name;
     state.step = 'select_date';
-    setState(chatId, state);
+    await setState(ctx, state);
 
     await ctx.reply(
       `📅 *${service.name}* con *${prof.user.name}*\nElegí una fecha:`,
@@ -122,7 +137,7 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
 
     if (allProfs.length === 0) {
       await ctx.reply('😕 No hay profesionales disponibles.');
-      clearState(chatId);
+      await clearState(ctx);
       return;
     }
 
@@ -130,7 +145,7 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
       state.professionalId = allProfs[0].id;
       state.professionalName = allProfs[0].user.name;
       state.step = 'select_date';
-      setState(chatId, state);
+      await setState(ctx, state);
       await ctx.reply(
         `📅 *${service.name}* con *${allProfs[0].user.name}*\nElegí una fecha:`,
         { reply_markup: dateKeyboard(), parse_mode: 'Markdown' },
@@ -139,7 +154,7 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
     }
 
     state.step = 'select_professional';
-    setState(chatId, state);
+    await setState(ctx, state);
 
     const mapped = allProfs.map((p) => ({ id: p.id, name: p.user.name }));
     await ctx.reply('Elegí un profesional:', {
@@ -149,7 +164,7 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
   }
 
   state.step = 'select_professional';
-  setState(chatId, state);
+  await setState(ctx, state);
 
   const mapped = service.professionals.map((p) => ({ id: p.id, name: p.user.name }));
   await ctx.reply('Elegí un profesional:', {
@@ -163,11 +178,11 @@ export async function handleServiceSelected(ctx: Context, serviceId: string): Pr
 
 export async function handleProfessionalSelected(ctx: Context, professionalId: string): Promise<void> {
   const chatId = ctx.chat!.id;
-  const state = getState(chatId);
+  const state = await getState(ctx);
   if (!state) return;
 
-  const prof = await prisma.professional.findUnique({
-    where: { id: professionalId },
+  const prof = await prisma.professional.findFirst({
+    where: { id: professionalId, businessId: state.businessId },
     include: { user: { select: { name: true } } },
   });
 
@@ -179,7 +194,7 @@ export async function handleProfessionalSelected(ctx: Context, professionalId: s
   state.professionalId = prof.id;
   state.professionalName = prof.user.name;
   state.step = 'select_date';
-  setState(chatId, state);
+  await setState(ctx, state);
 
   await ctx.reply(
     `📅 *${state.serviceName}* con *${prof.user.name}*\nElegí una fecha:`,
@@ -193,7 +208,7 @@ export async function handleProfessionalSelected(ctx: Context, professionalId: s
 
 export async function handleDateSelected(ctx: Context, dateStr: string): Promise<void> {
   const chatId = ctx.chat!.id;
-  const state = getState(chatId);
+  const state = await getState(ctx);
   if (!state || !state.professionalId || !state.serviceId) return;
 
   state.date = dateStr;
@@ -217,7 +232,7 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   }
 
   // Obtener servicio para la duración
-  const service = await prisma.service.findUnique({ where: { id: state.serviceId } });
+  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
   if (!service) return;
 
   // Obtener reservas existentes para ese día y profesional
@@ -267,7 +282,7 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   }
 
   state.step = 'select_time';
-  setState(chatId, state);
+  await setState(ctx, state);
 
   await ctx.reply('🕐 Elegí un horario:', {
     reply_markup: timeSlotsKeyboard(slots),
@@ -280,14 +295,14 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
 
 export async function handleTimeSelected(ctx: Context, time: string): Promise<void> {
   const chatId = ctx.chat!.id;
-  const state = getState(chatId);
+  const state = await getState(ctx);
   if (!state) return;
 
   state.startTime = time;
   state.step = 'confirm';
-  setState(chatId, state);
+  await setState(ctx, state);
 
-  const service = await prisma.service.findUnique({ where: { id: state.serviceId } });
+  const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
 
   const summary = [
     '📋 *Resumen de tu reserva:*',
@@ -313,26 +328,26 @@ export async function handleTimeSelected(ctx: Context, time: string): Promise<vo
 
 export async function handleConfirmation(ctx: Context, confirmed: boolean): Promise<void> {
   const chatId = ctx.chat!.id;
-  const state = getState(chatId);
+  const state = await getState(ctx);
   if (!state) return;
 
   if (!confirmed) {
-    clearState(chatId);
+    await clearState(ctx);
     await ctx.reply('❌ Reserva cancelada. Podés empezar de nuevo con /reservar');
     return;
   }
 
   if (!state.serviceId || !state.professionalId || !state.date || !state.startTime) {
     await ctx.reply('⚠️ Faltan datos. Empezá de nuevo con /reservar');
-    clearState(chatId);
+    await clearState(ctx);
     return;
   }
 
   try {
-    const service = await prisma.service.findUnique({ where: { id: state.serviceId } });
+    const service = await prisma.service.findFirst({ where: { id: state.serviceId, businessId: state.businessId } });
     if (!service) {
       await ctx.reply('⚠️ Servicio no encontrado.');
-      clearState(chatId);
+      await clearState(ctx);
       return;
     }
 
@@ -347,8 +362,11 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
       ? [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(' ')
       : 'Cliente Telegram';
 
-    // Buscar cliente existente por email generado para Telegram
-    const telegramEmail = `telegram_${chatId}@localb.bot`;
+    // Buscar cliente existente por email generado para Telegram. El email
+    // incluye el businessId: sin él, el mismo chatId de Telegram usado en dos
+    // negocios compartía el MISMO User (clientId de otro tenant), mezclando datos
+    // entre negocios. Scopeado por negocio, cada uno tiene su propio cliente.
+    const telegramEmail = `telegram_${state.businessId}_${chatId}@localb.bot`;
     let client = await prisma.user.findUnique({ where: { email: telegramEmail } });
 
     if (!client) {
@@ -363,23 +381,54 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
       });
     }
 
-    // Crear la reserva
-    const booking = await prisma.booking.create({
-      data: {
-        date: new Date(state.date),
-        startTime: state.startTime,
-        endTime,
-        totalPrice: service.price,
-        source: 'TELEGRAM',
-        notes: `Reserva desde Telegram — @${telegramUser?.username || chatId}`,
-        clientId: client.id,
-        professionalId: state.professionalId,
-        serviceId: state.serviceId,
-        businessId: state.businessId,
-      },
+    // Reserva atómica: mismo patrón que el chat web. Tomamos un advisory lock
+    // transaccional por (negocio, profesional, día) y re-chequeamos el solape
+    // DENTRO de la transacción, con el lock tomado. Sin esto, dos reservas
+    // concurrentes del mismo recurso (ej: dos chats confirmando a la vez) podían
+    // crear un doble booking porque no hay @@unique en el schema (congelado).
+    // pg_advisory_xact_lock se libera solo al commit/rollback.
+    // Valores ya garantizados no-nulos por el guard de arriba; los capturamos en
+    // locales porque el narrowing de TS no sobrevive dentro del closure de la tx.
+    const { businessId, serviceId, professionalId, date, startTime } = state;
+    const lockKey = `booking:${businessId}:${professionalId}:${date}`;
+    const booking = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+      const sameDayBookings = await tx.booking.findMany({
+        where: {
+          businessId,
+          date: new Date(date),
+          status: { notIn: ['CANCELLED'] },
+          professionalId,
+        },
+        select: { startTime: true, endTime: true },
+      });
+      const overlaps = sameDayBookings.some((b) => startTime < b.endTime && endTime > b.startTime);
+      if (overlaps) return null;
+
+      return tx.booking.create({
+        data: {
+          date: new Date(date),
+          startTime,
+          endTime,
+          totalPrice: service.price,
+          source: 'TELEGRAM',
+          notes: `Reserva desde Telegram — @${telegramUser?.username || chatId}`,
+          clientId: client.id,
+          professionalId,
+          serviceId,
+          businessId,
+        },
+      });
     });
 
-    clearState(chatId);
+    if (!booking) {
+      await clearState(ctx);
+      await ctx.reply('⚠️ Ese horario se acaba de ocupar. Empezá de nuevo con /reservar y elegí otro.');
+      return;
+    }
+
+    await clearState(ctx);
 
     await ctx.reply(
       [
@@ -396,7 +445,7 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
     );
   } catch (error) {
     console.error('Error al crear reserva desde Telegram:', error);
-    clearState(chatId);
+    await clearState(ctx);
     await ctx.reply('⚠️ Hubo un error al crear la reserva. Intentá de nuevo más tarde.');
   }
 }

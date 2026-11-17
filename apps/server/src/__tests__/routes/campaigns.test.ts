@@ -1,0 +1,460 @@
+/**
+ * Pruebas de integracion para las rutas de campanas (`src/routes/campaigns.ts`):
+ * listado paginado, destinatarios, creacion (ADMIN), actualizacion, envio y
+ * eliminacion.
+ *
+ * Se mockean Prisma y la capa de socket (`lib/socket`). Se usa el middleware de
+ * auth real con JWT firmado para probar 401/403.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import jwt from 'jsonwebtoken';
+
+vi.mock('../../lib/prisma', () => ({
+  prisma: {
+    campaign: {
+      findMany: vi.fn(),
+      count: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
+      deleteMany: vi.fn(),
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+    },
+    booking: { findMany: vi.fn() },
+    user: { findMany: vi.fn(), count: vi.fn() },
+    business: { findUnique: vi.fn() },
+  },
+}));
+
+// getIO se mockea para devolver undefined; la ruta usa optional chaining, asi
+// que el emit se omite sin romper. Evita importar el server real de socket.io.
+vi.mock('../../lib/socket', () => ({
+  getIO: () => undefined,
+}));
+
+// Adaptadores de envio saliente mockeados: no se tocan Twilio/Resend reales. El
+// envio de campanas los reutiliza (no los reescribe), asi que verificamos que se
+// llamen una vez por destinatario alcanzable.
+vi.mock('../../services/whatsapp/client', () => ({
+  isConfigured: vi.fn(() => true),
+  sendMessage: vi.fn(async () => 'SID_TEST'),
+}));
+vi.mock('../../services/email', () => ({
+  sendGenericNotification: vi.fn(async () => true),
+}));
+
+import { prisma } from '../../lib/prisma';
+import * as whatsapp from '../../services/whatsapp/client';
+import { sendGenericNotification } from '../../services/email';
+import { campaignsRouter } from '../../routes/campaigns';
+import { errorHandler } from '../../middleware/errorHandler';
+
+const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'test-secret';
+
+function signToken(payload: { userId: string; businessId: string; role: 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' }) {
+  return jwt.sign(payload, JWT_SECRET);
+}
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/campaigns', campaignsRouter);
+  app.use(errorHandler);
+  return app;
+}
+
+const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+describe('routes/campaigns', () => {
+  const app = buildApp();
+  const adminToken = signToken({ userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' });
+  const clientToken = signToken({ userId: 'user_2', businessId: 'biz_1', role: 'CLIENT' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Claim atómico del /send: por defecto la campaña no estaba enviada (count=1).
+    // Los casos "ya enviada" y "no existe" lo overridan a count=0.
+    mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
+  });
+
+  describe('GET /api/campaigns', () => {
+    it('devuelve 401 sin token', async () => {
+      const res = await request(app).get('/api/campaigns');
+      expect(res.status).toBe(401);
+    });
+
+    it('devuelve la lista paginada de campanas', async () => {
+      mock(prisma.campaign.findMany).mockResolvedValue([{ id: 'c1', name: 'Promo' }]);
+      mock(prisma.campaign.count).mockResolvedValue(1);
+
+      const res = await request(app).get('/api/campaigns').set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ total: 1, page: 1, pageSize: 20 });
+      expect(res.body.data).toHaveLength(1);
+      expect(prisma.campaign.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { businessId: 'biz_1' } })
+      );
+    });
+  });
+
+  describe('GET /api/campaigns/recipients', () => {
+    it('devuelve 0 destinatarios si no hay clientes con reservas', async () => {
+      mock(prisma.user.count).mockResolvedValue(0);
+      mock(prisma.user.findMany).mockResolvedValue([]);
+
+      const res = await request(app)
+        .get('/api/campaigns/recipients')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ total: 0, recipients: [] });
+    });
+
+    it('canal email (default): filtra en la DB por email y por clientes del negocio, con vista previa acotada', async () => {
+      mock(prisma.user.count).mockResolvedValue(120);
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null }]);
+
+      const res = await request(app)
+        .get('/api/campaigns/recipients')
+        .query({ channel: 'email' })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(120);
+      expect(res.body.recipients[0].id).toBe('u1');
+      const [arg] = mock(prisma.user.findMany).mock.calls[0];
+      expect(arg.where.bookingsAsClient).toEqual({ some: { businessId: 'biz_1' } });
+      expect(arg.where.NOT).toEqual({ email: '' });
+      expect(arg.take).toBe(50);
+      // El conteo usa el mismo filtro (sin traer filas).
+      expect(mock(prisma.user.count).mock.calls[0][0].where).toEqual(arg.where);
+    });
+
+    it('canal whatsapp: exige teléfono', async () => {
+      mock(prisma.user.count).mockResolvedValue(1);
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'u2', name: 'Beto', email: null, phone: '123' }]);
+
+      const res = await request(app)
+        .get('/api/campaigns/recipients')
+        .query({ channel: 'whatsapp' })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.body.total).toBe(1);
+      expect(res.body.recipients[0].id).toBe('u2');
+      const [arg] = mock(prisma.user.findMany).mock.calls[0];
+      expect(arg.where.phone).toEqual({ not: null });
+      expect(arg.where.email).toBeUndefined();
+    });
+  });
+
+  describe('POST /api/campaigns', () => {
+    it('devuelve 403 si el rol no es ADMIN', async () => {
+      const res = await request(app)
+        .post('/api/campaigns')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .send({ name: 'Promo' });
+
+      expect(res.status).toBe(403);
+      expect(prisma.campaign.create).not.toHaveBeenCalled();
+    });
+
+    it('crea una campana con datos validos', async () => {
+      mock(prisma.campaign.create).mockResolvedValue({ id: 'c1', name: 'Promo' });
+
+      const res = await request(app)
+        .post('/api/campaigns')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Promo', channel: 'email' });
+
+      expect(res.status).toBe(201);
+      expect(prisma.campaign.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ name: 'Promo', channel: 'email', businessId: 'biz_1' }) })
+      );
+    });
+
+    it('devuelve 400 cuando falta el nombre', async () => {
+      const res = await request(app)
+        .post('/api/campaigns')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ channel: 'email' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('devuelve 400 con un canal invalido', async () => {
+      const res = await request(app)
+        .post('/api/campaigns')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Promo', channel: 'paloma-mensajera' });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('PATCH /api/campaigns/:id', () => {
+    it('actualiza una campana existente', async () => {
+      mock(prisma.campaign.findFirst)
+        .mockResolvedValueOnce({ status: 'draft' })
+        .mockResolvedValueOnce({ id: 'c1', name: 'Nuevo' });
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
+
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Nuevo' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Nuevo');
+    });
+
+    it('devuelve 404 si la campana no existe (o es de otro negocio)', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .patch('/api/campaigns/no-existe')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Nuevo' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('una fecha futura deja la campana en scheduled', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValueOnce({ status: 'draft' }).mockResolvedValueOnce({ id: 'c1' });
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
+      const when = new Date(Date.now() + 3_600_000).toISOString();
+
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ scheduledAt: when });
+
+      expect(res.status).toBe(200);
+      const arg = mock(prisma.campaign.updateMany).mock.calls[0][0];
+      expect(arg.data.status).toBe('scheduled');
+      expect(arg.data.scheduledAt).toEqual(new Date(when));
+    });
+
+    it('rechaza programar en el pasado', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({ status: 'draft' });
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ scheduledAt: new Date(Date.now() - 3_600_000).toISOString() });
+      expect(res.status).toBe(400);
+      expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('scheduledAt null desprograma y vuelve a draft', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValueOnce({ status: 'scheduled' }).mockResolvedValueOnce({ id: 'c1' });
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 1 });
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ scheduledAt: null });
+      expect(res.status).toBe(200);
+      const arg = mock(prisma.campaign.updateMany).mock.calls[0][0];
+      expect(arg.data.status).toBe('draft');
+      expect(arg.data.scheduledAt).toBeNull();
+    });
+
+    it('no deja editar una campana ya enviada', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({ status: 'sent' });
+      const res = await request(app)
+        .patch('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'x' });
+      expect(res.status).toBe(400);
+      expect(prisma.campaign.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/campaigns/:id/send', () => {
+    it('envia por email a cada destinatario con email y actualiza sentCount', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'email',
+        name: 'Promo',
+        description: 'Cuerpo de la promo',
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null },
+        { id: 'u2', name: 'Beto', email: 'beto@x.com', phone: null },
+      ]);
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 2 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ message: 'Hola!' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('sent');
+      expect(res.body.envio).toEqual({ enviados: 2, fallidos: 0, canalSoportado: true });
+      // Una llamada al adaptador de email por cada destinatario alcanzable.
+      expect(sendGenericNotification).toHaveBeenCalledTimes(2);
+      expect(sendGenericNotification).toHaveBeenCalledWith('ana@x.com', 'Promo', 'Hola!');
+      // El claim atómico (updateMany) deja la campaña en 'sending'; el update final
+      // la cierra como 'sent' con el conteo.
+      expect(prisma.campaign.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'sending' } })
+      );
+      expect(prisma.campaign.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'c1' }, data: { status: 'sent', sentCount: 2 } })
+      );
+    });
+
+    it('un destinatario que falla no corta el resto de la campana', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'email',
+        name: 'Promo',
+        description: null,
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([
+        { clientId: 'u1' },
+        { clientId: 'u2' },
+        { clientId: 'u3' },
+      ]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: null },
+        { id: 'u2', name: 'Beto', email: 'beto@x.com', phone: null },
+        { id: 'u3', name: 'Caro', email: 'caro@x.com', phone: null },
+      ]);
+      // El segundo envio lanza: debe contarse como fallido y seguir con el tercero.
+      mock(sendGenericNotification)
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('resend 500'))
+        .mockResolvedValueOnce(true);
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 2 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.envio).toEqual({ enviados: 2, fallidos: 1, canalSoportado: true });
+      expect(sendGenericNotification).toHaveBeenCalledTimes(3);
+      expect(prisma.campaign.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ sentCount: 2 }) })
+      );
+    });
+
+    it('envia por whatsapp usando el numero dedicado del negocio', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'whatsapp',
+        name: 'Promo',
+        description: 'Cuerpo wa',
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: null, phone: '+5491111' },
+        { id: 'u2', name: 'Beto', email: null, phone: null }, // sin phone => fallido
+      ]);
+      mock(prisma.business.findUnique).mockResolvedValue({ whatsappNumber: '+5490000' });
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 1 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.envio).toEqual({ enviados: 1, fallidos: 1, canalSoportado: true });
+      expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+      expect(whatsapp.sendMessage).toHaveBeenCalledWith('+5491111', 'Cuerpo wa', '+5490000');
+    });
+
+    it('canal no soportado (sms) no llama adaptadores y cuenta fallidos', async () => {
+      mock(prisma.campaign.findFirst).mockResolvedValue({
+        id: 'c1',
+        status: 'draft',
+        channel: 'sms',
+        name: 'Promo',
+        description: 'x',
+      });
+      mock(prisma.booking.findMany).mockResolvedValue([{ clientId: 'u1' }, { clientId: 'u2' }]);
+      mock(prisma.user.findMany).mockResolvedValue([
+        { id: 'u1', name: 'Ana', email: 'ana@x.com', phone: '+549' },
+        { id: 'u2', name: 'Beto', email: 'beto@x.com', phone: '+549' },
+      ]);
+      mock(prisma.campaign.update).mockResolvedValue({ id: 'c1', status: 'sent', sentCount: 0 });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.envio).toEqual({ enviados: 0, fallidos: 2, canalSoportado: false });
+      expect(sendGenericNotification).not.toHaveBeenCalled();
+      expect(whatsapp.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 404 si la campana no existe', async () => {
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 0 }); // claim no afecta filas
+      mock(prisma.campaign.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/campaigns/no-existe/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(404);
+    });
+
+    it('devuelve 400 si la campana ya fue enviada', async () => {
+      mock(prisma.campaign.updateMany).mockResolvedValue({ count: 0 }); // ya estaba 'sent'
+      mock(prisma.campaign.findFirst).mockResolvedValue({ id: 'c1', status: 'sent' });
+
+      const res = await request(app)
+        .post('/api/campaigns/c1/send')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(prisma.campaign.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /api/campaigns/:id', () => {
+    it('elimina una campana existente', async () => {
+      mock(prisma.campaign.deleteMany).mockResolvedValue({ count: 1 });
+
+      const res = await request(app)
+        .delete('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(204);
+    });
+
+    it('devuelve 404 si la campana no existe', async () => {
+      mock(prisma.campaign.deleteMany).mockResolvedValue({ count: 0 });
+
+      const res = await request(app)
+        .delete('/api/campaigns/no-existe')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('devuelve 403 si el rol no es ADMIN', async () => {
+      const res = await request(app)
+        .delete('/api/campaigns/c1')
+        .set('Authorization', `Bearer ${clientToken}`);
+
+      expect(res.status).toBe(403);
+      expect(prisma.campaign.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+});

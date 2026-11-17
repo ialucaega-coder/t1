@@ -5,5 +5,8 @@ export interface Product {
   price: number;
   stock: number;
   isActive: boolean;
+  image?: string | null;
+  sortOrder?: number;
   category?: { id: string; name: string };
+  categoryId?: string | null;
 }

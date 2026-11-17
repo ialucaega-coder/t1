@@ -35,6 +35,17 @@ export function useCampaigns() {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
+  // Recarga la lista sin pasar por el estado de carga (no parpadea el spinner de la
+  // pantalla): para refrescos que dispara el servidor (p. ej. el evento de socket
+  // 'campaign:sent'). Si falla, deja la lista como estaba.
+  const refreshSilently = useCallback(async () => {
+    try {
+      setCampaigns(await campaignsApi.list());
+    } catch {
+      /* se conserva la lista actual */
+    }
+  }, []);
+
   const createCampaign = useCallback(async (data: Parameters<typeof campaignsApi.create>[0]) => {
     await campaignsApi.create(data);
     refetch();
@@ -55,5 +66,5 @@ export function useCampaigns() {
     refetch();
   }, [refetch]);
 
-  return { campaigns, isLoading, error, refetch, createCampaign, updateCampaign, deleteCampaign, sendCampaign };
+  return { campaigns, isLoading, error, refetch, refreshSilently, createCampaign, updateCampaign, deleteCampaign, sendCampaign };
 }

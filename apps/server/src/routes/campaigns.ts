@@ -1,11 +1,12 @@
+import type { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
-import { getIO } from '../lib/socket';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { sendCampaign } from '../services/campaigns/send';
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(200),
@@ -13,6 +14,17 @@ const createCampaignSchema = z.object({
   channel: z.enum(['whatsapp', 'email', 'sms', 'telegram']).default('whatsapp'),
   scheduledAt: z.string().datetime().optional(),
 });
+
+/** Margen para tolerar el desfase de reloj del cliente al programar "ya". */
+const SCHEDULE_SKEW_MS = 60_000;
+
+function assertFuture(scheduledAt: string): Date {
+  const when = new Date(scheduledAt);
+  if (when.getTime() < Date.now() - SCHEDULE_SKEW_MS) {
+    throw new AppError(400, 'La fecha programada tiene que ser futura');
+  }
+  return when;
+}
 
 const sendCampaignSchema = z.object({
   message: z.string().max(2000).optional(),
@@ -23,7 +35,8 @@ const updateCampaignSchema = z.object({
   description: z.string().max(1000).optional(),
   status: z.enum(['draft', 'scheduled', 'sent', 'cancelled']).optional(),
   channel: z.enum(['whatsapp', 'email', 'sms', 'telegram']).optional(),
-  scheduledAt: z.string().datetime().optional(),
+  // null = quitar la programación (vuelve a borrador).
+  scheduledAt: z.string().datetime().nullable().optional(),
 });
 
 const router = Router();
@@ -46,6 +59,9 @@ router.get(
   })
 );
 
+/** Tope de la vista previa de destinatarios (la UI solo usa `total`). */
+const RECIPIENTS_PREVIEW_LIMIT = 50;
+
 router.get(
   '/recipients',
   requireAuth,
@@ -53,30 +69,28 @@ router.get(
     const businessId = req.auth!.businessId;
     const channel = req.query.channel as string | undefined;
 
-    const bookings = await prisma.booking.findMany({
-      where: { businessId },
-      select: { clientId: true },
-      distinct: ['clientId'],
-    });
-    const clientIds = bookings.map((b) => b.clientId);
+    // Clientes del negocio con al menos una reserva y el dato de contacto que exige el
+    // canal. El total se cuenta en la DB; solo se devuelve una vista previa acotada
+    // (antes se traían TODOS los clientes a memoria y se filtraban en JS).
+    const channelFilter: Prisma.UserWhereInput =
+      !channel || channel === 'email'
+        ? { NOT: { email: '' } }
+        : channel === 'whatsapp' || channel === 'sms'
+          ? { phone: { not: null }, NOT: { phone: '' } }
+          : {};
+    const where: Prisma.UserWhereInput = { bookingsAsClient: { some: { businessId } }, ...channelFilter };
 
-    if (clientIds.length === 0) {
-      return res.json({ total: 0, recipients: [] });
-    }
+    const [total, recipients] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        select: { id: true, name: true, email: true, phone: true },
+        orderBy: { name: 'asc' },
+        take: RECIPIENTS_PREVIEW_LIMIT,
+      }),
+    ]);
 
-    const users = await prisma.user.findMany({
-      where: { id: { in: clientIds } },
-      select: { id: true, name: true, email: true, phone: true },
-      orderBy: { name: 'asc' },
-    });
-
-    const recipients = users.filter((u) => {
-      if (!channel || channel === 'email') return !!u.email;
-      if (channel === 'whatsapp' || channel === 'sms') return !!u.phone;
-      return true;
-    });
-
-    res.json({ total: recipients.length, recipients });
+    res.json({ total, recipients });
   })
 );
 
@@ -87,12 +101,15 @@ router.post(
   validate(createCampaignSchema),
   asyncHandler(async (req, res) => {
     const { name, description, channel, scheduledAt } = req.body;
+    // Con fecha, nace 'scheduled': el scheduler la envía al vencer (services/campaigns/dispatch).
+    const when = scheduledAt ? assertFuture(scheduledAt) : null;
     const campaign = await prisma.campaign.create({
       data: {
         name,
         description,
         channel: channel || 'whatsapp',
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: when,
+        status: when ? 'scheduled' : 'draft',
         businessId: req.auth!.businessId,
       },
     });
@@ -107,12 +124,39 @@ router.patch(
   validate(updateCampaignSchema),
   asyncHandler(async (req, res) => {
     const { name, description, status, channel, scheduledAt } = req.body;
+    const businessId = req.auth!.businessId;
+    const id = String(req.params.id);
+
+    const existing = await prisma.campaign.findFirst({ where: { id, businessId }, select: { status: true } });
+    if (!existing) return res.status(404).json({ error: 'Campaign not found' });
+    if (existing.status === 'sent' || existing.status === 'sending') {
+      throw new AppError(400, 'La campaña ya fue enviada o se está enviando');
+    }
+
+    // Programar / reprogramar / desprogramar mantiene el estado coherente:
+    // con fecha → 'scheduled'; sin fecha (null) → vuelve a 'draft'. Un status
+    // explícito (p. ej. 'cancelled') manda sobre el automático.
+    let nextStatus: string | undefined = status;
+    let nextWhen: Date | null | undefined;
+    if (scheduledAt) {
+      nextWhen = assertFuture(scheduledAt);
+      if (!nextStatus && existing.status !== 'cancelled') nextStatus = 'scheduled';
+    } else if (scheduledAt === null) {
+      nextWhen = null;
+      if (!nextStatus && existing.status === 'scheduled') nextStatus = 'draft';
+    }
+    if (nextStatus === 'scheduled' && nextWhen === undefined) {
+      // Pasar a 'scheduled' sin fecha nunca se enviaría: exigimos la fecha.
+      const row = await prisma.campaign.findFirst({ where: { id, businessId }, select: { scheduledAt: true } });
+      if (!row?.scheduledAt) throw new AppError(400, 'Para programar la campaña indicá la fecha');
+    }
+
     const upd = await prisma.campaign.updateMany({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
-      data: { name, description, status, channel, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined },
+      where: { id, businessId, status: { notIn: ['sent', 'sending'] } },
+      data: { name, description, status: nextStatus, channel, scheduledAt: nextWhen },
     });
     if (upd.count === 0) return res.status(404).json({ error: 'Campaign not found' });
-    const campaign = await prisma.campaign.findUnique({ where: { id: String(req.params.id) } });
+    const campaign = await prisma.campaign.findFirst({ where: { id: String(req.params.id), businessId: req.auth!.businessId } });
     res.json(campaign);
   })
 );
@@ -123,33 +167,9 @@ router.post(
   requireRole('ADMIN'),
   validate(sendCampaignSchema),
   asyncHandler(async (req, res) => {
-    const id = String(req.params.id);
-    const campaign = await prisma.campaign.findFirst({
-      where: { id, businessId: req.auth!.businessId },
-    });
-    if (!campaign) throw new AppError(404, 'Campaign not found');
-    if (campaign.status === 'sent') throw new AppError(400, 'Campaign already sent');
-
-    const bookings = await prisma.booking.findMany({
-      where: { businessId: req.auth!.businessId },
-      select: { clientId: true },
-      distinct: ['clientId'],
-    });
-    const recipientCount = bookings.length;
-
-    const updated = await prisma.campaign.update({
-      where: { id },
-      data: {
-        status: 'sent',
-        sentCount: recipientCount,
-        openRate: 0,
-        clickRate: 0,
-      },
-    });
-
-    getIO()?.to(`business:${req.auth!.businessId}`).emit('campaign:sent', { campaign: updated });
-
-    res.json(updated);
+    // La lógica vive en el servicio (reutilizada por las automatizaciones).
+    const result = await sendCampaign(req.auth!.businessId, String(req.params.id), req.body.message);
+    res.json(result);
   })
 );
 

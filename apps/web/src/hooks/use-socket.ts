@@ -5,13 +5,35 @@ import { io, Socket } from 'socket.io-client';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:4000';
 
+// Transports de Socket.IO. Por defecto websocket con fallback a long-polling. Con
+// VARIAS instancias del server detrás de un balanceador SIN sticky sessions, el
+// long-polling falla (cada request puede caer en otra instancia y el handshake se
+// rompe): en ese despliegue fijá NEXT_PUBLIC_SOCKET_TRANSPORTS=websocket (o activá
+// session affinity en el balanceador). Se resuelve en build (NEXT_PUBLIC_*).
+const SOCKET_TRANSPORTS = (process.env.NEXT_PUBLIC_SOCKET_TRANSPORTS || 'websocket,polling')
+  .split(',')
+  .map((t) => t.trim())
+  .filter((t) => t === 'websocket' || t === 'polling');
+
 let globalSocket: Socket | null = null;
 
 function getSocket(): Socket {
   if (!globalSocket) {
     globalSocket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
+      transports: SOCKET_TRANSPORTS.length > 0 ? SOCKET_TRANSPORTS : ['websocket', 'polling'],
       autoConnect: true,
+      // El server exige el JWT en el handshake y deriva el negocio del token
+      // (no confía en el businessId que mande el cliente). Usamos la forma
+      // función para enviar SIEMPRE el token vigente en cada (re)conexión.
+      auth: (cb: (data: { token: string | null }) => void) => {
+        let token: string | null = null;
+        try {
+          token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        } catch {
+          token = null;
+        }
+        cb({ token });
+      },
     });
   }
   return globalSocket;

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift, Trash2, Store } from 'lucide-react';
+import { Star, Download, Check, Calendar, ShoppingBag, HeartPulse, UtensilsCrossed, CreditCard, MessageSquare, GraduationCap, Truck, ClipboardList, Gift, Store, Bell, QrCode, Heart, MapPin } from 'lucide-react';
+import { normalizeText, toKebabCase } from '@/lib/text';
 import { useMarketplace } from '@/hooks/use-marketplace';
 import { MARKETPLACE_CATEGORIES, type MarketplaceCategory } from '@/constants/marketplace';
 import { SearchInput } from '@/components/ui/SearchInput';
@@ -9,12 +10,21 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 
 const iconMap: Record<string, React.ElementType> = {
   'calendar': Calendar, 'shopping-bag': ShoppingBag, 'heart-pulse': HeartPulse,
   'utensils': UtensilsCrossed, 'credit-card': CreditCard, 'message-square': MessageSquare,
   'graduation-cap': GraduationCap, 'truck': Truck, 'clipboard-list': ClipboardList, 'gift': Gift,
+  // Íconos que usa el catálogo que siembra el server (vienen en PascalCase: "Bell", "QrCode"…).
+  'bell': Bell, 'star': Star, 'qr-code': QrCode, 'heart': Heart, 'map-pin': MapPin,
 };
+
+/** Resuelve el ícono de un item aceptando kebab-case ("credit-card") o PascalCase ("CreditCard"). */
+function iconFor(name: string): React.ElementType {
+  return iconMap[toKebabCase(name)] || ShoppingBag;
+}
 
 function StarRating({ rating }: { rating: number }) {
   return (
@@ -31,10 +41,39 @@ export default function MarketplacePage() {
   const { items, isLoading, error, refetch, installItem, uninstallItem } = useMarketplace();
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<MarketplaceCategory | 'Todos'>('Todos');
+  const [pendingUninstall, setPendingUninstall] = useState<{ id: string; name: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
 
+  async function handleInstall(id: string, name: string) {
+    try {
+      await installItem(id);
+      toast({ type: 'success', message: `"${name}" instalado correctamente` });
+    } catch {
+      toast({ type: 'error', message: `No se pudo instalar "${name}"` });
+    }
+  }
+
+  async function handleConfirmUninstall() {
+    if (!pendingUninstall) return;
+    setBusy(true);
+    try {
+      await uninstallItem(pendingUninstall.id);
+      toast({ type: 'success', message: `"${pendingUninstall.name}" desinstalado` });
+      setPendingUninstall(null);
+    } catch {
+      toast({ type: 'error', message: `No se pudo desinstalar "${pendingUninstall.name}"` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Búsqueda y categoría sin distinguir tildes: el seed del server puede traer
+  // "Gastronomia"/"Educacion" y el front usa "Gastronomía"/"Educación".
   const filtered = items.filter((item) => {
-    const matchesSearch = item.name.toLowerCase().includes(search.toLowerCase()) || item.description.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = activeCategory === 'Todos' || item.category === activeCategory;
+    const needle = normalizeText(search);
+    const matchesSearch = normalizeText(item.name).includes(needle) || normalizeText(item.description).includes(needle);
+    const matchesCategory = activeCategory === 'Todos' || normalizeText(item.category) === normalizeText(activeCategory);
     return matchesSearch && matchesCategory;
   });
 
@@ -63,7 +102,7 @@ export default function MarketplacePage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {filtered.map((item) => {
-          const Icon = iconMap[item.icon] || ShoppingBag;
+          const Icon = iconFor(item.icon);
           return (
             <div key={item.id} className="card-accent flex flex-col">
               <div className="flex items-start gap-3 mb-3">
@@ -84,11 +123,11 @@ export default function MarketplacePage() {
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-semibold ${item.price === 'Gratis' ? 'text-emerald-400' : 'text-white'}`}>{item.price}</span>
                   {item.installed ? (
-                    <button onClick={() => uninstallItem(item.id)} className="flex items-center gap-1 text-xs text-emerald-400 hover:text-red-400 transition-colors">
+                    <button onClick={() => setPendingUninstall({ id: item.id, name: item.name })} className="flex items-center gap-1 text-xs text-emerald-400 hover:text-red-400 transition-colors">
                       <Check className="h-3 w-3" /> Instalado
                     </button>
                   ) : (
-                    <button onClick={() => installItem(item.id)} className="btn-primary text-xs py-1 px-2.5">
+                    <button onClick={() => handleInstall(item.id, item.name)} className="btn-primary text-xs py-1 px-2.5">
                       <Download className="h-3 w-3" /> Instalar
                     </button>
                   )}
@@ -102,6 +141,17 @@ export default function MarketplacePage() {
       {filtered.length === 0 && (
         <EmptyState icon={Store} title="No hay items" description="No se encontraron templates para esta búsqueda." />
       )}
+
+      <ConfirmDialog
+        isOpen={pendingUninstall !== null}
+        onClose={() => setPendingUninstall(null)}
+        onConfirm={handleConfirmUninstall}
+        title="¿Desinstalar template?"
+        message={`Vas a desinstalar "${pendingUninstall?.name ?? ''}" de tu cuenta. Podés volver a instalarlo cuando quieras.`}
+        confirmLabel="Desinstalar"
+        variant="danger"
+        loading={busy}
+      />
     </div>
   );
 }

@@ -66,13 +66,7 @@ describe('hooks/use-cart', () => {
     expect(result.current.cart[0].qty).toBe(3);
   });
 
-  // NOTA: la implementacion actual de `updateQty` tiene un bug conocido:
-  // cuando `qty + delta <= 0`, devuelve el item original sin modificar en
-  // lugar de reducir su qty a 0, por lo que el `.filter(i => i.qty > 0)`
-  // posterior nunca llega a eliminarlo. Este test documenta el
-  // comportamiento REAL actual (el item permanece con su qty previa),
-  // no el comportamiento esperado por el nombre de la funcion.
-  it('NO elimina el item al intentar bajar la cantidad a cero (bug conocido en updateQty)', () => {
+  it('elimina el item al bajar la cantidad a cero', () => {
     const { result } = renderHook(() => useCart());
 
     act(() => {
@@ -82,7 +76,8 @@ describe('hooks/use-cart', () => {
       result.current.updateQty('Corte', -1);
     });
 
-    expect(result.current.cart).toEqual([{ name: 'Corte', price: 1000, qty: 1 }]);
+    expect(result.current.cart).toEqual([]);
+    expect(result.current.total).toBe(0);
   });
 
   it('calcula el total sumando precio por cantidad de cada item', () => {

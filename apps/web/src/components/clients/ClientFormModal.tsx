@@ -44,7 +44,7 @@ export function ClientFormModal({ isOpen, onClose, onSave, initial, title }: Cli
     try {
       await onSave({ name: name.trim(), email, phone, notes });
       onClose();
-    } catch { setError('Error al guardar'); } finally { setSaving(false); }
+    } catch (err) { setError(err instanceof Error && err.message ? err.message : 'Error al guardar'); } finally { setSaving(false); }
   };
 
   return (

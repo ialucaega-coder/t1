@@ -4,6 +4,8 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
+import { assertSafePublicUrl } from '../lib/ssrf';
+import { encrypt } from '../lib/crypto';
 
 const router = Router();
 
@@ -42,12 +44,19 @@ router.get(
       where: { businessId: _req.auth!.businessId, type: 'webhook' },
       orderBy: { name: 'asc' },
     });
-    res.json(webhooks.map((w) => ({
-      id: w.id,
-      name: w.name,
-      isActive: w.isActive,
-      ...(w.config as Record<string, unknown> || {}),
-    })));
+    res.json(webhooks.map((w) => {
+      // No exponemos el `secret` en el listado (leak: cualquier usuario del
+      // negocio lo veía). Devolvemos solo si está configurado.
+      const cfg = (w.config as Record<string, unknown>) || {};
+      const { secret, ...rest } = cfg;
+      return {
+        id: w.id,
+        name: w.name,
+        isActive: w.isActive,
+        ...rest,
+        hasSecret: Boolean(secret),
+      };
+    }));
   })
 );
 
@@ -65,20 +74,25 @@ router.post(
   validate(createWebhookSchema),
   asyncHandler(async (req, res) => {
     const { name, url, events, secret } = req.body;
+    // Anti-SSRF: no permitimos guardar un destino interno/privado.
+    await assertSafePublicUrl(url);
     const webhook = await prisma.connection.create({
       data: {
         name,
         type: 'webhook',
         isActive: true,
-        config: { url, events, secret: secret || null },
+        config: { url, events, secret: secret ? encrypt(secret) : null },
         businessId: req.auth!.businessId,
       },
     });
+    const createdCfg = (webhook.config as Record<string, unknown>) || {};
+    const { secret: createdSecret, ...createdRest } = createdCfg;
     res.status(201).json({
       id: webhook.id,
       name: webhook.name,
       isActive: webhook.isActive,
-      ...(webhook.config as Record<string, unknown>),
+      ...createdRest,
+      hasSecret: Boolean(createdSecret),
     });
   })
 );
@@ -91,11 +105,14 @@ router.patch(
     const id = String(req.params.id);
     const existing = await prisma.connection.findFirst({
       where: { id, businessId: req.auth!.businessId, type: 'webhook' },
+      orderBy: { id: 'asc' },
     });
     if (!existing) throw new AppError(404, 'Webhook not found');
 
     const currentConfig = (existing.config as Record<string, unknown>) || {};
     const { name, url, events, secret, isActive } = req.body;
+    // Anti-SSRF al actualizar la URL.
+    if (url !== undefined) await assertSafePublicUrl(url);
 
     const webhook = await prisma.connection.update({
       where: { id },
@@ -106,15 +123,19 @@ router.patch(
           ...currentConfig,
           ...(url !== undefined && { url }),
           ...(events !== undefined && { events }),
-          ...(secret !== undefined && { secret }),
+          // Solo lo tocamos si vino en el body; si vino, lo ciframos.
+          ...(secret !== undefined && { secret: secret ? encrypt(secret) : null }),
         },
       },
     });
+    const outCfg = (webhook.config as Record<string, unknown>) || {};
+    const { secret: outSecret, ...outRest } = outCfg;
     res.json({
       id: webhook.id,
       name: webhook.name,
       isActive: webhook.isActive,
-      ...(webhook.config as Record<string, unknown>),
+      ...outRest,
+      hasSecret: Boolean(outSecret),
     });
   })
 );
@@ -126,6 +147,7 @@ router.delete(
     const id = String(req.params.id);
     const existing = await prisma.connection.findFirst({
       where: { id, businessId: req.auth!.businessId, type: 'webhook' },
+      orderBy: { id: 'asc' },
     });
     if (!existing) throw new AppError(404, 'Webhook not found');
     await prisma.connection.delete({ where: { id } });
@@ -140,11 +162,16 @@ router.post(
     const id = String(req.params.id);
     const webhook = await prisma.connection.findFirst({
       where: { id, businessId: req.auth!.businessId, type: 'webhook' },
+      orderBy: { id: 'asc' },
     });
     if (!webhook) throw new AppError(404, 'Webhook not found');
 
     const config = webhook.config as Record<string, unknown>;
     const url = config.url as string;
+
+    // Anti-SSRF: el destino no puede apuntar a rangos privados/loopback/
+    // link-local (metadata de la nube, servicios internos). Lanza 400 si no.
+    await assertSafePublicUrl(url);
 
     try {
       const response = await fetch(url, {
@@ -153,8 +180,13 @@ router.post(
         body: JSON.stringify({
           event: 'webhook.test',
           timestamp: new Date().toISOString(),
-          data: { message: 'Webhook de prueba desde Local B' },
+          data: { message: 'Webhook de prueba desde Mr. Go Assistance' },
         }),
+        // Anti-SSRF: no seguimos redirects. assertSafePublicUrl valida la URL
+        // inicial, pero un 302 a http://169.254.169.254/ (metadata de la nube) o
+        // a la red interna la saltearía. Con 'manual', un redirect no se sigue
+        // (vuelve como respuesta opaca, que se reporta como fallo).
+        redirect: 'manual',
         signal: AbortSignal.timeout(10000),
       });
       res.json({ success: response.ok, status: response.status });

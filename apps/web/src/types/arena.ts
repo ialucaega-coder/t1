@@ -17,6 +17,7 @@ export interface ArenaBuilder {
 
 export interface CreateBuilderInput {
   name: string;
+  title?: string;
   description: string;
   systemPrompt: string;
   model: string;
@@ -41,7 +42,10 @@ export interface CreateIdeaInput {
 }
 
 export interface ArenaChatResponse {
-  message: string;
-  reply?: string;
-  builderId?: string;
+  /** Respuesta del bot real del negocio. */
+  reply: string;
+  intent?: string;
+  actions?: Array<{ type: string; payload?: Record<string, unknown> }>;
+  /** Reenviar en el próximo mensaje para mantener el historial de la charla de prueba. */
+  conversationId?: string;
 }

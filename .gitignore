@@ -12,3 +12,8 @@ coverage/
 .vscode/
 Obsidian/
 *.tsbuildinfo
+apps/web/tsconfig.tsbuildinfo
+
+# Playwright
+playwright-report/
+test-results/

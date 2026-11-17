@@ -13,7 +13,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   return {
     title: `Reservar en ${businessName}`,
-    description: `Reserva tu cita en ${businessName} de forma rápida y sencilla a través de Local B.`,
+    description: `Reserva tu cita en ${businessName} de forma rápida y sencilla a través de Mr. Go Assistance.`,
     openGraph: {
       title: `Reservar en ${businessName}`,
       description: `Agenda tu cita en ${businessName} en línea. Sin llamadas, sin esperas.`,
@@ -36,7 +36,7 @@ export default async function PublicBookingPage({ params }: PageProps) {
         <BookingFlow slug={slug} />
       </main>
       <footer className="border-t border-slate-800 px-6 py-4 text-center">
-        <p className="text-[10px] text-slate-500">Powered by Local B</p>
+        <p className="text-[10px] text-slate-500">Powered by Mr. Go Assistance</p>
       </footer>
     </div>
   );

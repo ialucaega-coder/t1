@@ -11,6 +11,8 @@ const DEFAULTS: WhitelabelConfig = {
   accentColor: '#38BDF8',
   customDomain: '',
   logo: '',
+  theme: 'onyx',
+  hiddenSections: [],
 };
 
 export interface UseWhitelabelResult {
@@ -45,6 +47,8 @@ export function useWhitelabel(): UseWhitelabelResult {
             accentColor: result.accentColor || result.primaryColor || DEFAULTS.accentColor,
             customDomain: result.customDomain || DEFAULTS.customDomain,
             logo: result.logo || DEFAULTS.logo,
+            theme: result.theme || DEFAULTS.theme,
+            hiddenSections: Array.isArray(result.hiddenSections) ? result.hiddenSections : DEFAULTS.hiddenSections,
           });
         }
       } catch (err) {

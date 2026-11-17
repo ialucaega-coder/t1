@@ -154,6 +154,15 @@ export function CashDrawer() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5">
+        <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-400">
+          La caja se guarda solo en este dispositivo: la apertura, los retiros, los ingresos y el cierre no se
+          registran en el servidor y se pierden al recargar o cambiar de dispositivo. Las ventas del día sí
+          vienen del sistema.
+        </p>
+      </div>
+
       {/* Estado de caja */}
       <div className="flex gap-4 flex-wrap">
         <div className="card flex-1 min-w-[200px]">

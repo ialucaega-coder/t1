@@ -5,12 +5,13 @@ import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { getBotCapacity } from '../services/billing/limits';
 
 const createBotSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
   channel: z.enum(['TELEGRAM', 'WHATSAPP', 'WEB']).default('TELEGRAM'),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateBotSchema = z.object({
@@ -18,7 +19,7 @@ const updateBotSchema = z.object({
   description: z.string().max(500).optional(),
   channel: z.enum(['TELEGRAM', 'WHATSAPP', 'WEB']).optional(),
   status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED']).optional(),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
   token: z.string().max(500).optional(),
   webhookUrl: z.string().url().max(500).optional(),
 });
@@ -66,6 +67,22 @@ router.post(
   requireRole('ADMIN'),
   validate(createBotSchema),
   asyncHandler(async (req, res) => {
+    const businessId = req.auth!.businessId;
+
+    // Enforcement del plan: no permitir crear más bots que el `maxBots` del plan
+    // (antes solo se mostraba el límite, no se aplicaba). Check best-effort: la
+    // creación de bots es poco frecuente, así que no usamos lock (una carrera
+    // podría crear 1 de más, sin impacto real).
+    const cap = await getBotCapacity(businessId);
+    if (cap.atLimit) {
+      return res.status(403).json({
+        error: `Alcanzaste el límite de bots de tu plan (${cap.limit}). Mejorá tu plan para crear más.`,
+        code: 'PLAN_LIMIT_REACHED',
+        limit: cap.limit,
+        used: cap.used,
+      });
+    }
+
     const { name, description, channel, config } = req.body;
     const bot = await prisma.bot.create({
       data: {
@@ -73,7 +90,7 @@ router.post(
         description,
         channel: channel || 'TELEGRAM',
         config,
-        businessId: req.auth!.businessId,
+        businessId,
       },
     });
     res.status(201).json(bot);
@@ -92,7 +109,7 @@ router.patch(
       data: { name, description, channel, status, config, token, webhookUrl },
     });
     if (bot.count === 0) return res.status(404).json({ error: 'Bot not found' });
-    const updated = await prisma.bot.findUnique({ where: { id: req.params.id as string } });
+    const updated = await prisma.bot.findFirst({ where: { id: req.params.id as string, businessId: req.auth!.businessId } });
     res.json(updated);
   })
 );

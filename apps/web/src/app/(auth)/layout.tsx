@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'Acceso',
-  description: 'Inicia sesión o crea tu cuenta en Local B para gestionar tu negocio.',
+  description: 'Inicia sesión o crea tu cuenta en Mr. Go Assistance para gestionar tu negocio.',
   robots: { index: false, follow: false },
 };
 

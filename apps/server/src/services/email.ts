@@ -6,15 +6,28 @@ import {
   welcomeTemplate,
   invoiceTemplate,
   genericNotificationTemplate,
+  teamInviteTemplate,
   type BookingEmailData,
   type OrderEmailData,
   type InvoiceEmailData,
+  type TeamInviteEmailData,
 } from './email-templates';
 
 // ─── Configuración ──────────────────────────────────────────────────
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-const EMAIL_FROM = process.env.EMAIL_FROM ?? 'Local B <noreply@localb.app>';
+const EMAIL_FROM = process.env.EMAIL_FROM ?? 'Mr. Go Assistance <noreply@localb.app>';
+
+// Cliente Resend perezoso: no lo construimos en la carga del módulo para que
+// la ausencia de RESEND_API_KEY no rompa el arranque del server (ni los tests
+// que importan servicios que dependen de email). Si no hay key, `send` degrada
+// devolviendo false sin lanzar.
+let cachedResend: Resend | null = null;
+
+function getResend(): Resend | null {
+  if (!process.env.RESEND_API_KEY) return null;
+  if (!cachedResend) cachedResend = new Resend(process.env.RESEND_API_KEY);
+  return cachedResend;
+}
 
 // ─── Helper interno ─────────────────────────────────────────────────
 
@@ -25,6 +38,11 @@ interface SendEmailParams {
 }
 
 async function send(params: SendEmailParams): Promise<boolean> {
+  const resend = getResend();
+  if (!resend) {
+    console.warn('[Email] RESEND_API_KEY no configurada; se omite el envío de email.');
+    return false;
+  }
   try {
     const { error } = await resend.emails.send({
       from: EMAIL_FROM,
@@ -100,7 +118,7 @@ export async function sendWelcomeEmail(
 ): Promise<boolean> {
   return send({
     to,
-    subject: `Bienvenido/a a ${businessName || 'Local B'}`,
+    subject: `Bienvenido/a a ${businessName || 'Mr. Go Assistance'}`,
     html: welcomeTemplate(userName, businessName),
   });
 }
@@ -131,5 +149,22 @@ export async function sendGenericNotification(
     to,
     subject,
     html: genericNotificationTemplate(subject, htmlContent),
+  });
+}
+
+/**
+ * Envía la invitación al equipo con el link de aceptación. El link lleva el token
+ * (secreto): este módulo nunca lo loguea (solo destinatario y asunto).
+ */
+export async function sendTeamInviteEmail(
+  to: string,
+  invite: TeamInviteEmailData
+): Promise<boolean> {
+  return send({
+    to,
+    // Asunto FIJO: el nombre del negocio lo elige quien se registra y este mail sale desde
+    // el dominio oficial; no puede viajar en el asunto (phishing / saltos de línea).
+    subject: 'Te invitaron a unirte a un equipo en Mr. Go Assistance',
+    html: teamInviteTemplate(invite),
   });
 }

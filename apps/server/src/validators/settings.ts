@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { businessNameSchema } from './common';
 
 export const updateSettingsSchema = z.object({
-  businessName: z.string().min(1).max(120).optional(),
+  businessName: businessNameSchema(1).optional(),
   slug: z
     .string()
     .min(1)

@@ -1,25 +1,40 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import { authRateLimit } from '../middleware/rateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
-import { registerSchema, loginSchema, RegisterInput, LoginInput } from '../validators/auth';
+import { registerSchema, loginSchema, twoFactorCodeSchema, secondFactorCodeSchema, passwordSchema, acceptInviteSchema, RegisterInput, LoginInput, AcceptInviteInput } from '../validators/auth';
+import { requireAuth } from '../middleware/auth';
+import { getAuthSecret } from '../lib/secrets';
+import { revokeUserSessions, isSessionRevoked } from '../services/auth/revocation';
+import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
+import {
+  generateRecoveryCodes,
+  countRecoveryCodes,
+  clearRecoveryCodes,
+  verifySecondFactor,
+} from '../services/auth/twoFactorRecovery';
+import { hashPassword, verifyPassword, equalizeVerifyTiming } from '../lib/password';
+import { acceptInvite, isInviteTokenLive, InviteError } from '../services/team/invitations';
+import { acceptInviteRateLimit } from '../services/team/inviteRateLimit';
 
 const updateMeSchema = z.object({
   name: z.string().max(100).optional(),
-  currentPassword: z.string().optional(),
-  newPassword: z.string().min(6).max(100).optional(),
+  currentPassword: z.string().max(128).optional(),
+  // Misma política de fortaleza que el registro (8+ con mayúscula, minúscula y
+  // número) en vez del viejo min(6), más débil.
+  newPassword: passwordSchema.optional(),
 });
 import { auditAuthEvent } from '../middleware/audit';
 import type { Response } from 'express';
 
 const router = Router();
 
-// Duración del JWT y de la cookie de sesión asociada (14 días).
-const JWT_EXPIRES_IN = '14d';
+// Duración del JWT y de la cookie de sesión asociada. Configurable por env
+// JWT_EXPIRES_IN (formato de `vercel/ms`, ej. '7d', '14d', '12h'); default '14d'.
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '14d') as jwt.SignOptions['expiresIn'];
 const JWT_COOKIE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_FAILED_LOGINS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -47,7 +62,7 @@ function clearSessionCookie(res: Response) {
 }
 
 function signToken(payload: { userId: string; businessId: string; role: string }) {
-  return jwt.sign(payload, process.env.NEXTAUTH_SECRET || 'dev-secret', {
+  return jwt.sign(payload, getAuthSecret(), {
     expiresIn: JWT_EXPIRES_IN,
   });
 }
@@ -64,7 +79,7 @@ router.post(
       return;
     }
 
-    const passwordHash = await bcrypt.hash(data.password, 12);
+    const passwordHash = await hashPassword(data.password);
     const slug = data.businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
     const business = await prisma.business.create({
@@ -110,7 +125,23 @@ router.post(
 
     if (!user) {
       // No revelamos si el email existe o no (evita enumeración de usuarios).
+      // Corremos un verify "dummy" para que el tiempo de respuesta sea similar al
+      // de un email registrado y no se pueda inferir la existencia por timing.
+      await equalizeVerifyTiming();
       auditAuthEvent('AUTH_LOGIN_FAILURE', req, { metadata: { reason: 'unknown_email' } });
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Cuentas desactivadas o con borrado lógico no pueden iniciar sesión, ni
+    // siquiera con la contraseña correcta. Respuesta genérica para no revelar
+    // el estado de la cuenta.
+    if (!user.isActive || user.deletedAt) {
+      auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
+        userId: user.id,
+        businessId: user.businessId,
+        metadata: { reason: 'inactive_account' },
+      });
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
@@ -121,7 +152,7 @@ router.post(
       return;
     }
 
-    const validPassword = await bcrypt.compare(data.password, user.passwordHash);
+    const { valid: validPassword, needsRehash } = await verifyPassword(data.password, user.passwordHash);
     if (!validPassword) {
       const failedLogins = user.failedLogins + 1;
       const update: { failedLogins: number; lockedUntil?: Date } = { failedLogins };
@@ -140,10 +171,64 @@ router.post(
       return;
     }
 
+    // Segundo factor (TOTP): si la cuenta lo tiene activo, la contraseña sola
+    // no alcanza. Sin código → pedirlo (200, sin token). Con código inválido →
+    // 401. La contraseña ya se validó, así que no revela existencia de la cuenta.
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      if (!data.twoFactorCode) {
+        res.json({ twoFactorRequired: true });
+        return;
+      }
+      const secondFactor = await verifySecondFactor({
+        businessId: user.businessId,
+        userId: user.id,
+        encryptedSecret: user.twoFactorSecret,
+        code: data.twoFactorCode,
+      });
+      if (!secondFactor) {
+        // Un código 2FA incorrecto cuenta para el bloqueo igual que una contraseña
+        // incorrecta; si no, quien ya conoce la clave podría probar los 10^6
+        // códigos posibles sin consecuencias.
+        const failedLogins = user.failedLogins + 1;
+        const update: { failedLogins: number; lockedUntil?: Date } = { failedLogins };
+        if (failedLogins >= MAX_FAILED_LOGINS) {
+          update.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+        }
+        await prisma.user.update({ where: { id: user.id }, data: update });
+        auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
+          userId: user.id,
+          businessId: user.businessId,
+          metadata: { reason: 'invalid_2fa_code', failedLogins, locked: failedLogins >= MAX_FAILED_LOGINS },
+        });
+        res.status(401).json({ error: 'Invalid 2FA code' });
+        return;
+      }
+      if (secondFactor === 'recovery') {
+        auditAuthEvent('AUTH_2FA_RECOVERY_USED', req, { userId: user.id, businessId: user.businessId });
+      }
+    }
+
     await prisma.user.update({
       where: { id: user.id },
       data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() },
     });
+
+    // Rehash perezoso best-effort: si entró con un hash bcrypt legado, lo
+    // reescribimos a Argon2id. Va en su propia escritura y en try/catch para que
+    // un fallo de Argon2 NO rompa un login válido. El updateMany condicionado al
+    // hash viejo evita pisar una contraseña que el usuario haya cambiado en
+    // paralelo (entre el findUnique y este punto).
+    if (needsRehash) {
+      try {
+        const rehashed = await hashPassword(data.password);
+        await prisma.user.updateMany({
+          where: { id: user.id, passwordHash: user.passwordHash },
+          data: { passwordHash: rehashed },
+        });
+      } catch {
+        /* best-effort: el próximo login reintenta la migración */
+      }
+    }
 
     const token = signToken({ userId: user.id, businessId: user.businessId, role: user.role });
     setSessionCookie(res, token);
@@ -158,6 +243,64 @@ router.post(
   })
 );
 
+// Mensaje único para TODO fallo del canje (token inexistente, usado, vencido, email
+// ya registrado en otro lado...): no revela si el email existe ni por qué falló.
+const INVITE_GENERIC_ERROR =
+  'La invitación no es válida o ya venció. Pedile a quien te invitó que te envíe una nueva.';
+
+/**
+ * Canje de una invitación al equipo (público). Valida el token (hash, vencimiento,
+ * un solo uso), crea el usuario con el rol del miembro invitado, activa al miembro,
+ * quema el token y devuelve la sesión igual que /register y /login.
+ */
+router.post(
+  '/accept-invite',
+  authRateLimit,
+  acceptInviteRateLimit,
+  validate(acceptInviteSchema),
+  asyncHandler(async (req, res) => {
+    const data = req.body as AcceptInviteInput;
+
+    // Descarta tokens inexistentes/vencidos ANTES de gastar un hash Argon2 (CPU) en
+    // un request anónimo. El canje de abajo revalida todo bajo lock.
+    if (!(await isInviteTokenLive(data.token))) {
+      auditAuthEvent('AUTH_INVITE_REJECTED', req, { metadata: { reason: 'invalid_or_expired' } });
+      res.status(400).json({ error: INVITE_GENERIC_ERROR });
+      return;
+    }
+
+    const passwordHash = await hashPassword(data.password);
+
+    let accepted;
+    try {
+      accepted = await acceptInvite({ token: data.token, name: data.name, passwordHash });
+    } catch (err) {
+      if (err instanceof InviteError) {
+        auditAuthEvent('AUTH_INVITE_REJECTED', req, { metadata: { reason: err.reason.toLowerCase() } });
+        res.status(400).json({ error: INVITE_GENERIC_ERROR });
+        return;
+      }
+      throw err;
+    }
+
+    const { user, business, memberId } = accepted;
+    const token = signToken({ userId: user.id, businessId: business.id, role: user.role });
+    setSessionCookie(res, token);
+
+    auditAuthEvent('AUTH_INVITE_ACCEPTED', req, {
+      userId: user.id,
+      businessId: business.id,
+      metadata: { memberId, role: user.role },
+    });
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      business: { id: business.id, name: business.name, slug: business.slug },
+    });
+  })
+);
+
 router.get(
   '/me',
   asyncHandler(async (req, res) => {
@@ -168,12 +311,23 @@ router.get(
     }
     try {
       const token = header.slice(7);
-      const payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as { userId: string; businessId: string; role: string };
+      const payload = jwt.verify(token, getAuthSecret()) as { userId: string; businessId: string; role: string; iat?: number };
+      // Misma revocación que requireAuth: un logout, cambio de rol o baja corta la
+      // sesión también acá (antes /me seguía devolviendo datos con un JWT revocado).
+      if (await isSessionRevoked(payload.businessId, payload.userId, payload.iat)) {
+        res.status(401).json({ error: 'Session expired' });
+        return;
+      }
       const user = await prisma.user.findUnique({
         where: { id: payload.userId },
         include: { business: true },
       });
       if (!user) {
+        res.status(401).json({ error: 'User not found' });
+        return;
+      }
+      // Cuenta dada de baja (p. ej. quitada del equipo): su JWT no sirve aunque no venza.
+      if (user.isActive === false || user.deletedAt) {
         res.status(401).json({ error: 'User not found' });
         return;
       }
@@ -189,6 +343,7 @@ router.get(
 
 router.patch(
   '/me',
+  authRateLimit,
   validate(updateMeSchema),
   asyncHandler(async (req, res) => {
     const header = req.headers.authorization;
@@ -196,12 +351,22 @@ router.patch(
       res.status(401).json({ error: 'Not authenticated' });
       return;
     }
-    let payload: { userId: string; businessId: string; role: string };
+    let payload: { userId: string; businessId: string; role: string; iat?: number };
     try {
       const token = header.slice(7);
-      payload = jwt.verify(token, process.env.NEXTAUTH_SECRET || 'dev-secret') as typeof payload;
+      payload = jwt.verify(token, getAuthSecret()) as typeof payload;
     } catch {
       res.status(401).json({ error: 'Invalid token' });
+      return;
+    }
+
+    if (await isSessionRevoked(payload.businessId, payload.userId, payload.iat)) {
+      res.status(401).json({ error: 'Session expired' });
+      return;
+    }
+    const current = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!current || current.isActive === false || current.deletedAt) {
+      res.status(401).json({ error: 'User not found' });
       return;
     }
 
@@ -221,18 +386,13 @@ router.patch(
         res.status(400).json({ error: 'Current password is required' });
         return;
       }
-      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
-      if (!user) { res.status(401).json({ error: 'User not found' }); return; }
-      const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+      const { valid } = await verifyPassword(currentPassword, current.passwordHash);
       if (!valid) {
         res.status(400).json({ error: 'Current password is incorrect' });
         return;
       }
-      if (newPassword.length < 6) {
-        res.status(400).json({ error: 'New password must be at least 6 characters' });
-        return;
-      }
-      update.passwordHash = await bcrypt.hash(newPassword, 12);
+      // La fortaleza de newPassword ya la garantiza updateMeSchema (passwordSchema).
+      update.passwordHash = await hashPassword(newPassword);
     }
 
     if (Object.keys(update).length === 0) {
@@ -246,6 +406,15 @@ router.patch(
       include: { business: true },
     });
 
+    // Si cambió la contraseña, revocamos todas las sesiones ANTERIORES a la
+    // actual: un atacante con un token viejo robado queda afuera, pero el
+    // usuario que acaba de cambiar su clave NO se desloguea (su token, emitido
+    // en `iat`, sobrevive porque el corte es su propio `iat`).
+    if (update.passwordHash) {
+      const cutoffMs = (payload.iat ?? Math.floor(Date.now() / 1000)) * 1000;
+      await revokeUserSessions(payload.businessId, payload.userId, cutoffMs);
+    }
+
     res.json({
       user: { id: updated.id, email: updated.email, name: updated.name, role: updated.role },
       business: { id: updated.business.id, name: updated.business.name, slug: updated.business.slug },
@@ -255,10 +424,152 @@ router.patch(
 
 router.post(
   '/logout',
+  requireAuth,
   asyncHandler(async (req, res) => {
     clearSessionCookie(res);
-    auditAuthEvent('AUTH_LOGOUT', req, { userId: req.auth?.userId, businessId: req.auth?.businessId });
+    // Revocación server-side: el token de esta sesión queda inutilizable aunque
+    // alguien lo haya copiado (antes el logout solo borraba la cookie local).
+    await revokeUserSessions(req.auth!.businessId, req.auth!.userId);
+    auditAuthEvent('AUTH_LOGOUT', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
     res.status(204).send();
+  })
+);
+
+// ─── 2FA (TOTP) ──────────────────────────────────────────────────────
+
+/** Estado de 2FA del usuario autenticado. */
+router.get(
+  '/2fa/status',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorEnabled: true },
+    });
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    const recoveryCodesRemaining = user.twoFactorEnabled
+      ? await countRecoveryCodes(req.auth!.businessId, req.auth!.userId)
+      : 0;
+    res.json({ enabled: user.twoFactorEnabled, recoveryCodesRemaining });
+  })
+);
+
+/**
+ * Inicia el alta de 2FA: genera un secreto (cifrado) y devuelve el QR/otpauth.
+ * Deja twoFactorEnabled en false hasta que se verifique el primer código.
+ */
+router.post(
+  '/2fa/setup',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { email: true, twoFactorEnabled: true },
+    });
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    if (user.twoFactorEnabled) { res.status(409).json({ error: '2FA ya está activo' }); return; }
+
+    const setup = await generateTwoFactorSetup(user.email);
+    await prisma.user.update({
+      where: { id: req.auth!.userId },
+      data: { twoFactorSecret: setup.encryptedSecret, twoFactorEnabled: false },
+    });
+
+    res.json({ otpauthUri: setup.otpauthUri, qrDataUrl: setup.qrDataUrl });
+  })
+);
+
+/** Confirma el alta de 2FA verificando el primer código TOTP. */
+router.post(
+  '/2fa/verify',
+  requireAuth,
+  validate(twoFactorCodeSchema),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorSecret: true, twoFactorEnabled: true },
+    });
+    if (!user?.twoFactorSecret) { res.status(400).json({ error: 'Primero iniciá el alta de 2FA' }); return; }
+    if (user.twoFactorEnabled) { res.status(409).json({ error: '2FA ya está activo' }); return; }
+
+    if (!verifyTwoFactorToken(user.twoFactorSecret, req.body.code)) {
+      res.status(400).json({ error: 'Código inválido' });
+      return;
+    }
+
+    await prisma.user.update({ where: { id: req.auth!.userId }, data: { twoFactorEnabled: true } });
+    auditAuthEvent('AUTH_2FA_ENABLED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
+    // Los códigos de recuperación se muestran UNA sola vez, junto con la activación.
+    const recoveryCodes = await generateRecoveryCodes(req.auth!.businessId, req.auth!.userId);
+    res.json({ enabled: true, recoveryCodes });
+  })
+);
+
+/** Desactiva 2FA (requiere un código TOTP válido vigente). */
+router.post(
+  '/2fa/disable',
+  requireAuth,
+  validate(secondFactorCodeSchema),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorSecret: true, twoFactorEnabled: true },
+    });
+    if (!user?.twoFactorEnabled || !user.twoFactorSecret) {
+      res.status(400).json({ error: '2FA no está activo' });
+      return;
+    }
+    const valid = await verifySecondFactor({
+      businessId: req.auth!.businessId,
+      userId: req.auth!.userId,
+      encryptedSecret: user.twoFactorSecret,
+      code: req.body.code,
+    });
+    if (!valid) {
+      res.status(400).json({ error: 'Código inválido' });
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: req.auth!.userId },
+      data: { twoFactorEnabled: false, twoFactorSecret: null },
+    });
+    await clearRecoveryCodes(req.auth!.businessId, req.auth!.userId);
+    auditAuthEvent('AUTH_2FA_DISABLED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
+    res.json({ enabled: false });
+  })
+);
+
+/**
+ * Emite un juego NUEVO de códigos de recuperación (invalida los anteriores).
+ * Pide el segundo factor vigente para que una sesión robada no pueda rearmarlos.
+ */
+router.post(
+  '/2fa/recovery-codes',
+  requireAuth,
+  validate(secondFactorCodeSchema),
+  asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { twoFactorSecret: true, twoFactorEnabled: true },
+    });
+    if (!user?.twoFactorEnabled || !user.twoFactorSecret) {
+      res.status(400).json({ error: '2FA no está activo' });
+      return;
+    }
+    const valid = await verifySecondFactor({
+      businessId: req.auth!.businessId,
+      userId: req.auth!.userId,
+      encryptedSecret: user.twoFactorSecret,
+      code: req.body.code,
+    });
+    if (!valid) {
+      res.status(400).json({ error: 'Código inválido' });
+      return;
+    }
+    const recoveryCodes = await generateRecoveryCodes(req.auth!.businessId, req.auth!.userId);
+    auditAuthEvent('AUTH_2FA_RECOVERY_REGENERATED', req, { userId: req.auth!.userId, businessId: req.auth!.businessId });
+    res.json({ recoveryCodes });
   })
 );
 

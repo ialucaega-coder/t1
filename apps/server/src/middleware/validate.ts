@@ -11,7 +11,7 @@ export function validate(schema: ZodSchema) {
       if (error instanceof ZodError) {
         res.status(400).json({
           error: 'Validation failed',
-          details: error.errors.map(e => ({
+          details: error.issues.map(e => ({
             field: e.path.join('.'),
             message: e.message,
           })),
@@ -31,13 +31,13 @@ export function validate(schema: ZodSchema) {
 export function validateQuery(schema: ZodSchema) {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
-      req.validatedQuery = schema.parse(req.query);
+      req.validatedQuery = schema.parse(req.query) as Record<string, unknown>;
       next();
     } catch (error) {
       if (error instanceof ZodError) {
         res.status(400).json({
           error: 'Validation failed',
-          details: error.errors.map(e => ({
+          details: error.issues.map(e => ({
             field: e.path.join('.'),
             message: e.message,
           })),
