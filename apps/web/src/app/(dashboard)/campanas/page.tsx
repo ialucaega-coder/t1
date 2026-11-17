@@ -232,8 +232,16 @@ export default function CampanasPage() {
   async function handleSend(id: string) {
     setSending(id);
     try {
-      await sendCampaign(id);
-      toast({ type: 'success', message: 'Campaña enviada correctamente' });
+      const result = await sendCampaign(id);
+      // Con colas el server responde `sending`: el envío sigue en proceso y recién
+      // el evento 'campaign:sent' lo da por terminado. No decimos "enviada" antes de tiempo.
+      toast({
+        type: 'success',
+        message:
+          result?.status === 'sending'
+            ? 'Campaña en proceso de envío: te avisamos cuando termine'
+            : 'Campaña enviada correctamente',
+      });
     } catch (err) {
       toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al enviar campaña' });
     } finally {
@@ -266,7 +274,8 @@ export default function CampanasPage() {
 
       {error && <ErrorAlert message={error} onRetry={refetch} />}
 
-      {campaigns.length === 0 ? (
+      {/* Si el listado falló, solo el error: "No hay campañas" sería falso (no sabemos si hay). */}
+      {error ? null : campaigns.length === 0 ? (
         <EmptyState
           icon={Megaphone}
           title="No hay campañas"

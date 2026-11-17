@@ -49,14 +49,6 @@ export function rangeKey(sel: RangeSelection | undefined): string {
   return `${sel.from}_${sel.to}`;
 }
 
-/** Fecha local `YYYY-MM-DD` (para el `max` de los inputs de fecha). */
-export function todayLocalKey(now: Date = new Date()): string {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 /** Zona horaria del negocio (Argentina: UTC-3 fijo, sin horario de verano). Igual a ANALYTICS_TZ del server. */
 export const BUSINESS_TZ = 'America/Argentina/Buenos_Aires';
 
@@ -73,6 +65,27 @@ export function todayArgentinaKey(now: Date = new Date()): string {
     month: '2-digit',
     day: '2-digit',
   }).format(now);
+}
+
+/**
+ * "Hoy" para el `max` de los selectores de fecha y los nombres de archivo: es el día
+ * de Argentina, igual que el que usa el server para interpretar `from`/`to`. Antes
+ * usaba la fecha del navegador, que de noche o en otra zona horaria deja elegir un
+ * día que el server todavía no considera "hoy" (o bloquea uno que sí lo es).
+ * Se mantiene el nombre por compatibilidad con los callers.
+ */
+export function todayLocalKey(now: Date = new Date()): string {
+  return todayArgentinaKey(now);
+}
+
+/** Hora (0-23) de un instante en hora de Argentina, sin depender de la zona del navegador. */
+export function argentinaHour(iso: string | Date): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: BUSINESS_TZ,
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).format(typeof iso === 'string' ? new Date(iso) : iso);
+  return Number(parts);
 }
 
 /** Días entre dos fechas `YYYY-MM-DD`, ambas incluidas. */

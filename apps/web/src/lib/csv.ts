@@ -8,6 +8,9 @@
 
 export type CsvCell = string | number | boolean | null | undefined;
 
+/** Espera antes de liberar el objeto URL de la descarga. */
+const REVOKE_DELAY_MS = 1000;
+
 const FORMULA_START = /^[=+\-@\t\r]/;
 
 /** Escapa una celda: neutraliza fórmulas y aplica el entrecomillado CSV. */
@@ -38,5 +41,7 @@ export function downloadCsv(filename: string, rows: CsvCell[][]): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Revocar en el mismo tick puede cortar la descarga en algunos navegadores (Safari/Firefox
+  // todavía no leyeron el blob): se difiere para que arranque antes de liberarlo.
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
 }

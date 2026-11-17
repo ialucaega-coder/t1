@@ -26,6 +26,35 @@ const tx = (over: Record<string, unknown>) => ({
 beforeEach(() => vi.clearAllMocks());
 
 describe('components/pos/PosStats', () => {
+  it('pagina de a 100 hasta cubrir el día (el server rechaza pageSize > 100)', async () => {
+    get
+      .mockResolvedValueOnce({ data: [tx({ id: '1', amount: 100 })], totalPages: 3 })
+      .mockResolvedValueOnce({ data: [tx({ id: '2', amount: 200 })], totalPages: 3 })
+      .mockResolvedValueOnce({ data: [tx({ id: '3', amount: 300 })], totalPages: 3 });
+
+    render(<PosStats />);
+    await waitFor(() => expect(screen.getByText('Total ventas')).toBeInTheDocument());
+
+    expect(get).toHaveBeenCalledTimes(3);
+    const urls = get.mock.calls.map((c) => c[0] as string);
+    expect(urls.map((u) => new URLSearchParams(u.split('?')[1]).get('page'))).toEqual(['1', '2', '3']);
+    for (const u of urls) {
+      expect(Number(new URLSearchParams(u.split('?')[1]).get('pageSize'))).toBeLessThanOrEqual(100);
+    }
+    expect(kpi('Transacciones')).toBe('3');
+    expect(kpi('Total ventas')).toBe('$600');
+  });
+
+  it('las barras por hora usan la hora argentina: 12:00Z es 9h, no la hora del navegador', async () => {
+    get.mockResolvedValue({ data: [tx({ id: '1', amount: 1000, createdAt: '2026-11-16T12:00:00.000Z' })] });
+    render(<PosStats />);
+    await waitFor(() => expect(screen.getByText('Ventas por hora')).toBeInTheDocument());
+
+    const bar = (hour: number) => screen.getByText(`${hour}h`).parentElement as HTMLElement;
+    expect(bar(9).textContent).toContain('$1.000');
+    expect(bar(12).textContent).not.toContain('$1.000');
+  });
+
   it('pide las ventas del día argentino (22:00 AR = 01:00Z del día siguiente) con from y to', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-17T01:00:00Z'));

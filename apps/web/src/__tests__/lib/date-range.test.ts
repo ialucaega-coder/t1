@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/api/http-client', () => ({ httpClient: { get: vi.fn() } }));
 
 import {
-  rangeParams, rangeQuery, rangeKey, validateCustomRange, inclusiveDays, MAX_RANGE_DAYS, todayArgentinaKey,
+  rangeParams, rangeQuery, rangeKey, validateCustomRange, inclusiveDays, MAX_RANGE_DAYS, todayArgentinaKey, todayLocalKey, argentinaHour,
 } from '@/lib/date-range';
 import { httpClient } from '@/lib/api/http-client';
 import * as analyticsApi from '@/lib/api/analytics';
@@ -74,5 +74,19 @@ describe('lib/date-range: todayArgentinaKey', () => {
 
   it('a mediodía coincide con la fecha UTC', () => {
     expect(todayArgentinaKey(new Date('2026-11-16T15:00:00Z'))).toBe('2026-11-16');
+  });
+});
+
+describe('lib/date-range: max del selector y hora argentina', () => {
+  it('todayLocalKey (max del selector de fechas) es el día de Argentina, no el del navegador', () => {
+    // 22:00 AR del 16/11 = 01:00Z del 17/11: el selector no debe dejar elegir el 17.
+    expect(todayLocalKey(new Date('2026-11-17T01:00:00Z'))).toBe('2026-11-16');
+    expect(todayLocalKey(new Date('2026-11-17T03:00:00Z'))).toBe('2026-11-17');
+  });
+
+  it('argentinaHour devuelve la hora de Argentina (UTC-3)', () => {
+    expect(argentinaHour('2026-11-16T12:00:00Z')).toBe(9);
+    expect(argentinaHour('2026-11-17T01:30:00Z')).toBe(22);
+    expect(argentinaHour('2026-11-17T03:00:00Z')).toBe(0);
   });
 });

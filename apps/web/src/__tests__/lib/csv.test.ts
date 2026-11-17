@@ -1,6 +1,6 @@
 /** CSV del cliente: escapado RFC 4180 y protección contra inyección de fórmulas. */
-import { describe, it, expect } from 'vitest';
-import { csvCell, toCsv } from '@/lib/csv';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { csvCell, toCsv, downloadCsv } from '@/lib/csv';
 
 describe('lib/csv — csvCell', () => {
   it('prefija con comilla simple el texto que empieza con = + - @ (inyección de fórmulas)', () => {
@@ -37,5 +37,24 @@ describe('lib/csv — csvCell', () => {
 describe('lib/csv — toCsv', () => {
   it('une filas con CRLF y celdas con coma', () => {
     expect(toCsv([['a', 1], ['=x', null]])).toBe(`a,1\r\n'=x,`);
+  });
+});
+
+describe('lib/csv — downloadCsv', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('no revoca el objeto URL en el mismo tick: lo difiere para no cortar la descarga', () => {
+    vi.useFakeTimers();
+    const create = vi.fn(() => 'blob:fake');
+    const revoke = vi.fn();
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    downloadCsv('x.csv', [['a']]);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(revoke).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(revoke).toHaveBeenCalledWith('blob:fake');
   });
 });

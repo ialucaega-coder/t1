@@ -5,6 +5,8 @@ import { Brain, TrendingUp, BarChart3, DollarSign, Megaphone, MessageCircle, Act
 import { useAnalytics } from '@/hooks/use-analytics';
 import type { AnalyticsTimeseriesPoint, AnalyticsFunnel, AnalyticsAttribution } from '@/types/analytics';
 import { useCampaigns } from '@/hooks/use-campaigns';
+import { describeCampaignStatus } from '@/components/campaigns/schedule';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -274,7 +276,7 @@ function AttributionPanel({ attribution }: { attribution: AnalyticsAttribution |
 export default function AnalisisPage() {
   const [range, setRange] = useState<RangeSelection>(DEFAULT_RANGE);
   const { kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, attribution, isLoading, error, refetch } = useAnalytics(range);
-  const { campaigns, isLoading: campaignsLoading, createCampaign, deleteCampaign } = useCampaigns();
+  const { campaigns, isLoading: campaignsLoading, error: campaignsError, createCampaign, deleteCampaign } = useCampaigns();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('insights');
 
@@ -285,15 +287,35 @@ export default function AnalisisPage() {
       buildAnalyticsRows({ tab: activeTab, range, kpi, conversations, satisfaction, improvements, costs, metrics, timeseries, funnel, attribution }),
     );
   };
+  const failed = error !== null;
   const rangeBar = (
-    <DateRangeBar value={range} onChange={setRange} onExport={handleExport} exportDisabled={isLoading || activeTab === 'campanas'} />
+    <DateRangeBar value={range} onChange={setRange} onExport={handleExport} exportDisabled={isLoading || failed || activeTab === 'campanas'} />
   );
+  // Con error de carga NO se muestran ceros como si fueran datos reales: las tarjetas
+  // dicen "—" y las pestañas con datos se ocultan (queda el aviso de error con reintento).
+  const NA = '—';
   const costText = costLabels(range);
   const vsLabel = kpi.range?.custom ? 'vs período ant.' : 'vs mes ant.';
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [campaignName, setCampaignName] = useState('');
   const [campaignDesc, setCampaignDesc] = useState('');
   const [creatingCampaign, setCreatingCampaign] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deletingCampaign, setDeletingCampaign] = useState(false);
+
+  async function handleDeleteCampaign() {
+    if (!pendingDelete) return;
+    setDeletingCampaign(true);
+    try {
+      await deleteCampaign(pendingDelete.id);
+      toast({ type: 'success', message: 'Campaña eliminada correctamente' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al eliminar la campaña' });
+    } finally {
+      setDeletingCampaign(false);
+      setPendingDelete(null);
+    }
+  }
 
   // Mejoras ya resueltas (aplicadas/ignoradas), recordadas entre recargas.
   const [resolved, setResolved] = useState<Record<string, 'aplicada' | 'ignorada'>>({});
@@ -341,30 +363,36 @@ export default function AnalisisPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><MessageCircle className="h-4 w-4 text-brand-400" /><span className="text-[10px] text-slate-500">CONVERSACIONES</span></div>
-          <p className="text-2xl font-bold text-white">{kpi.totalConversations}</p>
-          <p className={`text-[10px] ${kpi.conversationsChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {kpi.conversationsChange >= 0 ? '+' : ''}{kpi.conversationsChange}% {vsLabel}
-          </p>
+          <p className="text-2xl font-bold text-white">{failed ? NA : kpi.totalConversations}</p>
+          {!failed && (
+            <p className={`text-[10px] ${kpi.conversationsChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {kpi.conversationsChange >= 0 ? '+' : ''}{kpi.conversationsChange}% {vsLabel}
+            </p>
+          )}
         </div>
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><Activity className="h-4 w-4 text-yellow-400" /><span className="text-[10px] text-slate-500 uppercase">{SATISFACTION_LABEL}</span></div>
-          <p className="text-2xl font-bold text-white">{kpi.avgSatisfaction}<span className="text-sm text-slate-500">/5</span></p>
-          <p className={`text-[10px] ${kpi.satisfactionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {kpi.satisfactionChange >= 0 ? '+' : ''}{kpi.satisfactionChange} {vsLabel}
-          </p>
+          <p className="text-2xl font-bold text-white">{failed ? NA : <>{kpi.avgSatisfaction}<span className="text-sm text-slate-500">/5</span></>}</p>
+          {!failed && (
+            <p className={`text-[10px] ${kpi.satisfactionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {kpi.satisfactionChange >= 0 ? '+' : ''}{kpi.satisfactionChange} {vsLabel}
+            </p>
+          )}
           <p className="text-[10px] text-slate-500 mt-1 leading-snug">{SATISFACTION_HELP}</p>
         </div>
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><DollarSign className="h-4 w-4 text-emerald-400" /><span className="text-[10px] text-slate-500 uppercase">{costText.cost}</span></div>
-          <p className="text-2xl font-bold text-white">${kpi.monthlyAiCost}</p>
-          <p className="text-[10px] text-slate-400">de ${kpi.monthlyBudget} presupuesto</p>
+          <p className="text-2xl font-bold text-white">{failed ? NA : `$${kpi.monthlyAiCost}`}</p>
+          {!failed && <p className="text-[10px] text-slate-400">de ${kpi.monthlyBudget} presupuesto</p>}
         </div>
         <div className="card-accent">
           <div className="flex items-center gap-2 mb-1"><Zap className="h-4 w-4 text-purple-400" /><span className="text-[10px] text-slate-500">CONVERSIÓN</span></div>
-          <p className="text-2xl font-bold text-white">{kpi.conversionRate}%</p>
-          <p className={`text-[10px] ${kpi.conversionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {kpi.conversionChange >= 0 ? '+' : ''}{kpi.conversionChange}% {vsLabel}
-          </p>
+          <p className="text-2xl font-bold text-white">{failed ? NA : `${kpi.conversionRate}%`}</p>
+          {!failed && (
+            <p className={`text-[10px] ${kpi.conversionChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {kpi.conversionChange >= 0 ? '+' : ''}{kpi.conversionChange}% {vsLabel}
+            </p>
+          )}
         </div>
       </div>
 
@@ -381,14 +409,14 @@ export default function AnalisisPage() {
         })}
       </div>
 
-      {activeTab === 'insights' && (
+      {activeTab === 'insights' && !failed && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card-accent"><h3 className="font-semibold text-white mb-4">Conversaciones por día</h3><BarChart data={conversations} /></div>
           <div className="card-accent"><h3 className="font-semibold text-white mb-1">{SATISFACTION_LABEL}</h3><p className="text-[11px] text-slate-500 mb-4">{SATISFACTION_HELP}</p><SatisfactionRing data={satisfaction} avgScore={kpi.avgSatisfaction} /></div>
         </div>
       )}
 
-      {activeTab === 'mejoras' && (
+      {activeTab === 'mejoras' && !failed && (
         <div className="space-y-3">
           {visibleImprovements.map((item) => (
             <div key={item.id} className="card-accent">
@@ -421,7 +449,7 @@ export default function AnalisisPage() {
         </div>
       )}
 
-      {activeTab === 'estadisticas' && (
+      {activeTab === 'estadisticas' && !failed && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card-accent"><h3 className="font-semibold text-white mb-4">Conversaciones por día</h3><BarChart data={conversations} /></div>
           <div className="card-accent">
@@ -438,7 +466,7 @@ export default function AnalisisPage() {
         </div>
       )}
 
-      {activeTab === 'reportes' && (
+      {activeTab === 'reportes' && !failed && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="card-accent">
@@ -472,7 +500,7 @@ export default function AnalisisPage() {
         </div>
       )}
 
-      {activeTab === 'costos' && (
+      {activeTab === 'costos' && !failed && (
         <div className="card-accent">
           <h3 className="font-semibold text-white mb-4">Desglose de costos IA</h3>
           <div className="mb-4">
@@ -537,8 +565,9 @@ export default function AnalisisPage() {
                       setCampaignName('');
                       setCampaignDesc('');
                       setShowNewCampaign(false);
-                    } catch {}
-                    finally { setCreatingCampaign(false); }
+                    } catch (err) {
+                      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al crear la campaña' });
+                    } finally { setCreatingCampaign(false); }
                   }}
                   disabled={creatingCampaign || !campaignName.trim()}
                   className="btn-primary text-xs disabled:opacity-50"
@@ -549,8 +578,21 @@ export default function AnalisisPage() {
             </div>
           )}
 
+          <ConfirmDialog
+            isOpen={pendingDelete !== null}
+            onClose={() => { if (!deletingCampaign) setPendingDelete(null); }}
+            onConfirm={handleDeleteCampaign}
+            title="Eliminar campaña"
+            message={`¿Eliminar la campaña "${pendingDelete?.name ?? ''}"? No se puede deshacer.`}
+            confirmLabel="Eliminar"
+            variant="danger"
+            loading={deletingCampaign}
+          />
+
           {campaignsLoading ? (
             <LoadingSpinner label="Cargando campañas..." />
+          ) : campaignsError ? (
+            <ErrorAlert message={campaignsError} />
           ) : campaigns.length === 0 ? (
             <EmptyState icon={BarChart3} title="Sin datos" description="Creá tu primera campaña para enviar mensajes masivos por WhatsApp." />
           ) : (
@@ -564,16 +606,17 @@ export default function AnalisisPage() {
                     <p className="text-sm font-medium text-white truncate">{c.name}</p>
                     {c.description && <p className="text-xs text-slate-500 truncate">{c.description}</p>}
                   </div>
-                  <span className={`badge border text-[9px] ${
-                    c.status === 'SENT' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    : c.status === 'SCHEDULED' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                    : 'bg-slate-500/10 text-slate-400 border-slate-500/20'
-                  }`}>{c.status === 'SENT' ? 'Enviada' : c.status === 'SCHEDULED' ? 'Programada' : 'Borrador'}</span>
+                  {(() => {
+                    const info = describeCampaignStatus(c);
+                    return (
+                      <span title={info.description} className={`badge border text-[9px] ${info.className}`}>{info.label}</span>
+                    );
+                  })()}
                   <span className="text-[10px] text-slate-500 flex items-center gap-1">
                     <Clock className="h-3 w-3" />
                     {new Date(c.createdAt).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
                   </span>
-                  <button onClick={() => deleteCampaign(c.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors">
+                  <button onClick={() => setPendingDelete({ id: c.id, name: c.name })} aria-label={`Eliminar ${c.name}`} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>

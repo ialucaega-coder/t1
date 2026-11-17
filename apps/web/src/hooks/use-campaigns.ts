@@ -61,9 +61,12 @@ export function useCampaigns() {
     refetch();
   }, [refetch]);
 
+  // Devuelve la respuesta del server: con colas reales llega `status: 'sending'`
+  // (el envío sigue en proceso) y la pantalla lo informa en vez de decir "enviada".
   const sendCampaign = useCallback(async (id: string) => {
-    await campaignsApi.send(id);
+    const result = await campaignsApi.send(id);
     refetch();
+    return result;
   }, [refetch]);
 
   return { campaigns, isLoading, error, refetch, refreshSilently, createCampaign, updateCampaign, deleteCampaign, sendCampaign };

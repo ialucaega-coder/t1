@@ -17,6 +17,11 @@ const SOCKET_TRANSPORTS = (process.env.NEXT_PUBLIC_SOCKET_TRANSPORTS || 'websock
 
 let globalSocket: Socket | null = null;
 
+// Avisa a los `useSocketEvent` que se montaron ANTES de que exista el socket (p. ej.
+// mientras `business.id` todavía es null y `useSocket` no creó la conexión) para que
+// se suscriban en cuanto aparece.
+const socketReadyListeners = new Set<() => void>();
+
 function getSocket(): Socket {
   if (!globalSocket) {
     globalSocket = io(SOCKET_URL, {
@@ -35,19 +40,20 @@ function getSocket(): Socket {
         cb({ token });
       },
     });
+    socketReadyListeners.forEach((notify) => notify());
   }
   return globalSocket;
 }
 
 export function useSocket(businessId: string | null) {
   const [connected, setConnected] = useState(false);
-  const socketRef = useRef<Socket | null>(null);
+  const [socketState, setSocketState] = useState<Socket | null>(null);
 
   useEffect(() => {
     if (!businessId) return;
 
     const socket = getSocket();
-    socketRef.current = socket;
+    setSocketState(socket);
 
     function onConnect() {
       setConnected(true);
@@ -73,7 +79,7 @@ export function useSocket(businessId: string | null) {
     };
   }, [businessId]);
 
-  return { socket: socketRef.current, connected };
+  return { socket: socketState, connected };
 }
 
 export function useSocketEvent<T = unknown>(
@@ -85,15 +91,35 @@ export function useSocketEvent<T = unknown>(
   callbackRef.current = callback;
 
   useEffect(() => {
-    const socket = globalSocket;
-    if (!socket) return;
-
     function handler(data: T) {
       callbackRef.current(data);
     }
 
-    socket.on(eventName, handler);
-    return () => { socket.off(eventName, handler); };
+    let subscribed: Socket | null = null;
+    function attach(socket: Socket) {
+      subscribed = socket;
+      socket.on(eventName, handler);
+    }
+
+    // Si el socket todavía no existe (el negocio no cargó), esperamos a que se cree
+    // en vez de quedarnos sin suscripción para siempre.
+    let onReady: (() => void) | null = null;
+    if (globalSocket) {
+      attach(globalSocket);
+    } else {
+      onReady = () => {
+        if (!globalSocket) return;
+        if (onReady) socketReadyListeners.delete(onReady);
+        onReady = null;
+        attach(globalSocket);
+      };
+      socketReadyListeners.add(onReady);
+    }
+
+    return () => {
+      if (onReady) socketReadyListeners.delete(onReady);
+      if (subscribed) subscribed.off(eventName, handler);
+    };
     // `deps` is a caller-supplied dependency array (mirrors useEffect's own
     // API), so ESLint cannot statically verify its contents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
