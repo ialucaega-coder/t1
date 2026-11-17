@@ -219,6 +219,7 @@ export async function handleDateSelected(ctx: Context, dateStr: string): Promise
   // Obtener horarios del profesional para ese día
   const schedules = await prisma.schedule.findMany({
     where: {
+      businessId: state.businessId,
       professionalId: state.professionalId,
       dayOfWeek,
       isActive: true,
@@ -367,7 +368,7 @@ export async function handleConfirmation(ctx: Context, confirmed: boolean): Prom
     // negocios compartía el MISMO User (clientId de otro tenant), mezclando datos
     // entre negocios. Scopeado por negocio, cada uno tiene su propio cliente.
     const telegramEmail = `telegram_${state.businessId}_${chatId}@localb.bot`;
-    let client = await prisma.user.findUnique({ where: { email: telegramEmail } });
+    let client = await prisma.user.findFirst({ where: { email: telegramEmail, businessId: state.businessId } });
 
     if (!client) {
       client = await prisma.user.create({

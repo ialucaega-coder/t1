@@ -107,7 +107,7 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
     // no cruzar clientes entre tenants.
     const telegramEmail = `telegram_${businessId}_${chatId}@localb.bot`;
 
-    const client = await prisma.user.findUnique({ where: { email: telegramEmail } });
+    const client = await prisma.user.findFirst({ where: { email: telegramEmail, businessId } });
     if (!client) {
       await ctx.reply('No tenés reservas registradas.');
       return;
@@ -217,7 +217,7 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
     if (data === 'action:cancelar') {
       const chatId = ctx.chat!.id;
       const telegramEmail = `telegram_${businessId}_${chatId}@localb.bot`;
-      const client = await prisma.user.findUnique({ where: { email: telegramEmail } });
+      const client = await prisma.user.findFirst({ where: { email: telegramEmail, businessId } });
       if (!client) {
         await ctx.reply('No tenés reservas registradas.');
         return;
@@ -303,10 +303,23 @@ export function registerHandlers(bot: Bot<Context>, businessId: string): void {
     if (data.startsWith('cancel:')) {
       const bookingId = data.replace('cancel:', '');
       try {
-        await prisma.booking.update({
-          where: { id: bookingId },
-          data: { status: 'CANCELLED' },
-        });
+        // El callback_data lo controla quien manda el update: el id NO es de fiar.
+        // Se cancela solo una reserva de ESTE negocio Y de ESTE chat (cliente de
+        // Telegram de este negocio) que siga activa; sin eso un usuario podía
+        // cancelar reservas de otro negocio (o de otro cliente) adivinando el id.
+        const chatId = ctx.chat!.id;
+        const telegramEmail = `telegram_${businessId}_${chatId}@localb.bot`;
+        const client = await prisma.user.findFirst({ where: { email: telegramEmail, businessId } });
+        const cancelled = client
+          ? await prisma.booking.updateMany({
+              where: { id: bookingId, businessId, clientId: client.id, status: { in: ['PENDING', 'CONFIRMED'] } },
+              data: { status: 'CANCELLED' },
+            })
+          : { count: 0 };
+        if (cancelled.count === 0) {
+          await ctx.reply('⚠️ No encontré esa reserva entre tus reservas activas. Usá /cancelar para ver las que podés cancelar.');
+          return;
+        }
         await ctx.reply('✅ Reserva cancelada exitosamente.');
       } catch {
         await ctx.reply('⚠️ No se pudo cancelar la reserva. Intentá de nuevo.');

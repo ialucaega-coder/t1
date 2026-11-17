@@ -12,7 +12,7 @@ import type { Context } from 'grammy';
 vi.mock('../../lib/prisma', () => {
   const prisma = {
     service: { findFirst: vi.fn() },
-    user: { findUnique: vi.fn(), create: vi.fn() },
+    user: { findFirst: vi.fn(), create: vi.fn() },
     booking: { findMany: vi.fn(), create: vi.fn() },
     $executeRaw: vi.fn(async () => 1),
     $transaction: vi.fn(),
@@ -59,7 +59,7 @@ describe('telegram handleConfirmation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mock(prisma.service.findFirst).mockResolvedValue({ id: 's1', duration: 30, price: 500 });
-    mock(prisma.user.findUnique).mockResolvedValue({ id: 'client_1' });
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'client_1' });
   });
 
   it('busca el servicio acotado al negocio del chat (no cruza tenants)', async () => {
@@ -73,6 +73,32 @@ describe('telegram handleConfirmation', () => {
     expect(prisma.service.findFirst).toHaveBeenCalledWith({
       where: expect.objectContaining({ businessId: 'biz_1' }),
     });
+  });
+
+  it('el cliente de Telegram se busca acotado al negocio (un email de otro negocio no se reutiliza)', async () => {
+    await seedConfirmState();
+    mock(prisma.booking.findMany).mockResolvedValue([]);
+    mock(prisma.booking.create).mockResolvedValue({ id: 'booking_abcdef12' });
+
+    await handleConfirmation(buildCtx().ctx, true);
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { email: 'telegram_biz_1_123@localb.bot', businessId: 'biz_1' },
+    });
+  });
+
+  it('si ese email ya existe en OTRO negocio no se usa su usuario como cliente: no se crea la reserva', async () => {
+    await seedConfirmState();
+    mock(prisma.user.findFirst).mockResolvedValue(null); // acotado por negocio: no lo ve
+    mock(prisma.user.create).mockRejectedValue(new Error('Unique constraint failed on email'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { ctx, reply } = buildCtx();
+    await handleConfirmation(ctx, true);
+
+    expect(prisma.booking.create).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalled();
+    err.mockRestore();
   });
 
   it('crea la reserva cuando no hay solape (toma el advisory lock en la tx)', async () => {
