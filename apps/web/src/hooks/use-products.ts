@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { productsApi } from '@/lib/api/index';
 import type { Product } from '@/types';
+import type { ProductUpdate } from '@/lib/api/products';
 
 interface MutationOptions {
   throwOnError?: boolean;
@@ -18,7 +19,7 @@ export interface UseProductsResult {
    * en vez de guardarse en `error`: lo usan los formularios para mostrarlo en el modal.
    */
   createProduct: (data: Partial<Product>, opts?: MutationOptions) => Promise<Product | null>;
-  updateProduct: (id: string, data: Partial<Product>, opts?: MutationOptions) => Promise<void>;
+  updateProduct: (id: string, data: ProductUpdate, opts?: MutationOptions) => Promise<void>;
   deleteProduct: (id: string, opts?: MutationOptions) => Promise<void>;
 }
 
@@ -66,7 +67,7 @@ export function useProducts(): UseProductsResult {
     }
   }, []);
 
-  const updateProduct = useCallback(async (id: string, data: Partial<Product>, opts?: MutationOptions) => {
+  const updateProduct = useCallback(async (id: string, data: ProductUpdate, opts?: MutationOptions) => {
     try {
       const updated = await productsApi.updateProduct(id, data);
       setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));

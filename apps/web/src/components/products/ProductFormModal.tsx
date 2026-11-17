@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { ImageUrlField, isHttpsImageUrl } from './ImageUrlField';
+import { priceError, stockError } from '@/lib/catalog-limits';
 
 interface ProductFormData {
   name: string;
@@ -50,7 +51,10 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, categories 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { setError('El nombre es obligatorio'); return; }
-    if (price <= 0) { setError('El precio debe ser mayor a 0'); return; }
+    const pErr = priceError(price);
+    if (pErr) { setError(pErr); return; }
+    const sErr = stockError(stock);
+    if (sErr) { setError(sErr); return; }
     if (image.trim() && !isHttpsImageUrl(image)) { setError('La imagen debe ser una URL https válida'); return; }
     if (!Number.isInteger(sortOrder) || sortOrder < 0) { setError('El orden debe ser un número entero mayor o igual a 0'); return; }
     setSaving(true);
@@ -79,7 +83,7 @@ export function ProductFormModal({ isOpen, onClose, onSave, initial, categories 
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Stock</label>
-            <input type="number" value={stock} onChange={(e) => setStock(Number(e.target.value))} className="input" min={0} />
+            <input type="number" value={stock} onChange={(e) => setStock(Number(e.target.value))} className="input" min={0} step={1} />
           </div>
         </div>
         <div>

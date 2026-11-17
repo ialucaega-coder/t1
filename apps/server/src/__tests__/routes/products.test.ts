@@ -19,6 +19,7 @@ vi.mock('../../lib/prisma', () => ({
       count: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       findFirst: vi.fn(),
       delete: vi.fn(),
     },
@@ -72,7 +73,7 @@ describe('routes/products', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body).toHaveLength(1);
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { businessId: 'biz_1' } })
+        expect.objectContaining({ where: { businessId: 'biz_1', deletedAt: null } })
       );
     });
 
@@ -85,7 +86,7 @@ describe('routes/products', () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ total: 1, page: 2, limit: 10, totalPages: 1 });
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ skip: 10, take: 10, where: { businessId: 'biz_1' } })
+        expect.objectContaining({ skip: 10, take: 10, where: { businessId: 'biz_1', deletedAt: null } })
       );
     });
   });
@@ -164,12 +165,13 @@ describe('routes/products', () => {
     });
 
     it('PUT permite quitar la imagen y la categoria con null', async () => {
-      mock(prisma.product.update).mockResolvedValue({ id: 'p1' });
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
+      mock(prisma.product.findFirst).mockResolvedValue({ id: 'p1' });
 
       const res = await request(app).put('/api/products/p1').send({ image: null, categoryId: null });
 
       expect(res.status).toBe(200);
-      expect(prisma.product.update).toHaveBeenCalledWith(
+      expect(prisma.product.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({ data: { image: null, categoryId: null } })
       );
     });
@@ -177,57 +179,142 @@ describe('routes/products', () => {
     it('PUT rechaza una imagen javascript:', async () => {
       const res = await request(app).put('/api/products/p1').send({ image: 'javascript:alert(1)' });
       expect(res.status).toBe(400);
-      expect(prisma.product.update).not.toHaveBeenCalled();
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
     });
 
     it('PUT rechaza una categoria de otro negocio', async () => {
       mock(prisma.category.findFirst).mockResolvedValue(null);
       const res = await request(app).put('/api/products/p1').send({ categoryId: 'cat_ajena' });
       expect(res.status).toBe(400);
-      expect(prisma.product.update).not.toHaveBeenCalled();
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
     });
   });
 
   describe('PUT /api/products/:id', () => {
-    it('actualiza un producto con scope por businessId (anti cross-tenant)', async () => {
-      mock(prisma.product.update).mockResolvedValue({ id: 'p1', name: 'Nuevo' });
+    it('actualiza un producto con scope por businessId y sin tocar los dados de baja (anti cross-tenant)', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
+      mock(prisma.product.findFirst).mockResolvedValue({ id: 'p1', name: 'Nuevo' });
 
       const res = await request(app).put('/api/products/p1').send({ name: 'Nuevo' });
 
       expect(res.status).toBe(200);
-      expect(prisma.product.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'p1', businessId: 'biz_1' },
-          data: expect.objectContaining({ name: 'Nuevo' }),
-        })
-      );
+      expect(res.body.name).toBe('Nuevo');
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { id: 'p1', businessId: 'biz_1', deletedAt: null },
+        data: { name: 'Nuevo' },
+      });
+    });
+
+    it('devuelve 404 si el producto no es del negocio o esta dado de baja', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 0 });
+      mock(prisma.product.findFirst).mockResolvedValue(null);
+
+      const res = await request(app).put('/api/products/ajeno').send({ name: 'X' });
+
+      expect(res.status).toBe(404);
     });
   });
 
-  describe('DELETE /api/products/:id', () => {
-    it('elimina el producto cuando existe en el negocio', async () => {
+  describe('PUT con expectedUpdatedAt (concurrencia optimista, stock)', () => {
+    const iso = '2026-11-15T10:00:00.000Z';
+
+    it('aplica el update solo si el updatedAt coincide (condicion en el where) y no guarda expectedUpdatedAt', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
+      mock(prisma.product.findFirst).mockResolvedValue({ id: 'p1', stock: 10 });
+
+      const res = await request(app).put('/api/products/p1').send({ stock: 10, expectedUpdatedAt: iso });
+
+      expect(res.status).toBe(200);
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { id: 'p1', businessId: 'biz_1', deletedAt: null, updatedAt: new Date(iso) },
+        data: { stock: 10 },
+      });
+    });
+
+    it('devuelve 409 si el producto cambio (una venta desconto stock) y NO pisa el stock', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 0 });
+      mock(prisma.product.findFirst).mockResolvedValue({ id: 'p1' }); // existe: es un conflicto, no un 404
+
+      const res = await request(app).put('/api/products/p1').send({ stock: 10, expectedUpdatedAt: iso });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('El producto cambió mientras lo editabas: recargá');
+      expect(res.body.code).toBe('PRODUCT_STALE');
+    });
+
+    it('sin expectedUpdatedAt el PUT sigue funcionando (retrocompatible)', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
       mock(prisma.product.findFirst).mockResolvedValue({ id: 'p1' });
-      mock(prisma.product.delete).mockResolvedValue({});
+
+      const res = await request(app).put('/api/products/p1').send({ stock: 4 });
+
+      expect(res.status).toBe(200);
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { id: 'p1', businessId: 'biz_1', deletedAt: null },
+        data: { stock: 4 },
+      });
+    });
+
+    it('rechaza un expectedUpdatedAt que no es una fecha ISO', async () => {
+      const res = await request(app).put('/api/products/p1').send({ stock: 4, expectedUpdatedAt: 'ayer' });
+      expect(res.status).toBe(400);
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('topes de precio y stock', () => {
+    it('rechaza un precio mayor al maximo de la columna Decimal(10,2)', async () => {
+      const res = await request(app).post('/api/products').send({ name: 'X', price: 100_000_000 });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body.details)).toContain('El precio no puede superar 99.999.999,99');
+      expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+
+    it('acepta exactamente el precio maximo', async () => {
+      mock(prisma.product.create).mockResolvedValue({ id: 'p1' });
+      const res = await request(app).post('/api/products').send({ name: 'X', price: 99_999_999.99 });
+      expect(res.status).toBe(201);
+    });
+
+    it('rechaza un stock mayor al tope', async () => {
+      const res = await request(app).post('/api/products').send({ name: 'X', price: 10, stock: 1_000_001 });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body.details)).toContain('El stock no puede superar 1.000.000');
+    });
+
+    it('rechaza un stock que desborda el Int (PUT)', async () => {
+      const res = await request(app).put('/api/products/p1').send({ stock: 3_000_000_000 });
+      expect(res.status).toBe(400);
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un stock no entero', async () => {
+      const res = await request(app).post('/api/products').send({ name: 'X', price: 10, stock: 1.5 });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('DELETE /api/products/:id (baja logica)', () => {
+    it('da de baja el producto (deletedAt + isActive=false) con scope por negocio, sin borrado fisico', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 1 });
 
       const res = await request(app).delete('/api/products/p1');
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true });
-      expect(prisma.product.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'p1', businessId: 'biz_1' } })
-      );
-      expect(prisma.product.delete).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'p1' } })
-      );
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { id: 'p1', businessId: 'biz_1', deletedAt: null },
+        data: { deletedAt: expect.any(Date), isActive: false },
+      });
+      expect(prisma.product.delete).not.toHaveBeenCalled();
     });
 
-    it('devuelve 404 si el producto no pertenece al negocio', async () => {
-      mock(prisma.product.findFirst).mockResolvedValue(null);
+    it('devuelve 404 si el producto no pertenece al negocio o ya estaba dado de baja', async () => {
+      mock(prisma.product.updateMany).mockResolvedValue({ count: 0 });
 
-      const res = await request(app).delete('/api/products/de-otro-negocio');
+      const res = await request(app).delete('/api/products/p1');
 
       expect(res.status).toBe(404);
-      expect(prisma.product.delete).not.toHaveBeenCalled();
     });
   });
 });

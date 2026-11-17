@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { ImageUrlField, isHttpsImageUrl } from '@/components/products/ImageUrlField';
+import { durationError, priceError } from '@/lib/catalog-limits';
 
 interface ServiceFormData {
   name: string;
@@ -52,8 +53,10 @@ export function ServiceFormModal({ isOpen, onClose, onSave, initial, categories 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { setError('El nombre es obligatorio'); return; }
-    if (price <= 0) { setError('El precio debe ser mayor a 0'); return; }
-    if (duration <= 0) { setError('La duración debe ser mayor a 0'); return; }
+    const pErr = priceError(price);
+    if (pErr) { setError(pErr); return; }
+    const dErr = durationError(duration);
+    if (dErr) { setError(dErr); return; }
     if (image.trim() && !isHttpsImageUrl(image)) { setError('La imagen debe ser una URL https válida'); return; }
     if (!Number.isInteger(sortOrder) || sortOrder < 0) { setError('El orden debe ser un número entero mayor o igual a 0'); return; }
     setSaving(true);

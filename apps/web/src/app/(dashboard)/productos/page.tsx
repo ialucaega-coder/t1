@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, DollarSign, Package, Pencil, Trash2, ToggleLeft, ToggleRight, Search, ShoppingBag, Tag, AlertTriangle } from 'lucide-react';
 import { useProducts } from '@/hooks/use-products';
 import * as categoriesApi from '@/lib/api/categories';
+import { isStaleProductError, PRODUCT_STALE_MESSAGE } from '@/lib/api/products';
 import { isLowStock, LOW_STOCK_THRESHOLD } from '@/lib/stock';
 import { CategoryManagerModal } from '@/components/categories/CategoryManagerModal';
 import type { Category } from '@/types';
@@ -65,7 +66,24 @@ export default function ProductosPage() {
       sortOrder: data.sortOrder,
     };
     if (editing) {
-      await updateProduct(editing.id, { ...payload, isActive: editing.isActive }, { throwOnError: true });
+      try {
+        // expectedUpdatedAt: si una venta o edición cambió el producto mientras se editaba, el
+        // server responde 409 en vez de pisar el stock con el valor viejo.
+        await updateProduct(
+          editing.id,
+          { ...payload, isActive: editing.isActive, expectedUpdatedAt: editing.updatedAt },
+          { throwOnError: true },
+        );
+      } catch (err) {
+        if (isStaleProductError(err)) {
+          // Recargamos la lista con los datos vigentes y avisamos; el modal se cierra.
+          refetch();
+          setEditing(null);
+          toast({ type: 'error', message: PRODUCT_STALE_MESSAGE });
+          return;
+        }
+        throw err;
+      }
       toast({ type: 'success', message: 'Producto actualizado correctamente' });
     } else {
       await createProduct(payload, { throwOnError: true });
@@ -77,8 +95,13 @@ export default function ProductosPage() {
   async function handleToggle(product: Product) {
     setToggling(product.id);
     try {
-      await updateProduct(product.id, { isActive: !product.isActive }, { throwOnError: true });
+      await updateProduct(
+        product.id,
+        { isActive: !product.isActive, expectedUpdatedAt: product.updatedAt },
+        { throwOnError: true },
+      );
     } catch (err) {
+      if (isStaleProductError(err)) refetch();
       toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al actualizar el producto' });
     } finally {
       setToggling(null);
@@ -248,7 +271,7 @@ export default function ProductosPage() {
         onClose={() => setConfirmDelete(null)}
         onConfirm={executeDelete}
         title="Eliminar producto"
-        message="¿Eliminar este producto?"
+        message="¿Eliminar este producto? Se quita del catálogo; el historial de ventas se conserva."
         confirmLabel="Eliminar"
         variant="danger"
         loading={deleting !== null}

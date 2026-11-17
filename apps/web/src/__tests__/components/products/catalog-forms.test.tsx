@@ -63,3 +63,36 @@ describe('ServiceFormModal: imagen y orden', () => {
     expect(await screen.findByText('Validation failed')).toBeInTheDocument();
   });
 });
+
+describe('formularios: topes', () => {
+  it('producto: no guarda un precio sobre el máximo y avisa', async () => {
+    const onSave = vi.fn();
+    render(<ProductFormModal isOpen onClose={vi.fn()} onSave={onSave} />);
+    fillProduct('', '0');
+    fireEvent.change(document.querySelector('input[step="100"]') as HTMLInputElement, { target: { value: '100000000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar' }));
+    expect(await screen.findByText('El precio no puede superar 99.999.999,99')).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('producto: no guarda un stock sobre el tope', async () => {
+    const onSave = vi.fn();
+    render(<ProductFormModal isOpen onClose={vi.fn()} onSave={onSave} />);
+    fillProduct('', '0');
+    fireEvent.change(document.querySelector('input[min="0"]:not([step="100"]):not([id])') as HTMLInputElement, { target: { value: '2000000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar' }));
+    expect(await screen.findByText('El stock no puede superar 1.000.000')).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('servicio: no guarda una duración mayor a 1440 minutos', async () => {
+    const onSave = vi.fn();
+    render(<ServiceFormModal isOpen onClose={vi.fn()} onSave={onSave} />);
+    fireEvent.change(screen.getByPlaceholderText('Ej: Corte + Peinado'), { target: { value: 'Corte' } });
+    fireEvent.change(document.querySelector('input[step="100"]') as HTMLInputElement, { target: { value: '5000' } });
+    fireEvent.change(document.querySelector('input[step="5"]') as HTMLInputElement, { target: { value: '1500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar' }));
+    expect(await screen.findByText('La duración no puede superar 1440 minutos (24 h)')).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+});
