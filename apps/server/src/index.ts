@@ -265,7 +265,7 @@ app.use('/api/transactions', requireAuth, requireStaff, requireCapability('sales
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/categories', categoriesRouter);
 app.use('/api/professionals', professionalsRouter);
-app.use('/api/stats', requireAuth, requireCapability('analytics'), statsRouter);
+app.use('/api/stats', requireAuth, requireStaff, requireCapability('analytics'), statsRouter);
 app.use('/api/schedules', schedulesRouter);
 app.use('/api/ai', requireAuth, requireStaff, aiRouter);
 app.use('/api/faq', requireAuth, requireStaff, requireCapability('bots'), faqRouter);
@@ -282,7 +282,7 @@ app.use('/api/team', teamRouter);
 app.use('/api/integrations', integrationsRouter);
 app.use('/api/marketplace', requireAuth, requireCapability('tools'), marketplaceRouter);
 app.use('/api/agency', agencyRouter);
-app.use('/api/analytics', requireAuth, requireCapability('analytics'), analyticsRouter);
+app.use('/api/analytics', requireAuth, requireStaff, requireCapability('analytics'), analyticsRouter);
 app.use('/api/campaigns', requireAuth, requireCapability('marketing'), campaignsRouter);
 app.use('/api/wa-templates', requireAuth, requireCapability('marketing'), waTemplatesRouter);
 app.use('/api/whitelabel', whitelabelRouter);
@@ -302,7 +302,7 @@ app.use('/api/calcom', calcomRouter);
 app.use('/api/mercadopago', mercadopagoRouter);
 app.use('/api/manychat', manychatRouter);
 app.use('/api/composio', composioRouter);
-app.use('/api/workflows', workflowsRouter);
+app.use('/api/workflows', requireAuth, requireStaff, workflowsRouter);
 app.use('/api/mrgo', mrgoRouter);
 app.use('/api/mcp', mcpRouter);
 // Super Admin (panel del dueño de la plataforma): cross-tenant, detrás de la
