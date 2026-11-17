@@ -6,7 +6,7 @@ import { prisma } from '../lib/prisma';
 import { cache, cacheKey } from '../lib/cache';
 import { validateQuery } from '../middleware/validate';
 import { dateRangeQuerySchema, type DateRangeQuery } from '../validators/dateRange';
-import { resolveRange, windowFilter, prevWindowFilter, type ResolvedRange } from '../services/analytics/range';
+import { resolveRange, windowFilter, prevWindowFilter, bookingWindowFilter, bookingPrevWindowFilter, type ResolvedRange } from '../services/analytics/range';
 import { ANALYTICS_TZ, arDayMonthLabel, arWeekdayLabel } from '../services/analytics/time';
 
 const router = Router();
@@ -50,8 +50,13 @@ router.get(
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     // Sin rango: este mes vs el mes pasado (histórico). Con rango: la ventana pedida vs la anterior de igual largo.
+    // Transacciones (createdAt = instante): ventana por día argentino (03:00Z).
     const curWin = range.custom ? windowFilter(range) : { gte: startOfMonth };
     const prevWin = range.custom ? prevWindowFilter(range) : { gte: startOfLastMonth, lt: startOfMonth };
+    // Reservas (Booking.date = día calendario guardado como medianoche UTC): ventana con
+    // límites UTC-medianoche; con 03:00Z se perdía el día `from` y se sumaba el siguiente a `to`.
+    const bookCurWin = range.custom ? bookingWindowFilter(range) : curWin;
+    const bookPrevWin = range.custom ? bookingPrevWindowFilter(range) : prevWin;
 
     const [
       todayBookings,
@@ -66,16 +71,16 @@ router.get(
       lastMonthNoShows,
     ] = await Promise.all([
       prisma.booking.count({ where: { businessId, date: { gte: startOfDay } } }),
-      prisma.booking.count({ where: { businessId, date: curWin } }),
-      prisma.booking.count({ where: { businessId, date: prevWin } }),
+      prisma.booking.count({ where: { businessId, date: bookCurWin } }),
+      prisma.booking.count({ where: { businessId, date: bookPrevWin } }),
       prisma.user.count({ where: { businessId, role: 'CLIENT' } }),
       prisma.transaction.aggregate({ where: { businessId, createdAt: curWin, type: 'SALE' }, _sum: { amount: true } }),
       prisma.transaction.aggregate({ where: { businessId, createdAt: prevWin, type: 'SALE' }, _sum: { amount: true } }),
       prisma.service.count({ where: { businessId, isActive: true, deletedAt: null } }),
       // Los productos dados de baja (deletedAt) no cuentan como catálogo.
       prisma.product.count({ where: { businessId, deletedAt: null } }),
-      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: curWin } }),
-      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: prevWin } }),
+      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: bookCurWin } }),
+      prisma.booking.count({ where: { businessId, status: 'NO_SHOW', date: bookPrevWin } }),
     ]);
 
     const currentRevenue = Number(monthRevenue._sum.amount || 0);
@@ -119,12 +124,15 @@ router.get(
     // Con rango pedido: una sola consulta SQL por tabla agrupada por día de Argentina
     // (a lo sumo 366 filas). El camino sin rango (7 días) queda como estaba.
     if (range.custom) {
+      // Booking.date es el día calendario como medianoche UTC: se agrupa por su fecha tal cual
+      // (sin convertir de zona) y la ventana usa límites UTC-medianoche.
+      const bookingWin = bookingWindowFilter(range) as { gte: Date; lt: Date };
       const [bookingRows, revenueRows] = await Promise.all([
         prisma.$queryRaw<{ day: string; n: number }[]>`
-          SELECT to_char(("date" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
+          SELECT to_char("date", 'YYYY-MM-DD') AS day,
                  COUNT(*)::int AS n
           FROM "bookings"
-          WHERE "businessId" = ${businessId} AND "date" >= ${range.since} AND "date" < ${range.until}
+          WHERE "businessId" = ${businessId} AND "date" >= ${bookingWin.gte} AND "date" < ${bookingWin.lt}
           GROUP BY 1`,
         prisma.$queryRaw<{ day: string; total: Prisma.Decimal | number | string | null }[]>`
           SELECT to_char(("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
@@ -206,7 +214,7 @@ router.get(
 
     const services = await prisma.booking.groupBy({
       by: ['serviceId'],
-      where: { businessId, date: range.custom ? windowFilter(range) : { gte: startOfMonth } },
+      where: { businessId, date: range.custom ? bookingWindowFilter(range) : { gte: startOfMonth } },
       _count: { id: true },
       orderBy: { _count: { id: 'desc' } },
       take: 5,

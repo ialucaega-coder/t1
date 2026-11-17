@@ -87,12 +87,15 @@ describe('routes/stats — rango de fechas', () => {
     expect(res.body[1]).toMatchObject({ date: '2026-10-21', bookings: 3, revenue: 1500.5 });
     expect(res.body[0]).toMatchObject({ bookings: 0, revenue: 0 });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
-    for (const call of mock(prisma.$queryRaw).mock.calls) {
-      const values = (call as unknown[]).slice(1);
-      expect(values).toContain('biz_1');
-      expect(values).toContainEqual(new Date('2026-10-20T03:00:00.000Z'));
-      expect(values).toContainEqual(new Date('2026-10-23T03:00:00.000Z'));
-    }
+    const [bookingsCall, revenueCall] = mock(prisma.$queryRaw).mock.calls as unknown[][];
+    // Reservas: Booking.date es medianoche UTC del día calendario -> límites 00:00Z.
+    expect(bookingsCall.slice(1)).toContain('biz_1');
+    expect(bookingsCall.slice(1)).toContainEqual(new Date('2026-10-20T00:00:00.000Z'));
+    expect(bookingsCall.slice(1)).toContainEqual(new Date('2026-10-23T00:00:00.000Z'));
+    // Ingresos: createdAt es un instante -> el día argentino sigue arrancando 03:00Z.
+    expect(revenueCall.slice(1)).toContain('biz_1');
+    expect(revenueCall.slice(1)).toContainEqual(new Date('2026-10-20T03:00:00.000Z'));
+    expect(revenueCall.slice(1)).toContainEqual(new Date('2026-10-23T03:00:00.000Z'));
     // Sin el camino viejo de N consultas por día.
     expect(prisma.booking.count).not.toHaveBeenCalled();
   });
@@ -131,7 +134,52 @@ describe('routes/stats — rango de fechas', () => {
 
     const arg = mock(prisma.booking.groupBy).mock.calls[0][0];
     expect(arg.where.businessId).toBe('biz_1');
-    expect(arg.where.date.gte.toISOString()).toBe('2026-10-26T03:00:00.000Z');
-    expect(arg.where.date.lt.toISOString()).toBe('2026-11-02T03:00:00.000Z');
+    // Booking.date = medianoche UTC del día calendario (no 03:00Z de Argentina).
+    expect(arg.where.date.gte.toISOString()).toBe('2026-10-26T00:00:00.000Z');
+    expect(arg.where.date.lt.toISOString()).toBe('2026-11-02T00:00:00.000Z');
+  });
+
+  describe('ventana de Booking.date (medianoche UTC del dia calendario)', () => {
+    it('/overview: la ventana y la anterior de reservas usan limites 00:00Z, y las transacciones siguen en 03:00Z', async () => {
+      await request(app).get('/api/stats/overview?from=2026-10-10&to=2026-10-19');
+
+      const bookingWheres = mock(prisma.booking.count).mock.calls.map(([a]) => a.where.date);
+      const cur = bookingWheres.find((d: { gte: Date }) => d?.gte?.toISOString() === '2026-10-10T00:00:00.000Z');
+      // dia `from` incluido (gte 00:00Z del 10) y el dia siguiente a `to` excluido (lt 00:00Z del 20)
+      expect(cur.lt.toISOString()).toBe('2026-10-20T00:00:00.000Z');
+      const prev = bookingWheres.find((d: { gte: Date }) => d?.gte?.toISOString() === '2026-09-30T00:00:00.000Z');
+      expect(prev.lt.toISOString()).toBe('2026-10-10T00:00:00.000Z');
+      // lo que corta por createdAt (transacciones) no cambia
+      const txWins = mock(prisma.transaction.aggregate).mock.calls.map(([a]) => a.where.createdAt.gte.toISOString());
+      expect(txWins).toContain('2026-10-10T03:00:00.000Z');
+    });
+
+    it('una reserva del dia `from` (medianoche UTC) cae dentro de la ventana y la del dia siguiente a `to` queda fuera', async () => {
+      await request(app).get('/api/stats/top-services?from=2026-10-16&to=2026-10-16');
+
+      const where = mock(prisma.booking.groupBy).mock.calls.at(-1)![0].where.date as { gte: Date; lt: Date };
+      const fromDay = new Date('2026-10-16T00:00:00.000Z'); // Booking.date del dia `from`
+      const nextDay = new Date('2026-10-17T00:00:00.000Z'); // Booking.date del dia siguiente a `to`
+      expect(fromDay >= where.gte && fromDay < where.lt).toBe(true);
+      expect(nextDay >= where.gte && nextDay < where.lt).toBe(false);
+    });
+
+    it('/weekly: la serie por dia agrupa por la fecha de Booking.date sin convertir de zona', async () => {
+      mock(prisma.$queryRaw)
+        .mockResolvedValueOnce([{ day: '2026-10-20', n: 2 }])
+        .mockResolvedValueOnce([]);
+
+      const res = await request(app).get('/api/stats/weekly?from=2026-10-20&to=2026-10-21');
+
+      // la reserva de medianoche UTC del 20/10 va al balde del 20/10 (antes caia en el 19)
+      expect(res.body[0]).toMatchObject({ date: '2026-10-20', bookings: 2 });
+      expect(res.body[1]).toMatchObject({ date: '2026-10-21', bookings: 0 });
+      const strings = (mock(prisma.$queryRaw).mock.calls[0][0] as string[]).join(' ');
+      expect(strings).toContain(`to_char("date", 'YYYY-MM-DD')`);
+      expect(strings).not.toContain('AT TIME ZONE');
+      // la consulta de ingresos (createdAt) conserva la conversion a hora de Argentina
+      const revenueSql = (mock(prisma.$queryRaw).mock.calls[1][0] as string[]).join(' ');
+      expect(revenueSql).toContain('AT TIME ZONE');
+    });
   });
 });

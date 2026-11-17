@@ -92,3 +92,26 @@ export function windowFilter(range: ResolvedRange): Prisma.DateTimeFilter {
 export function prevWindowFilter(range: ResolvedRange): Prisma.DateTimeFilter {
   return { gte: range.prevSince, lt: range.prevUntil };
 }
+
+/** Medianoche UTC del día calendario `YYYY-MM-DD`. */
+function utcDayStart(key: string): Date {
+  return new Date(`${key}T00:00:00.000Z`);
+}
+
+/**
+ * Ventana para `Booking.date`. Ese campo guarda el día calendario como medianoche
+ * UTC (`new Date('YYYY-MM-DD')`, ver services/bookings/create.ts), NO un instante
+ * en hora de Argentina: cortar con `arDayStartUtc` (03:00Z) deja la reserva del día
+ * `from` (00:00Z) fuera de la ventana y mete la del día siguiente a `to`.
+ * Para campos de instante (`createdAt`) se sigue usando `windowFilter`.
+ */
+export function bookingWindowFilter(range: ResolvedRange): Prisma.DateTimeFilter {
+  const last = range.keys[range.keys.length - 1];
+  return { gte: utcDayStart(range.keys[0]), lt: utcDayStart(addDays(last, 1)) };
+}
+
+/** Ventana anterior de igual largo, también con límites de medianoche UTC. */
+export function bookingPrevWindowFilter(range: ResolvedRange): { gte: Date; lt: Date } {
+  const since = utcDayStart(range.keys[0]);
+  return { gte: new Date(since.getTime() - range.keys.length * DAY_MS), lt: since };
+}
