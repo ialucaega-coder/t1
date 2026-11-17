@@ -25,12 +25,8 @@ test.describe('Login', () => {
     expect((await context.cookies()).find((c) => c.name === 'auth_token')).toBeUndefined();
   });
 
-  // BUG DETECTADO: http-client.ts trata TODO 401 como sesión vencida y hace
-  // window.location.href = '/login' (recarga dura), incluso en /auth/login. Resultado: con
-  // credenciales incorrectas la página se recarga, se vacían los campos y el mensaje de error
-  // del formulario ("Invalid credentials") NUNCA se ve. Habilitar cuando se corrija
-  // (p. ej. no redirigir en 401 si la ruta es /auth/login).
-  test.fixme('credenciales inválidas muestran mensaje de error en el formulario', async ({ page }) => {
+  // http-client.ts no redirige en el 401 de /auth/login: propaga el mensaje del backend.
+  test('credenciales inválidas muestran mensaje de error en el formulario', async ({ page }) => {
     await page.goto('/login');
     await esperarHidratacion(page);
     await page.getByPlaceholder('tu@email.com').fill(DEMO_EMAIL);
