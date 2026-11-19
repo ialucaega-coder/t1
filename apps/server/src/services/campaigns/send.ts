@@ -19,8 +19,8 @@
 import { prisma } from '../../lib/prisma';
 import { getIO } from '../../lib/socket';
 import { AppError } from '../../middleware/errorHandler';
-import { defineQueue, enqueue } from '../../lib/queue';
-import { sharedGet, sharedSet, sharedDel } from '../../lib/sharedState';
+import { defineQueue, enqueue, queuesEnabled } from '../../lib/queue';
+import { sharedGet, sharedSet, sharedDel, sharedIncr } from '../../lib/sharedState';
 import * as whatsapp from '../whatsapp/client';
 import { sendGenericNotification } from '../email';
 import { emitCampaignFailed, emitCampaignProgress } from './events';
@@ -72,6 +72,8 @@ interface Cursor {
   enviados: number;
   fallidos: number;
   tries: number;
+  /** Mensaje personalizado del envío original: hace falta para retomarlo tras una caída. */
+  message?: string;
 }
 
 // El cursor y la marca del envío vigente van por runId: un job viejo que sigue vivo
@@ -149,7 +151,7 @@ export async function sendCampaign(
     // Envío nuevo: runId propio (cursor propio, vacío). NO se borra el cursor de otro
     // envío: si hay un job viejo aún vivo, conserva el suyo y se corta al ver que ya
     // no es el vigente.
-    const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const runId = newRunId();
     await sharedSet(runKey(businessId, id), runId, CURSOR_TTL_MS);
 
     inlineWanted.add(id);
@@ -190,9 +192,13 @@ export async function sendCampaign(
   }
 }
 
+const newRunId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 /** Sin avance (updatedAt) por más de esto, una campaña 'sending' se considera trabada. */
 export const STALLED_SENDING_MS = 30 * 60 * 1000;
 const STALLED_BATCH = 50;
+/** Cuántas veces se retoma sola una misma campaña trabada antes de darla por fallida. */
+export const MAX_AUTO_RECOVERIES = 2;
 
 /**
  * Una excepción posterior al claim deja la campaña en 'failed' (antes quedaba
@@ -212,10 +218,47 @@ async function failAfterClaim(businessId: string, id: string): Promise<void> {
 }
 
 /**
- * Reaper: pasa a 'failed' las campañas 'sending' sin avance hace más de 30 min
- * (proceso caído a mitad de un envío, job perdido). El progreso toca `updatedAt`
- * (sentCount cada 25 destinatarios), así que un envío vivo no se marca. Lo llama el
- * scheduler en cada tick (`dispatchDueCampaigns`). Devuelve cuántas marcó.
+ * Retoma una campaña trabada (proceso caído a mitad de un envío) desde su cursor, sin
+ * reenviar a quienes ya recibieron. Solo si hay algo que retomar: colas reales (con
+ * Redis), cursor del envío vigente y menos de MAX_AUTO_RECOVERIES retomas. El envío
+ * retomado lleva un runId NUEVO: si el job viejo sigue vivo o aparece más tarde, ve que
+ * ya no es el vigente y se corta solo (no hay dos envíos en paralelo sobre el mismo cursor).
+ * Devuelve true si la campaña quedó retomada (o la tomó otra instancia): no hay que fallarla.
+ */
+async function tryResumeStalled(c: { id: string; businessId: string; updatedAt: Date }): Promise<boolean> {
+  if (!queuesEnabled()) return false; // sin Redis el cursor no sobrevive a la caída
+  const oldRun = await sharedGet<string>(runKey(c.businessId, c.id));
+  if (!oldRun) return false;
+  const cursor = await sharedGet<Cursor>(cursorKey(c.businessId, c.id, oldRun));
+  if (!cursor) return false;
+  const attempts = await sharedIncr(`campaign:${c.businessId}:${c.id}:recoveries`, CURSOR_TTL_MS);
+  if (attempts > MAX_AUTO_RECOVERIES) return false;
+
+  // Claim atómico con el updatedAt leído: si avanzó o lo tomó otra instancia, no se duplica.
+  const claim = await prisma.campaign.updateMany({
+    where: { id: c.id, businessId: c.businessId, status: 'sending', updatedAt: c.updatedAt },
+    data: { sentCount: cursor.enviados },
+  });
+  if (claim.count === 0) return true;
+
+  const runId = newRunId();
+  await sharedSet(cursorKey(c.businessId, c.id, runId), { ...cursor, tries: 0 }, CURSOR_TTL_MS);
+  await sharedSet(runKey(c.businessId, c.id), runId, CURSOR_TTL_MS);
+  await enqueue<CampaignJob>(
+    CAMPAIGN_QUEUE,
+    { businessId: c.businessId, id: c.id, message: cursor.message, runId },
+    { jobId: `campaign_${c.id}_${Date.now()}`, attempts: MAX_ATTEMPTS, backoffMs: 5000 },
+  );
+  console.warn(`[Campaigns] ${c.id} trabada: se retoma desde ${cursor.processed} destinatarios (retoma ${attempts}/${MAX_AUTO_RECOVERIES}).`);
+  return true;
+}
+
+/**
+ * Reaper: las campañas 'sending' sin avance hace más de 30 min (proceso caído a mitad de
+ * un envío, job perdido) se retoman solas desde su cursor si se puede (ver
+ * tryResumeStalled); si no, pasan a 'failed'. El progreso toca `updatedAt` (latido cada
+ * 60 s), así que un envío vivo no se marca. Lo llama el scheduler en cada tick
+ * (`dispatchDueCampaigns`). Devuelve cuántas marcó como 'failed'.
  */
 export async function failStalledCampaigns(now: Date = new Date()): Promise<number> {
   const stalled = await prisma.campaign.findMany({
@@ -225,6 +268,11 @@ export async function failStalledCampaigns(now: Date = new Date()): Promise<numb
   });
   let failed = 0;
   for (const c of stalled) {
+    try {
+      if (await tryResumeStalled(c)) continue;
+    } catch (err) {
+      console.error(`[Campaigns] no se pudo retomar ${c.id}:`, describeError(err));
+    }
     // Con el updatedAt leído en el WHERE: si avanzó entre el listado y acá, no se pisa.
     const upd = await prisma.campaign.updateMany({
       where: { id: c.id, businessId: c.businessId, status: 'sending', updatedAt: c.updatedAt },
@@ -251,7 +299,7 @@ function isSupportedChannel(channel: string): boolean {
 async function runCampaignJob({ businessId, id, message, runId }: CampaignJob): Promise<void> {
   const key = cursorKey(businessId, id, runId);
   const prev = (await sharedGet<Cursor>(key)) ?? { processed: 0, enviados: 0, fallidos: 0, tries: 0 };
-  const cursor: Cursor = { ...prev, tries: prev.tries + 1 };
+  const cursor: Cursor = { ...prev, tries: prev.tries + 1, message: message ?? prev.message };
   await sharedSet(key, cursor, CURSOR_TTL_MS);
 
   try {
