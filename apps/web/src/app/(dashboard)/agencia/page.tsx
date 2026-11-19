@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Building2, Users, Bot, DollarSign, Plus, Copy, Check, Eye, Settings, BarChart3, Link2, Pencil, Trash2, X } from 'lucide-react';
 import { useAgency } from '@/hooks/use-agency';
 import { AGENCY_STATS } from '@/constants/agency';
@@ -21,9 +21,16 @@ const STATUS_OPTIONS: { value: AgencyClient['status']; label: string }[] = [
 ];
 
 export default function AgenciaPage() {
-  const { stats, clients, isLoading, error, refetch, createClient, updateClient, deleteClient } = useAgency();
-  const { toast } = useToast();
   const [search, setSearch] = useState('');
+  // Búsqueda en el server (con debounce): la lista está paginada y filtrar solo lo
+  // cargado dejaba afuera a los clientes de otras páginas.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  const { stats, clients, total, hasMore, loadingMore, loadMore, isLoading, error, refetch, createClient, updateClient, deleteClient } = useAgency(debouncedSearch);
+  const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 
   // Alta/edición de negocio (antes el botón "Agregar negocio" no hacía nada).
@@ -36,11 +43,9 @@ export default function AgenciaPage() {
   const [toDelete, setToDelete] = useState<AgencyClient | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  usePageCounter(isLoading ? null : fmtCounter(clients.length, 'NEGOCIO', 'NEGOCIOS'));
+  usePageCounter(isLoading ? null : fmtCounter(total, 'NEGOCIO', 'NEGOCIOS'));
 
-  const filtered = clients.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = clients;
 
   function openCreate() {
     setEditing(null);
@@ -229,6 +234,15 @@ export default function AgenciaPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+          <span>Mostrando {clients.length} de {total} negocio{total !== 1 ? 's' : ''}</span>
+          {hasMore && (
+            <button onClick={loadMore} disabled={loadingMore} className="btn-secondary text-xs disabled:opacity-50">
+              {loadingMore ? 'Cargando...' : 'Cargar más'}
+            </button>
+          )}
         </div>
       </div>
 

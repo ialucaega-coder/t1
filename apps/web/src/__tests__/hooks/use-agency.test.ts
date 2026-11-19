@@ -42,7 +42,7 @@ describe('hooks/use-agency', () => {
 
   it('carga stats y clientes desde la API', async () => {
     mockStats.mockResolvedValue({ totalClients: 3 });
-    mockClients.mockResolvedValue([{ id: 'a1', name: 'Cliente X' }]);
+    mockClients.mockResolvedValue({ data: [{ id: 'a1', name: 'Cliente X' }], total: 1 });
 
     const { result } = renderHook(() => useAgency());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -54,7 +54,7 @@ describe('hooks/use-agency', () => {
 
   it('ante error setea el mensaje', async () => {
     mockStats.mockRejectedValue(new Error('Sin datos'));
-    mockClients.mockResolvedValue([]);
+    mockClients.mockResolvedValue({ data: [], total: 0 });
 
     const { result } = renderHook(() => useAgency());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -64,7 +64,7 @@ describe('hooks/use-agency', () => {
 
   it('usa mensaje genérico cuando el error no es Error', async () => {
     mockStats.mockRejectedValue('x');
-    mockClients.mockResolvedValue([]);
+    mockClients.mockResolvedValue({ data: [], total: 0 });
 
     const { result } = renderHook(() => useAgency());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -74,7 +74,7 @@ describe('hooks/use-agency', () => {
 
   it('createClient crea y recarga', async () => {
     mockStats.mockResolvedValue({});
-    mockClients.mockResolvedValue([]);
+    mockClients.mockResolvedValue({ data: [], total: 0 });
     mockCreate.mockResolvedValue({ id: 'a2' });
 
     const { result } = renderHook(() => useAgency());
@@ -90,7 +90,7 @@ describe('hooks/use-agency', () => {
 
   it('updateClient actualiza y recarga', async () => {
     mockStats.mockResolvedValue({});
-    mockClients.mockResolvedValue([]);
+    mockClients.mockResolvedValue({ data: [], total: 0 });
     mockUpdate.mockResolvedValue({ id: 'a1' });
 
     const { result } = renderHook(() => useAgency());
@@ -105,7 +105,7 @@ describe('hooks/use-agency', () => {
 
   it('deleteClient elimina y recarga', async () => {
     mockStats.mockResolvedValue({});
-    mockClients.mockResolvedValue([]);
+    mockClients.mockResolvedValue({ data: [], total: 0 });
     mockDelete.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useAgency());

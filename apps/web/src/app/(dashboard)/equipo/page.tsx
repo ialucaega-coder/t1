@@ -361,7 +361,7 @@ export default function EquipoPage() {
       <div className="card p-4">
         <p className="text-xs text-slate-500 flex items-center gap-2">
           <Shield className="h-3.5 w-3.5" />
-          Recuperar contraseña · Bitácora · Asignar conversaciones · Seguridad — 5 intentos fallidos = 15 min de bloqueo. Bitácora de quién hizo qué.
+          Seguridad: 5 intentos fallidos de inicio de sesión bloquean la cuenta por 15 minutos.
         </p>
       </div>
 

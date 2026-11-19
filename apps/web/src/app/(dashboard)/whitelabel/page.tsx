@@ -5,6 +5,7 @@ import { Palette, Eye, Upload, Globe, Type, Monitor } from 'lucide-react';
 import { useWhitelabel } from '@/hooks/use-whitelabel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { useToast } from '@/components/common/Toast';
 
 const themes = [
   { name: 'Nimbus', description: 'Claro y limpio', preview: 'bg-slate-100', textColor: 'text-slate-800' },
@@ -14,6 +15,7 @@ const themes = [
 
 export default function WhitelabelPage() {
   const { settings, isLoading, error, saving, refetch, saveSettings } = useWhitelabel();
+  const { toast } = useToast();
   const [selectedTheme, setSelectedTheme] = useState('onyx');
   const [brandName, setBrandName] = useState('');
   const [customDomain, setCustomDomain] = useState('');
@@ -39,17 +41,23 @@ export default function WhitelabelPage() {
   };
 
   const handleSave = async () => {
-    await saveSettings({
-      name: brandName,
-      customDomain,
-      primaryColor: accentColor,
-      accentColor,
-      // El dominio/logo vacío se manda como null; el backend valida que, si viene,
-      // sea una URL válida.
-      logo: logo.trim() || undefined,
-      theme: selectedTheme,
-      hiddenSections,
-    });
+    try {
+      await saveSettings({
+        name: brandName,
+        customDomain,
+        primaryColor: accentColor,
+        accentColor,
+        // Logo vacío = null (el server lo acepta) para poder borrarlo; con `undefined` el
+        // campo no viajaba y el logo anterior quedaba para siempre.
+        logo: logo.trim() || null,
+        theme: selectedTheme,
+        hiddenSections,
+      });
+      toast({ type: 'success', message: 'Cambios guardados correctamente' });
+    } catch (err) {
+      // Mensaje real del server (409 número duplicado, 400 de validación, etc.).
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudieron guardar los cambios' });
+    }
   };
 
   if (isLoading) return <LoadingSpinner label="Cargando configuración..." />;

@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('@/components/common/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock('@/lib/auth-context', () => ({ useAuth: () => ({ user: { role: 'ADMIN' } }) }));
 
 const deleteGalleryItem = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/api/gallery', () => ({

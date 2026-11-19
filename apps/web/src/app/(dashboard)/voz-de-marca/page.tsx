@@ -10,6 +10,12 @@ import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
+/** Topes del server (validators/brand.ts): el textarea no deja escribir más de lo que se acepta. */
+const MAX_TONO = 500;
+const MAX_PUBLICO = 500;
+const MAX_INFO = 5000;
+const MAX_REGLAS = 2000;
+
 const EMPTY: BrandVoice = {
   tono: '',
   publicoObjetivo: '',
@@ -141,6 +147,7 @@ export default function VozDeMarcaPage() {
           <input
             className="input"
             value={form.tono}
+            maxLength={MAX_TONO}
             disabled={!isAdmin}
             onChange={(e) => updateField('tono', e.target.value)}
             placeholder="Ej: cercano y profesional, tuteo, frases cortas"
@@ -152,6 +159,7 @@ export default function VozDeMarcaPage() {
           <input
             className="input"
             value={form.publicoObjetivo}
+            maxLength={MAX_PUBLICO}
             disabled={!isAdmin}
             onChange={(e) => updateField('publicoObjetivo', e.target.value)}
             placeholder="Ej: dueños de PyMEs en Argentina que quieren automatizar su atención"
@@ -191,12 +199,13 @@ export default function VozDeMarcaPage() {
           <textarea
             className="input min-h-[160px] resize-y"
             value={form.infoNegocio}
+            maxLength={MAX_INFO}
             disabled={!isAdmin}
             onChange={(e) => updateField('infoNegocio', e.target.value)}
             placeholder="Escribí en texto libre lo que el bot debe saber: qué vendés, políticas, horarios, formas de pago, preguntas frecuentes y sus respuestas..."
           />
           <p className="text-[11px] text-slate-500 mt-1">
-            El bot usa este texto como fuente de verdad para responder. Cuanto más completo, mejor.
+            El bot usa este texto como fuente de verdad para responder. Cuanto más completo, mejor. ({form.infoNegocio.length}/{MAX_INFO})
           </p>
         </div>
 
@@ -205,6 +214,7 @@ export default function VozDeMarcaPage() {
           <textarea
             className="input min-h-[100px] resize-y"
             value={form.reglas}
+            maxLength={MAX_REGLAS}
             disabled={!isAdmin}
             onChange={(e) => updateField('reglas', e.target.value)}
             placeholder="Ej: nunca prometer descuentos, siempre ofrecer agendar, derivar a humano si preguntan por reembolsos"

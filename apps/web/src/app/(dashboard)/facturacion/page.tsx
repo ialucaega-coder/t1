@@ -12,6 +12,8 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { httpClient } from '@/lib/api';
+import { createPortalSession } from '@/lib/api/billing';
+import { hasLiveSubscription, subscriptionStatusClass, subscriptionStatusLabel } from '@/lib/billing-status';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -100,6 +102,7 @@ export default function FacturacionPage() {
   const [loading, setLoading] = useState(true);
   const [interval, setInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [cancelling, setCancelling] = useState(false);
+  const [openingPortal, setOpeningPortal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -142,11 +145,26 @@ export default function FacturacionPage() {
     }
   }
 
+  async function handleManage() {
+    setOpeningPortal(true);
+    try {
+      const { url } = await createPortalSession();
+      window.location.href = url;
+    } catch (err) {
+      toast({
+        type: 'error',
+        message: err instanceof Error && err.message ? err.message : 'No se pudo abrir el portal de facturación.',
+      });
+      setOpeningPortal(false);
+    }
+  }
+
   if (loading) {
     return <LoadingSpinner label="Cargando facturación..." />;
   }
 
   const yearlyDiscount = getYearlyDiscountPercent(plans);
+  const liveSubscription = hasLiveSubscription(subscription);
 
   return (
     <div className="max-w-5xl space-y-8">
@@ -175,19 +193,9 @@ export default function FacturacionPage() {
             </div>
             <div className="text-right">
               <span
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
-                  subscription.status === 'ACTIVE'
-                    ? 'bg-emerald-500/10 text-emerald-400'
-                    : subscription.status === 'PAST_DUE'
-                    ? 'bg-amber-500/10 text-amber-400'
-                    : 'bg-red-500/10 text-red-400'
-                }`}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${subscriptionStatusClass(subscription.status)}`}
               >
-                {subscription.status === 'ACTIVE'
-                  ? 'Activa'
-                  : subscription.status === 'PAST_DUE'
-                  ? 'Pago pendiente'
-                  : 'Cancelada'}
+                {subscriptionStatusLabel(subscription.status)}
               </span>
               {subscription.cancelAtPeriodEnd && (
                 <p className="text-xs text-amber-400 mt-2 flex items-center gap-1">
@@ -197,6 +205,16 @@ export default function FacturacionPage() {
               )}
             </div>
           </div>
+          {liveSubscription && (
+            <button
+              onClick={handleManage}
+              disabled={openingPortal}
+              className="mt-4 mr-4 btn-secondary text-sm disabled:opacity-50"
+            >
+              <CreditCard className="h-4 w-4" />
+              {openingPortal ? 'Abriendo portal...' : 'Gestionar suscripción'}
+            </button>
+          )}
           {subscription.status === 'ACTIVE' && !subscription.cancelAtPeriodEnd && (
             <button
               onClick={() => setConfirmCancel(true)}
@@ -307,11 +325,15 @@ export default function FacturacionPage() {
                 >
                   Plan actual
                 </button>
+              ) : liveSubscription ? (
+                // Con suscripción vigente el server rechaza el checkout (409): el cambio de plan
+                // se hace desde "Gestionar suscripción" (portal de facturación).
+                null
               ) : (
                 <CheckoutButton
                   planId={plan.id}
                   interval={interval}
-                  label={subscription ? 'Cambiar plan' : 'Elegir plan'}
+                  label="Elegir plan"
                   className="mt-6 w-full justify-center py-2.5"
                 />
               )}

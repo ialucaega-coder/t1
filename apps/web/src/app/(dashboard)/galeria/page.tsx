@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import * as galleryApi from '@/lib/api/gallery';
 import type { GalleryItem, GalleryTipo, CreateGalleryItemInput } from '@/lib/api/gallery';
+import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
@@ -73,6 +74,9 @@ function Preview({ item }: { item: GalleryItem }) {
 
 export default function GaleriaPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  // El server solo deja agregar y eliminar a ADMIN (403 para el resto).
+  const isAdmin = user?.role === 'ADMIN';
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -145,8 +149,8 @@ export default function GaleriaPage() {
       await galleryApi.deleteGalleryItem(id);
       await load();
       toast({ type: 'success', message: 'Elemento eliminado' });
-    } catch {
-      toast({ type: 'error', message: 'Error al eliminar el elemento' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al eliminar el elemento' });
     } finally {
       setDeleting(null);
     }
@@ -166,10 +170,18 @@ export default function GaleriaPage() {
             {items.length} elemento{items.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <button onClick={openCreate} className="btn-primary text-xs">
-          <Plus className="h-3.5 w-3.5" /> Agregar elemento
-        </button>
+        {isAdmin && (
+          <button onClick={openCreate} className="btn-primary text-xs">
+            <Plus className="h-3.5 w-3.5" /> Agregar elemento
+          </button>
+        )}
       </div>
+
+      {!isAdmin && (
+        <p role="note" className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+          Solo un administrador puede agregar o eliminar elementos de la galería. Podés verla pero no modificarla.
+        </p>
+      )}
 
       <p className="text-sm text-slate-400 max-w-2xl">
         Cargá fotos, videos y audios reales por URL. El bot puede compartirlos en el chat y aparecen
@@ -182,7 +194,7 @@ export default function GaleriaPage() {
           icon={Images}
           title="Galería vacía"
           description="Todavía no hay elementos. Agregá fotos, videos o audios por URL."
-          action={{ label: 'Agregar primer elemento', onClick: openCreate }}
+          action={isAdmin ? { label: 'Agregar primer elemento', onClick: openCreate } : undefined}
         />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -200,6 +212,7 @@ export default function GaleriaPage() {
                     {item.tipo}
                   </span>
                 </div>
+                {isAdmin && (
                 <button
                   onClick={() => setDeleteTarget({ id: item.id, titulo: item.titulo || 'Sin título' })}
                   disabled={deleting === item.id}
@@ -213,6 +226,7 @@ export default function GaleriaPage() {
                     <Trash2 className="h-3.5 w-3.5" />
                   )}
                 </button>
+                )}
               </div>
 
               {item.descripcion && (
