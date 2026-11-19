@@ -14,10 +14,12 @@ vi.mock('../../lib/prisma', () => ({
   prisma: {
     schedule: {
       findMany: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
     },
+    professional: { findFirst: vi.fn() },
   },
 }));
 
@@ -48,6 +50,8 @@ describe('routes/schedules', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // El profesional existe en el negocio salvo que el test diga lo contrario.
+    mock(prisma.professional.findFirst).mockResolvedValue({ id: 'prof_1' });
   });
 
   describe('GET /api/schedules', () => {
@@ -123,6 +127,42 @@ describe('routes/schedules', () => {
       expect(res.status).toBe(400);
     });
 
+    it('rechaza (404) un professionalId de otro negocio y no crea nada (anti cross-tenant)', async () => {
+      mock(prisma.professional.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/schedules')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ ...validPayload, professionalId: 'prof_ajeno' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.professional.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'prof_ajeno', businessId: 'biz_1' } })
+      );
+      expect(prisma.schedule.create).not.toHaveBeenCalled();
+    });
+
+    it.each(['99:99', '24:00', '12:60', '9:00'])('devuelve 400 con la hora inválida %s', async (startTime) => {
+      const res = await request(app)
+        .post('/api/schedules')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ ...validPayload, startTime });
+
+      expect(res.status).toBe(400);
+      expect(prisma.schedule.create).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si la hora de fin no es posterior a la de inicio', async () => {
+      for (const [startTime, endTime] of [['18:00', '09:00'], ['09:00', '09:00']]) {
+        const res = await request(app)
+          .post('/api/schedules')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ ...validPayload, startTime, endTime });
+        expect(res.status).toBe(400);
+      }
+      expect(prisma.schedule.create).not.toHaveBeenCalled();
+    });
+
     it('devuelve 400 con dayOfWeek fuera de rango', async () => {
       const res = await request(app)
         .post('/api/schedules')
@@ -134,7 +174,10 @@ describe('routes/schedules', () => {
   });
 
   describe('PUT /api/schedules/:id', () => {
+    const existingSchedule = { id: 's1', professionalId: 'prof_1', startTime: '09:00', endTime: '18:00' };
+
     it('actualiza un horario existente', async () => {
+      mock(prisma.schedule.findFirst).mockResolvedValue(existingSchedule);
       mock(prisma.schedule.update).mockResolvedValue({ id: 's1', startTime: '10:00' });
 
       const res = await request(app)
@@ -147,6 +190,63 @@ describe('routes/schedules', () => {
       expect(prisma.schedule.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 's1', businessId: 'biz_1' } })
       );
+    });
+
+    it('devuelve 404 si el horario es de otro negocio', async () => {
+      mock(prisma.schedule.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .put('/api/schedules/de_otro')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ startTime: '10:00' });
+
+      expect(res.status).toBe(404);
+      expect(mock(prisma.schedule.findFirst).mock.calls[0][0].where).toEqual({ id: 'de_otro', businessId: 'biz_1' });
+      expect(prisma.schedule.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (404) mover el horario a un profesional de otro negocio', async () => {
+      mock(prisma.schedule.findFirst).mockResolvedValue(existingSchedule);
+      mock(prisma.professional.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .put('/api/schedules/s1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ professionalId: 'prof_ajeno' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.schedule.update).not.toHaveBeenCalled();
+    });
+
+    it('cambiar solo una hora se valida contra la guardada (fin <= inicio => 400)', async () => {
+      mock(prisma.schedule.findFirst).mockResolvedValue(existingSchedule);
+
+      const lateStart = await request(app)
+        .put('/api/schedules/s1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ startTime: '19:00' });
+      const earlyEnd = await request(app)
+        .put('/api/schedules/s1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ endTime: '08:00' });
+
+      expect(lateStart.status).toBe(400);
+      expect(earlyEnd.status).toBe(400);
+      expect(prisma.schedule.update).not.toHaveBeenCalled();
+    });
+
+    it('con las dos horas en el body valida fin > inicio y la hora inválida da 400', async () => {
+      const inverted = await request(app)
+        .put('/api/schedules/s1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ startTime: '12:00', endTime: '10:00' });
+      const bad = await request(app)
+        .put('/api/schedules/s1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ endTime: '25:00' });
+
+      expect(inverted.status).toBe(400);
+      expect(bad.status).toBe(400);
     });
 
     it('devuelve 403 para rol no ADMIN', async () => {

@@ -23,7 +23,7 @@ vi.mock('../../lib/prisma', () => ({
     user: { findFirst: vi.fn(), create: vi.fn() },
     schedule: { findFirst: vi.fn() },
     booking: { findMany: vi.fn() },
-    service: { findFirst: vi.fn() },
+    service: { findFirst: vi.fn(), count: vi.fn() },
   },
 }));
 
@@ -330,6 +330,179 @@ describe('routes/professionals', () => {
       const res = await request(app).delete('/api/professionals/no-existe').set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(404);
+    });
+  });
+});
+
+describe('routes/professionals: permisos, datos públicos y servicios del negocio', () => {
+  const app = buildApp();
+  const adminToken = signToken({ userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' });
+  const profToken = signToken({ userId: 'user_2', businessId: 'biz_1', role: 'PROFESSIONAL' });
+  const clientToken = signToken({ userId: 'user_3', businessId: 'biz_1', role: 'CLIENT' });
+  const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.service.count).mockResolvedValue(0);
+  });
+
+  describe('alta, edición y baja: solo ADMIN', () => {
+    it('un CLIENT no puede crear un profesional (403, sin crear User ni Professional)', async () => {
+      const res = await request(app).post('/api/professionals').set(auth(clientToken)).send({ name: 'Eva', email: 'eva@x.com' });
+
+      expect(res.status).toBe(403);
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(prisma.professional.create).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL tampoco puede crear (403)', async () => {
+      const res = await request(app).post('/api/professionals').set(auth(profToken)).send({ name: 'Eva', email: 'eva@x.com' });
+      expect(res.status).toBe(403);
+    });
+
+    it('un CLIENT no puede editar (403)', async () => {
+      const res = await request(app).put('/api/professionals/p1').set(auth(clientToken)).send({ bio: 'x' });
+
+      expect(res.status).toBe(403);
+      expect(prisma.professional.update).not.toHaveBeenCalled();
+    });
+
+    it('un CLIENT no puede borrar (403)', async () => {
+      const res = await request(app).delete('/api/professionals/p1').set(auth(clientToken));
+
+      expect(res.status).toBe(403);
+      expect(prisma.professional.delete).not.toHaveBeenCalled();
+    });
+
+    it('un ADMIN sí puede editar (200)', async () => {
+      mock(prisma.professional.findUnique).mockResolvedValue({ id: 'p1' });
+      mock(prisma.professional.update).mockResolvedValue({ id: 'p1' });
+
+      const res = await request(app).put('/api/professionals/p1').set(auth(adminToken)).send({ bio: 'nueva' });
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('listado y ficha: datos sensibles solo para staff', () => {
+    it('el listado a un CLIENT no incluye email ni teléfono ni el conteo de reservas', async () => {
+      mock(prisma.professional.findMany).mockResolvedValue([]);
+
+      await request(app).get('/api/professionals').set(auth(clientToken));
+
+      const include = mock(prisma.professional.findMany).mock.calls[0][0].include;
+      expect(include.user.select).toEqual({ id: true, name: true, avatar: true });
+      expect(include._count).toBeUndefined();
+    });
+
+    it('el listado a staff sí incluye email y teléfono', async () => {
+      mock(prisma.professional.findMany).mockResolvedValue([]);
+
+      await request(app).get('/api/professionals').set(auth(profToken));
+
+      const include = mock(prisma.professional.findMany).mock.calls[0][0].include;
+      expect(include.user.select).toMatchObject({ email: true, phone: true });
+    });
+
+    it('la ficha a un CLIENT no trae reservas (notas, importes, clientes) ni contacto', async () => {
+      mock(prisma.professional.findUnique).mockResolvedValue({ id: 'p1' });
+
+      const res = await request(app).get('/api/professionals/p1').set(auth(clientToken));
+
+      expect(res.status).toBe(200);
+      const include = mock(prisma.professional.findUnique).mock.calls[0][0].include;
+      expect(include.bookings).toBeUndefined();
+      expect(include.user.select).toEqual({ name: true });
+    });
+
+    it('la ficha a staff trae las últimas reservas', async () => {
+      mock(prisma.professional.findUnique).mockResolvedValue({ id: 'p1' });
+
+      await request(app).get('/api/professionals/p1').set(auth(adminToken));
+
+      const include = mock(prisma.professional.findUnique).mock.calls[0][0].include;
+      expect(include.bookings).toMatchObject({ take: 10 });
+      expect(include.user.select).toMatchObject({ email: true, phone: true });
+    });
+  });
+
+  describe('serviceIds: tienen que ser del negocio', () => {
+    it('el alta rechaza (404) servicios de otro negocio y no crea nada', async () => {
+      // Se piden 2 ids pero solo 1 es del negocio.
+      mock(prisma.service.count).mockResolvedValue(1);
+
+      const res = await request(app)
+        .post('/api/professionals')
+        .set(auth(adminToken))
+        .send({ name: 'Eva', email: 'eva@x.com', serviceIds: ['svc_1', 'svc_ajeno'] });
+
+      expect(res.status).toBe(404);
+      expect(prisma.service.count).toHaveBeenCalledWith({
+        where: { id: { in: ['svc_1', 'svc_ajeno'] }, businessId: 'biz_1', deletedAt: null },
+      });
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(prisma.professional.create).not.toHaveBeenCalled();
+    });
+
+    it('el alta con servicios del negocio los conecta', async () => {
+      mock(prisma.service.count).mockResolvedValue(2);
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'u1' });
+      mock(prisma.professional.aggregate).mockResolvedValue({ _max: { sortOrder: 0 } });
+      mock(prisma.professional.create).mockResolvedValue({ id: 'p1' });
+
+      const res = await request(app)
+        .post('/api/professionals')
+        .set(auth(adminToken))
+        .send({ name: 'Eva', email: 'eva@x.com', serviceIds: ['svc_1', 'svc_2'] });
+
+      expect(res.status).toBe(201);
+      expect(prisma.professional.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ services: { connect: [{ id: 'svc_1' }, { id: 'svc_2' }] } }) })
+      );
+    });
+
+    it('la edición rechaza (404) servicios de otro negocio y no hace set', async () => {
+      mock(prisma.professional.findUnique).mockResolvedValue({ id: 'p1' });
+      mock(prisma.service.count).mockResolvedValue(0);
+
+      const res = await request(app).put('/api/professionals/p1').set(auth(adminToken)).send({ serviceIds: ['svc_ajeno'] });
+
+      expect(res.status).toBe(404);
+      expect(prisma.professional.update).not.toHaveBeenCalled();
+    });
+
+    it('serviceIds vacío (desconectar todos) no consulta ni rechaza', async () => {
+      mock(prisma.professional.findUnique).mockResolvedValue({ id: 'p1' });
+      mock(prisma.professional.update).mockResolvedValue({ id: 'p1' });
+
+      const res = await request(app).put('/api/professionals/p1').set(auth(adminToken)).send({ serviceIds: [] });
+
+      expect(res.status).toBe(200);
+      expect(prisma.service.count).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('topes de tamaño', () => {
+    it('rechaza (400) una especialidad de más de 60 caracteres', async () => {
+      const res = await request(app)
+        .post('/api/professionals')
+        .set(auth(adminToken))
+        .send({ name: 'Eva', email: 'eva@x.com', specialties: ['x'.repeat(61)] });
+      expect(res.status).toBe(400);
+    });
+
+    it('rechaza (400) un id de servicio gigante o demasiados serviceIds', async () => {
+      const big = await request(app)
+        .put('/api/professionals/p1')
+        .set(auth(adminToken))
+        .send({ serviceIds: ['s'.repeat(65)] });
+      const many = await request(app)
+        .put('/api/professionals/p1')
+        .set(auth(adminToken))
+        .send({ serviceIds: Array.from({ length: 101 }, (_, i) => `svc_${i}`) });
+
+      expect(big.status).toBe(400);
+      expect(many.status).toBe(400);
     });
   });
 });

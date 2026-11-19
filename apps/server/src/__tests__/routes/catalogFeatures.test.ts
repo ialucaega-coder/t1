@@ -131,6 +131,18 @@ describe('routes/catalogFeatures (CRUD genérico, kind=skill)', () => {
       });
     });
 
+    it('un nombre con "%" suelto no da 500 (no se decodifica dos veces): 404 si no existe', async () => {
+      mock(prisma.skill.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .put('/api/skills/50%25')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ isActive: false });
+
+      expect(res.status).toBe(404);
+      expect(prisma.skill.findFirst).toHaveBeenCalledWith({ where: { businessId: 'biz_1', name: '50%' } });
+    });
+
     it('rechaza a un usuario sin rol ADMIN (403)', async () => {
       const res = await request(app)
         .put('/api/skills/Reservas')

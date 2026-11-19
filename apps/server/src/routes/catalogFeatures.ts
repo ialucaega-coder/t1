@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
 import { tenantRateLimit } from '../middleware/tenantRateLimit';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
@@ -42,10 +43,17 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
   // Ganchos de superpoderes que producen contenido leyendo la DB. Solo se
   // montan en el router de superpoderes (no en el de habilidades).
   if (kind === 'superpower') {
+    // Estos 4 ganchos leen datos del negocio (turnos con nombres y horarios, KPIs,
+    // conversaciones) y gastan cuota de IA: solo staff, y con la capacidad que
+    // corresponde (herramientas para reportes/recordatorios, conversaciones para el
+    // análisis y los huecos de conocimiento). Un CLIENT/viewer con JWT ya no los llama.
+    const staffTools = [requireAuth, requireStaff, requireCapability('tools')];
+    const staffConversations = [requireAuth, requireStaff, requireCapability('conversations')];
+
     // GET /api/superpowers/report — Superpoder "Reportes automaticos".
     router.get(
       '/report',
-      requireAuth,
+      ...staffTools,
       asyncHandler(async (req, res) => {
         const report = await generateDailyReport(req.auth!.businessId);
         res.json(report);
@@ -55,7 +63,7 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
     // GET /api/superpowers/reminders — Superpoder "Recordatorios inteligentes".
     router.get(
       '/reminders',
-      requireAuth,
+      ...staffTools,
       asyncHandler(async (req, res) => {
         const reminders = await generateReminders(req.auth!.businessId);
         res.json(reminders);
@@ -66,11 +74,12 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
     // Devuelve { intencion, satisfaccion, objeciones, siguientePaso, resumen }.
     router.get(
       '/analisis/:conversationId',
-      requireAuth,
+      ...staffConversations,
       tenantRateLimit({ name: 'sp-analisis', max: 30 }),
       asyncHandler(async (req, res) => {
         const businessId = req.auth!.businessId;
-        const conversationId = decodeURIComponent(String(req.params.conversationId));
+        // Express ya decodifica los params: decodificar de nuevo daba 500 con un '%' suelto.
+        const conversationId = String(req.params.conversationId);
 
         const conversation = await prisma.conversation.findFirst({
           where: { id: conversationId, businessId },
@@ -100,7 +109,7 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
     // qué agregar al Prompt/FAQ, agrupado por tema.
     router.get(
       '/gaps',
-      requireAuth,
+      ...staffConversations,
       asyncHandler(async (req, res) => {
         const result = await detectKnowledgeGaps(req.auth!.businessId);
         res.json(result);
@@ -131,7 +140,8 @@ export function createCatalogFeaturesRouter(kind: FeatureKind) {
     validate(updateCatalogItemSchema),
     asyncHandler(async (req, res) => {
       const data = req.body as UpdateCatalogItemInput;
-      const name = decodeURIComponent(String(req.params.name));
+      // Express ya decodifica los params (un '%' suelto rompía con 500 al decodificar de nuevo).
+      const name = String(req.params.name);
       const businessId = req.auth!.businessId;
       await ensureDefaultFeatures(businessId, kind, defaults);
 
