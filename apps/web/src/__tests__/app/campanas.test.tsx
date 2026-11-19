@@ -293,8 +293,65 @@ describe('campanas: cancelar y actualización por socket', () => {
 
     expect(container.textContent).not.toMatch(/Actualizá la página/);
     expect(refreshSilently).not.toHaveBeenCalled();
-    socketHandlers['campaign:sent']();
+    act(() => socketHandlers['campaign:sent']());
     expect(refreshSilently).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('campanas: evento campaign:progress', () => {
+  const prog = (over: Record<string, unknown> = {}) => ({
+    campaignId: 'c1',
+    progress: { enviados: 25, fallidos: 0, procesados: 25, total: 100, ...over },
+  });
+
+  it('sin evento de avance no muestra la barra', () => {
+    campaigns = [make({ status: 'sending' })];
+    render(<CampanasPage />);
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('muestra la barra con el porcentaje y los conteos de una campaña enviándose', () => {
+    campaigns = [make({ status: 'sending' })];
+    render(<CampanasPage />);
+    act(() => socketHandlers['campaign:progress'](prog()));
+
+    const bar = screen.getByRole('progressbar');
+    expect(bar).toHaveAttribute('aria-valuenow', '25');
+    expect(screen.getByText(/25 de 100 procesados · 25 enviados/)).toBeInTheDocument();
+  });
+
+  it('informa los mensajes con error cuando los hay', () => {
+    campaigns = [make({ status: 'sending' })];
+    render(<CampanasPage />);
+    act(() => socketHandlers['campaign:progress'](prog({ fallidos: 3, procesados: 28 })));
+    expect(screen.getByText(/3 con error/)).toBeInTheDocument();
+  });
+
+  it('ignora eventos mal formados sin romper', () => {
+    campaigns = [make({ status: 'sending' })];
+    render(<CampanasPage />);
+    expect(() => {
+      act(() => socketHandlers['campaign:progress'](undefined));
+      act(() => socketHandlers['campaign:progress']({ campaignId: 'c1' }));
+      act(() => socketHandlers['campaign:progress']({ progress: { total: 1, procesados: 1 } }));
+    }).not.toThrow();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('no muestra la barra si la campaña ya no está enviándose', () => {
+    campaigns = [make({ status: 'sent', sentCount: 100 })];
+    render(<CampanasPage />);
+    act(() => socketHandlers['campaign:progress'](prog()));
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('al llegar campaign:sent se descarta el avance', () => {
+    campaigns = [make({ status: 'sending' })];
+    render(<CampanasPage />);
+    act(() => socketHandlers['campaign:progress'](prog()));
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    act(() => socketHandlers['campaign:sent']({ campaign: { id: 'c1' } }));
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 });
 

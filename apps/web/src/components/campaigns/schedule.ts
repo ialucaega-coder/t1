@@ -67,6 +67,30 @@ export interface CampaignFailedEvent {
   reason?: CampaignFailReason | string;
 }
 
+/** Payload de 'campaign:sent' (solo usamos el id para limpiar el avance en vivo). */
+export interface CampaignSentEvent {
+  campaign?: { id?: string };
+}
+
+/** Avance de un envío en curso (evento 'campaign:progress'). */
+export interface CampaignProgress {
+  enviados: number;
+  fallidos: number;
+  procesados: number;
+  total: number;
+}
+
+export interface CampaignProgressEvent {
+  campaignId?: string;
+  progress?: CampaignProgress;
+}
+
+/** Porcentaje entero 0-100 (acotado; con total 0 no hay avance que mostrar). */
+export function campaignProgressPercent(p: Pick<CampaignProgress, 'procesados' | 'total'>): number {
+  if (!p.total || p.total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((p.procesados / p.total) * 100)));
+}
+
 /** Texto del toast de error según el motivo informado por el server. */
 export function campaignFailedMessage(name: string, reason?: string, envio?: { fallidos?: number }): string {
   if (reason === 'expired') {

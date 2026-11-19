@@ -26,7 +26,11 @@ import { useToast } from '@/components/common/Toast';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import {
   campaignFailedMessage,
+  campaignProgressPercent,
   type CampaignFailedEvent,
+  type CampaignProgress,
+  type CampaignProgressEvent,
+  type CampaignSentEvent,
   describeCampaignStatus,
   formatArgentina,
   isoToArgentinaInput,
@@ -56,14 +60,33 @@ export default function CampanasPage() {
   // El server emite 'campaign:sent' al sala del negocio cuando una campaña termina de enviarse
   // (con colas el envío sigue en segundo plano). Refrescamos la lista, sin polling.
   useSocket(business?.id ?? null);
-  useSocketEvent('campaign:sent', () => {
+  useSocketEvent<CampaignSentEvent>('campaign:sent', (event) => {
+    clearProgress(event?.campaign?.id);
     refreshSilently();
+  });
+  // 'campaign:progress' llega cada 25 destinatarios o 60 s mientras se envía: barra de avance
+  // en vivo. Es solo informativa (el estado confiable es `status`); se descarta al terminar.
+  const [progress, setProgress] = useState<Record<string, CampaignProgress>>({});
+  function clearProgress(id?: string) {
+    if (!id) return;
+    setProgress((prev) => {
+      if (!(id in prev)) return prev;
+      const { [id]: _omit, ...rest } = prev;
+      return rest;
+    });
+  }
+  useSocketEvent<CampaignProgressEvent>('campaign:progress', (event) => {
+    const id = event?.campaignId;
+    const p = event?.progress;
+    if (!id || !p || typeof p.total !== 'number' || typeof p.procesados !== 'number') return;
+    setProgress((prev) => ({ ...prev, [id]: p }));
   });
   // 'campaign:failed' trae el motivo: lo guardamos para explicar la tarjeta mientras no se
   // recargue la página (después se infiere, ver describeCampaignStatus).
   const [failReasons, setFailReasons] = useState<Record<string, string>>({});
   useSocketEvent<CampaignFailedEvent>('campaign:failed', (event) => {
     const id = event?.campaign?.id;
+    clearProgress(id);
     if (id && event?.reason) setFailReasons((prev) => ({ ...prev, [id]: String(event.reason) }));
     toast({
       type: 'error',
@@ -328,6 +351,28 @@ export default function CampanasPage() {
                     Aperturas y clicks: no hay tracking (el backend guarda openRate/clickRate en 0),
                     así que no se muestran para no exhibir un "0 %" falso. Decisión del dueño pendiente.
                   */}
+                  {c.status === 'sending' && progress[c.id] && (
+                    <div className="mt-3" data-testid={`progreso-${c.id}`}>
+                      <div
+                        role="progressbar"
+                        aria-label={`Avance del envío de ${c.name}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={campaignProgressPercent(progress[c.id])}
+                        className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-slate-700"
+                      >
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all"
+                          style={{ width: `${campaignProgressPercent(progress[c.id])}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {progress[c.id].procesados} de {progress[c.id].total} procesados ·{' '}
+                        {progress[c.id].enviados} enviados
+                        {progress[c.id].fallidos > 0 ? ` · ${progress[c.id].fallidos} con error` : ''}
+                      </p>
+                    </div>
+                  )}
                   {c.status === 'sent' && (
                     <div className="flex items-center gap-4 mt-2 text-xs">
                       <span className="flex items-center gap-1 text-emerald-400">
