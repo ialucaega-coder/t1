@@ -23,7 +23,7 @@ import { defineQueue, enqueue } from '../../lib/queue';
 import { sharedGet, sharedSet, sharedDel } from '../../lib/sharedState';
 import * as whatsapp from '../whatsapp/client';
 import { sendGenericNotification } from '../email';
-import { emitCampaignFailed } from './events';
+import { emitCampaignFailed, emitCampaignProgress } from './events';
 
 export interface SendCampaignResult {
   envio: { enviados: number; fallidos: number; canalSoportado: boolean; enCola?: boolean };
@@ -370,6 +370,12 @@ async function deliverCampaign(
             data: { sentCount: cursor.enviados },
           });
           if (beat.count === 0 || !(await isCurrentRun(businessId, id, runId))) throw new StaleCampaignRun();
+          emitCampaignProgress(businessId, id, {
+            enviados: cursor.enviados,
+            fallidos: cursor.fallidos,
+            procesados: cursor.processed,
+            total: clientIds.length,
+          });
         }
       }
     }

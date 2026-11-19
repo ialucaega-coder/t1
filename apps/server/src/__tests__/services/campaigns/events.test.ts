@@ -10,9 +10,34 @@ let io: { to: typeof to } | undefined;
 vi.mock('../../../lib/socket', () => ({ getIO: () => io }));
 
 import { prisma } from '../../../lib/prisma';
-import { emitCampaignFailed } from '../../../services/campaigns/events';
+import { emitCampaignFailed, emitCampaignProgress } from '../../../services/campaigns/events';
 
 const m = <T extends (...a: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+describe('emitCampaignProgress', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    io = { to };
+  });
+
+  it('emite campaign:progress a la sala del negocio sin leer la DB', () => {
+    const progress = { enviados: 25, fallidos: 2, procesados: 27, total: 100 };
+    emitCampaignProgress('b1', 'c1', progress);
+    expect(to).toHaveBeenCalledWith('business:b1');
+    expect(emit).toHaveBeenCalledWith('campaign:progress', { campaignId: 'c1', progress });
+    expect(prisma.campaign.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('nunca lanza (sin socket o con el socket roto)', () => {
+    io = undefined;
+    expect(() => emitCampaignProgress('b1', 'c1', { enviados: 0, fallidos: 0, procesados: 0, total: 0 })).not.toThrow();
+    emit.mockImplementationOnce(() => {
+      throw new Error('socket');
+    });
+    io = { to };
+    expect(() => emitCampaignProgress('b1', 'c1', { enviados: 0, fallidos: 0, procesados: 0, total: 0 })).not.toThrow();
+  });
+});
 
 describe('emitCampaignFailed', () => {
   beforeEach(() => {

@@ -20,7 +20,11 @@ vi.mock('../../../services/whatsapp/client', () => ({
 }));
 vi.mock('../../../services/email', () => ({ sendGenericNotification: vi.fn(async () => true) }));
 const emitFailed = vi.fn(async () => undefined);
-vi.mock('../../../services/campaigns/events', () => ({ emitCampaignFailed: (...a: unknown[]) => (emitFailed as (...x: unknown[]) => unknown)(...a) }));
+const emitProgress = vi.fn();
+vi.mock('../../../services/campaigns/events', () => ({
+  emitCampaignFailed: (...a: unknown[]) => (emitFailed as (...x: unknown[]) => unknown)(...a),
+  emitCampaignProgress: (...a: unknown[]) => emitProgress(...a),
+}));
 
 import { prisma } from '../../../lib/prisma';
 import * as whatsapp from '../../../services/whatsapp/client';
@@ -198,6 +202,37 @@ describe('services/campaigns/send: envío obsoleto, latido y cursor (M2)', () =>
       where: { id: 'c1', businessId: BIZ, status: 'sending' },
       data: { sentCount: 1 },
     });
+  });
+
+  it('el latido emite campaign:progress con enviados, fallidos, procesados y total', async () => {
+    vi.useFakeTimers();
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    mock(whatsapp.sendMessage).mockImplementation(async () => {
+      vi.advanceTimersByTime(61_000);
+      return 'SID';
+    });
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(emitProgress).toHaveBeenCalledWith(BIZ, 'c1', expect.objectContaining({ enviados: 1, procesados: 1 }));
+    const p = emitProgress.mock.calls[0][2] as { total: number; procesados: number };
+    expect(p.total).toBeGreaterThanOrEqual(p.procesados);
+  });
+
+  it('si el latido ve que la campaña ya no está sending, no emite progreso y corta', async () => {
+    vi.useFakeTimers();
+    mock(prisma.user.findMany).mockResolvedValue(users);
+    mock(prisma.campaign.updateMany).mockResolvedValueOnce({ count: 1 }).mockResolvedValue({ count: 0 });
+    mock(whatsapp.sendMessage).mockImplementation(async () => {
+      vi.advanceTimersByTime(61_000);
+      return 'SID';
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await sendCampaign(BIZ, 'c1');
+
+    expect(emitProgress).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('si el latido ve que la campaña ya no está sending, corta el envío (no sigue mandando)', async () => {

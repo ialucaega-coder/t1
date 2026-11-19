@@ -112,7 +112,8 @@ Sin cambios de schema: todo se apoya en `sharedState` (Redis, con fallback en me
 - **Expiración:** una campaña `scheduled` con más de 6 h de atraso pasa a `failed` en vez de enviarse; el `UPDATE` incluye `scheduledAt` para no pisar una reprogramación hecha entre el listado y el pase.
 - **Evento `campaign:failed`:** cada pase a `failed` emite `campaign:failed` a la sala `business:<id>` (`reason`: `retries_exhausted`, `expired`, `stalled` o `error`). Solo emite quien ganó el `UPDATE`, así que varias instancias no duplican el evento. Es best-effort y nunca lanza.
 - **Edición y borrado:** `PATCH` no puede fijar `sent` ni `sending`, ni programar sin fecha; `DELETE` de una campaña `sending` responde 409.
-- **Pendiente:** recuperar automáticamente una campaña `failed` a mitad de envío (hoy el dueño decide reenviarla), `campaign:progress` por socket y un `failureReason` persistido.
+- **Evento `campaign:progress`:** se emite junto con el latido (cada 25 destinatarios o 60 s) con `{ campaignId, progress: { enviados, fallidos, procesados, total } }`. No lee la DB, solo emite si el latido confirmó que el envío sigue vigente, y nunca lanza.
+- **Pendiente:** recuperar automáticamente una campaña `failed` a mitad de envío (hoy el dueño decide reenviarla) y un `failureReason` persistido (requiere cambio de schema).
 
 **Conversaciones (`services/chatbot.ts`, `services/channels/inboundRetry.ts`)**
 - **Una conversación por contacto:** el alta es "buscar y, si no hay, crear". Como el schema no tiene `UNIQUE`, se serializa con un advisory lock transaccional por (negocio, canal, contacto) (`lockSingleton`, clave `conv-create:<canal>:<contacto>`) y se vuelve a buscar adentro con el lock tomado. Dos mensajes simultáneos del mismo contacto (dos webhooks, un reintento) comparten conversación. La búsqueda exige el mismo `realChannel`, así que voz, chat web y Messenger, que comparten el enum `WEBCHAT`, no se mezclan.
