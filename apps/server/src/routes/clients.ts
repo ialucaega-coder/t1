@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireRole } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
-import { listClientsQuerySchema, updateClientSchema } from '../validators/clients';
+import { listClientsQuerySchema, updateClientSchema, createClientSchema } from '../validators/clients';
 import { toSkipTake } from '../validators/common';
 import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
 import type { Prisma } from '@prisma/client';
@@ -29,6 +29,7 @@ import {
   LIFECYCLE_STAGES,
 } from '../services/clients/lifecycle';
 import { dispatchEvent } from '../services/workflows';
+import { revokeUserSessions } from '../services/auth/revocation';
 
 const router = Router();
 
@@ -130,6 +131,9 @@ router.get(
   })
 );
 
+/** Teléfono internacional válido (E.164 sin separadores): no es una fórmula. */
+const PHONE_RE = /^\+\d{6,15}$/;
+
 /** Tamaño de lote del export en streaming (acota memoria, independiente del total). */
 const CSV_EXPORT_BATCH = 500;
 
@@ -140,9 +144,12 @@ const CSV_EXPORT_BATCH = 500;
  *   `= + - @` o un control de tab/CR, le antepone una comilla simple para que
  *   Excel/Sheets no lo ejecute como fórmula.
  */
-function csvCell(value: string | number | null | undefined): string {
+function csvCell(value: string | number | null | undefined, opts: { phone?: boolean } = {}): string {
   const raw = value == null ? '' : String(value);
-  const guarded = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  // En la columna de teléfono, un número internacional válido (+54911...) NO es una
+  // fórmula: se deja tal cual. Todo lo demás (incluido "+cmd|...") sigue neutralizado.
+  const isPhone = opts.phone === true && PHONE_RE.test(raw);
+  const guarded = !isPhone && /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return `"${guarded.replace(/"/g, '""')}"`;
 }
 
@@ -193,7 +200,7 @@ router.get(
           return [
             csvCell(c.name),
             csvCell(c.email),
-            csvCell(c.phone || ''),
+            csvCell(c.phone || '', { phone: true }),
             c._count.bookingsAsClient,
             c._count.orders,
             lastVisit,
@@ -393,12 +400,6 @@ router.get(
   })
 );
 
-const createClientSchema = z.object({
-  name: z.string().min(2),
-  email: z.string().email(),
-  phone: z.string().optional(),
-});
-
 router.post(
   '/',
   requireAuth,
@@ -420,7 +421,8 @@ router.post(
 
     const existing = await prisma.user.findFirst({
       where: {
-        email: data.email,
+        // Insensible a mayúsculas: hay emails guardados antes de normalizar a minúsculas.
+        email: { equals: data.email, mode: 'insensitive' },
         businessId,
         deletedAt: null,
       },
@@ -436,17 +438,31 @@ router.post(
     // clientes se crean para el portal/reservas y no fijan su propia clave acá.
     const tempPassword = await hashPassword(crypto.randomBytes(32).toString('hex'));
 
-    const client = await prisma.user.create({
-      data: {
-        name: data.name,
-        email: data.email,
-        phone: data.phone || null,
-        passwordHash: tempPassword,
-        role: 'CLIENT',
-        businessId: req.auth!.businessId,
-      },
-      select: clientSelect,
-    });
+    let client;
+    try {
+      client = await prisma.user.create({
+        data: {
+          name: data.name,
+          email: data.email,
+          phone: data.phone || null,
+          passwordHash: tempPassword,
+          role: 'CLIENT',
+          businessId: req.auth!.businessId,
+        },
+        select: clientSelect,
+      });
+    } catch (err) {
+      // User.email es único en TODA la plataforma: un choque con un usuario de OTRO
+      // negocio llega acá como P2002. Respondemos un 409 propio y genérico, sin decir
+      // que el email existe en otro lado (evita usar el alta como oráculo de existencia).
+      if ((err as { code?: string }).code === 'P2002') {
+        return res.status(409).json({
+          error: 'No se pudo crear el cliente con ese email. Probá con otro.',
+          code: 'EMAIL_UNAVAILABLE',
+        });
+      }
+      throw err;
+    }
 
     // Dispara las automatizaciones de "lead nuevo". Fire-and-forget: el modo lo
     // resuelve dispatchEvent según el ajuste del negocio y nunca lanza.
@@ -491,6 +507,9 @@ router.patch(
 router.delete(
   '/:id',
   requireAuth,
+  // Dar de baja un cliente es destructivo: solo ADMIN (un PROFESSIONAL con la capacidad
+  // "clientes" puede ver y editar, pero no borrar). El export CSV sigue abierto al staff.
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const client = await prisma.user.findFirst({
       where: {
@@ -505,12 +524,27 @@ router.delete(
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
 
+    // Soft delete que además LIBERA el email: User.email es único global, así que
+    // dejarlo bloquearía para siempre volver a dar de alta ese contacto (con un 409
+    // opaco). Se anonimiza a deleted+<id>@invalid.local (el nombre y el teléfono quedan
+    // para el historial de reservas y pedidos) y se desactiva la cuenta.
+    const clientId = req.params.id as string;
     await prisma.user.update({
-      where: { id: req.params.id as string },
-      data: { deletedAt: new Date() },
+      where: { id: clientId },
+      data: { deletedAt: new Date(), email: `deleted+${clientId}@invalid.local`, isActive: false },
     });
 
-    res.json({ success: true });
+    // El JWT del cliente seguiría valiendo hasta 14 días: se corta su sesión. Si la
+    // revocación falla la baja ya está hecha: se avisa en la respuesta, sin un 500 engañoso.
+    let revocationFailed = false;
+    try {
+      await revokeUserSessions(req.auth!.businessId, clientId);
+    } catch (err) {
+      revocationFailed = true;
+      console.error(`[clients] no se pudieron revocar las sesiones del cliente ${clientId}:`, (err as Error).message);
+    }
+
+    res.json(revocationFailed ? { success: true, revocationFailed: true } : { success: true });
   })
 );
 

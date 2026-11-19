@@ -24,7 +24,8 @@ vi.mock('../../lib/prisma', () => ({
 
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    const role = (req.header('x-test-role') as 'ADMIN' | 'PROFESSIONAL' | undefined) ?? 'ADMIN';
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role };
     next();
   },
   requireRole:
@@ -69,11 +70,13 @@ vi.mock('../../services/clients/lifecycle', () => ({
 }));
 
 vi.mock('../../services/billing/limits', () => ({ getContactCapacity: vi.fn() }));
+vi.mock('../../services/auth/revocation', () => ({ revokeUserSessions: vi.fn(async () => undefined) }));
 
 import { prisma } from '../../lib/prisma';
 import { clientsRouter } from '../../routes/clients';
 import { loadClientCrm, saveTags, setClientTags, setClientNote } from '../../services/clients/crm';
 import { getContactCapacity } from '../../services/billing/limits';
+import { revokeUserSessions } from '../../services/auth/revocation';
 import { errorHandler } from '../../middleware/errorHandler';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -180,6 +183,22 @@ describe('routes/clients', () => {
 
       expect(res.status).toBe(200);
       expect(res.text).toContain(`"'=HYPERLINK(""http://x"")"`);
+    });
+
+    it('en la columna de teléfono deja pasar +54911... y neutraliza el resto de fórmulas', async () => {
+      mock(prisma.user.findMany).mockResolvedValue([
+        clientRow({ id: 'a', phone: '+5491112345678' }),
+        clientRow({ id: 'b', phone: '+cmd|calc' }),
+        clientRow({ id: 'c', phone: '=1+1' }),
+        clientRow({ id: 'd', name: '+5491112345678' }), // fuera de la columna de teléfono sigue neutralizado
+      ]);
+
+      const res = await request(app).get('/api/clients/export/csv');
+
+      expect(res.text).toContain(',"+5491112345678",');
+      expect(res.text).toContain(`"'+cmd|calc"`);
+      expect(res.text).toContain(`"'=1+1"`);
+      expect(res.text).toContain(`"'+5491112345678","ana@mail.com"`);
     });
 
     it('pagina por cursor cuando hay más registros que el lote', async () => {
@@ -326,6 +345,112 @@ describe('routes/clients', () => {
 
       expect(res.status).toBe(404);
       expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('revoca las sesiones del cliente dado de baja (su JWT no sigue valiendo 14 días)', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+      mock(prisma.user.update).mockResolvedValue({ id: 'c1' });
+
+      await request(app).delete('/api/clients/c1');
+
+      expect(revokeUserSessions).toHaveBeenCalledWith('biz_1', 'c1');
+    });
+
+    it('si falla la revocación igual responde éxito pero avisa revocationFailed', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+      mock(prisma.user.update).mockResolvedValue({ id: 'c1' });
+      mock(revokeUserSessions).mockRejectedValueOnce(new Error('db caída'));
+
+      const res = await request(app).delete('/api/clients/c1');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, revocationFailed: true });
+    });
+
+    it('libera el email en la baja (anonimiza) y desactiva la cuenta', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+      mock(prisma.user.update).mockResolvedValue({ id: 'c1' });
+
+      await request(app).delete('/api/clients/c1');
+
+      expect(mock(prisma.user.update).mock.calls[0][0].data).toMatchObject({
+        email: 'deleted+c1@invalid.local',
+        isActive: false,
+        deletedAt: expect.any(Date),
+      });
+    });
+
+    it('un PROFESSIONAL no puede dar de baja clientes (403) y no se toca nada', async () => {
+      const res = await request(app).delete('/api/clients/c1').set('x-test-role', 'PROFESSIONAL');
+
+      expect(res.status).toBe(403);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(revokeUserSessions).not.toHaveBeenCalled();
+    });
+
+    it('el export CSV sigue abierto al staff (PROFESSIONAL)', async () => {
+      mock(prisma.user.findMany).mockResolvedValue([]);
+      const res = await request(app).get('/api/clients/export/csv').set('x-test-role', 'PROFESSIONAL');
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('POST /api/clients — email y topes', () => {
+    beforeEach(() => {
+      mock(prisma.user.findFirst).mockResolvedValue(null);
+      mock(prisma.user.create).mockResolvedValue({ id: 'c1' });
+    });
+
+    it('normaliza el email a minúsculas (el login también compara en minúsculas)', async () => {
+      await request(app).post('/api/clients').send({ name: 'Ana Perez', email: '  Ana@Example.COM ' });
+      expect(mock(prisma.user.create).mock.calls[0][0].data.email).toBe('ana@example.com');
+    });
+
+    it('si el email ya lo usa un usuario de OTRO negocio (P2002) responde un 409 genérico sin nombrar el campo', async () => {
+      mock(prisma.user.create).mockRejectedValue(Object.assign(new Error('Unique'), { code: 'P2002', meta: { target: ['email'] } }));
+
+      const res = await request(app).post('/api/clients').send({ name: 'Ana Perez', email: 'otra@tenant.com' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('EMAIL_UNAVAILABLE');
+      expect(JSON.stringify(res.body)).not.toMatch(/email.*existe|otro negocio|tenant/i);
+      expect(res.body.error).not.toContain('Ya existe un registro');
+    });
+
+    it('rechaza (400) nombre, email o teléfono por encima del tope', async () => {
+      const long = (n: number) => 'a'.repeat(n);
+      const r1 = await request(app).post('/api/clients').send({ name: long(101), email: 'a@b.com' });
+      const r2 = await request(app).post('/api/clients').send({ name: 'Ana', email: `${long(250)}@b.com` });
+      const r3 = await request(app).post('/api/clients').send({ name: 'Ana', email: 'a@b.com', phone: long(31) });
+      expect([r1.status, r2.status, r3.status]).toEqual([400, 400, 400]);
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /api/clients/:id — validación', () => {
+    beforeEach(() => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+      mock(prisma.user.update).mockResolvedValue({ id: 'c1' });
+    });
+
+    it('el avatar solo acepta https', async () => {
+      const bad = await request(app).patch('/api/clients/c1').send({ avatar: 'http://x.com/a.png' });
+      const js = await request(app).patch('/api/clients/c1').send({ avatar: 'javascript:alert(1)' });
+      const ok = await request(app).patch('/api/clients/c1').send({ avatar: 'https://x.com/a.png' });
+      expect([bad.status, js.status, ok.status]).toEqual([400, 400, 200]);
+    });
+
+    it('un teléfono vacío o null lo borra (se guarda null)', async () => {
+      await request(app).patch('/api/clients/c1').send({ phone: '' });
+      expect(mock(prisma.user.update).mock.calls[0][0].data.phone).toBeNull();
+      await request(app).patch('/api/clients/c1').send({ phone: null });
+      expect(mock(prisma.user.update).mock.calls[1][0].data.phone).toBeNull();
+    });
+
+    it('rechaza nombre > 100 y teléfono > 30 caracteres', async () => {
+      const r1 = await request(app).patch('/api/clients/c1').send({ name: 'a'.repeat(101) });
+      const r2 = await request(app).patch('/api/clients/c1').send({ phone: '1'.repeat(31) });
+      expect([r1.status, r2.status]).toEqual([400, 400]);
     });
   });
 

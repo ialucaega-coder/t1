@@ -1,4 +1,4 @@
-import { httpClient } from './http-client';
+import { httpClient, API_URL } from './http-client';
 import type { Client, ClientDetail, ClientTag, LifecycleStage } from '@/types';
 
 export function getClients(params?: { search?: string; tagId?: string; page?: number; pageSize?: number }) {
@@ -69,7 +69,8 @@ export function createClient(data: { name: string; email: string; phone?: string
   return httpClient.post<Client>('/clients', data);
 }
 
-export function updateClient(id: string, data: { name?: string; phone?: string }) {
+/** `phone: null` (o '') borra el teléfono; omitirlo lo deja como está. */
+export function updateClient(id: string, data: { name?: string; phone?: string | null }) {
   return httpClient.patch<Client>(`/clients/${id}`, data);
 }
 
@@ -77,19 +78,46 @@ export function deleteClient(id: string) {
   return httpClient.delete<{ success: boolean }>(`/clients/${id}`);
 }
 
-export function exportCsv() {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
-  return fetch(`${API_URL}/clients/export/csv`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  }).then(async (res) => {
-    if (!res.ok) throw new Error('Error al exportar');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'clientes.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  });
+/** Espera antes de liberar el objeto URL (revocarlo en el mismo tick puede cortar la descarga). */
+const REVOKE_DELAY_MS = 1000;
+
+/**
+ * Descarga el CSV de clientes. Usa el token del cliente http y trata los errores
+ * igual que él: 401 = sesión vencida (se limpia el token y se va al login), 403 = sin
+ * permiso, y el resto muestra el mensaje real del server. Lanza un Error con un texto
+ * listo para mostrar al usuario.
+ */
+export async function exportCsv(): Promise<void> {
+  const token = httpClient.getToken();
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/clients/export/csv`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    throw new Error('No se pudo conectar con el servidor. Revisá tu conexión e intentá de nuevo.');
+  }
+
+  if (res.status === 401) {
+    httpClient.setToken(null);
+    if (typeof window !== 'undefined') window.location.href = '/login';
+    throw new Error('Tu sesión venció. Volvé a iniciar sesión.');
+  }
+  if (res.status === 403) {
+    throw new Error('No tenés permiso para exportar los clientes.');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error((body && typeof body.error === 'string' && body.error) || 'Error al exportar los clientes');
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'clientes.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
 }

@@ -14,6 +14,7 @@ import { ClientFormModal } from '@/components/clients/ClientFormModal';
 import { clientErrorMessage } from '@/components/clients/client-errors';
 import { TagChip, TagManager, ClientTagEditor } from '@/components/clients/ClientTags';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { useToast } from '@/components/common/Toast';
 import { usePageCounter, fmtCounter } from '@/stores/page-counter';
@@ -57,6 +58,7 @@ export default function ClientesPage() {
   const [showTagManager, setShowTagManager] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const { toast } = useToast();
 
@@ -111,7 +113,8 @@ export default function ClientesPage() {
     if (!detail) return;
     // El backend solo acepta name/phone en update (email es identidad del cliente).
     try {
-      await clientsApi.updateClient(detail.id, { name: data.name, phone: data.phone || undefined });
+      // Teléfono vacío = null: borra el teléfono (antes `|| undefined` lo dejaba como estaba).
+      await clientsApi.updateClient(detail.id, { name: data.name, phone: data.phone.trim() || null });
       // La nota se guarda aparte (CRM), solo si cambió.
       if (data.notes.trim() !== (detail.note ?? '').trim()) {
         await clientsApi.setClientNote(detail.id, data.notes.trim());
@@ -131,10 +134,15 @@ export default function ClientesPage() {
       if (selectedId === id) setSelectedId(null);
       refetch();
       toast({ type: 'success', message: 'Cliente eliminado correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al eliminar cliente' });
+    } catch (err) {
+      const msg = clientErrorMessage(err, 'Error al eliminar cliente');
+      toast({
+        type: 'error',
+        message: msg === 'Insufficient permissions' ? 'Solo un administrador puede eliminar clientes' : msg,
+      });
     } finally {
       setDeleting(null);
+      setPendingDelete(null);
     }
   }
 
@@ -168,7 +176,11 @@ export default function ClientesPage() {
             <TagIcon className="h-3.5 w-3.5" /> Etiquetas
           </button>
           <button
-            onClick={() => clientsApi.exportCsv().catch(console.error)}
+            onClick={() =>
+              clientsApi.exportCsv().catch((err) =>
+                toast({ type: 'error', message: clientErrorMessage(err, 'Error al exportar los clientes') })
+              )
+            }
             className="btn-secondary text-xs"
             title="Exportar CSV"
           >
@@ -365,7 +377,7 @@ export default function ClientesPage() {
                       <Edit3 className="h-4 w-4" />
                     </button>
                     <button
-                      onClick={() => handleDelete(detail.id)}
+                      onClick={() => setPendingDelete({ id: detail.id, name: detail.name })}
                       disabled={deleting === detail.id}
                       className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                       title="Eliminar cliente"
@@ -512,6 +524,17 @@ export default function ClientesPage() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        onClose={() => { if (!deleting) setPendingDelete(null); }}
+        onConfirm={() => { if (pendingDelete) handleDelete(pendingDelete.id); }}
+        title="Eliminar cliente"
+        message={`¿Eliminar a ${pendingDelete?.name ?? 'este cliente'}? Deja de aparecer en tu lista y no podrá volver a ingresar con su sesión actual. Sus reservas y órdenes quedan en el historial.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting !== null}
+      />
 
       <ClientFormModal
         isOpen={showCreate}
