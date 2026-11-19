@@ -4,6 +4,7 @@ import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { updateSettingsSchema, UpdateSettingsInput } from '../validators/settings';
+import { assertPhoneNumbersFree, normalizeOptionalPhone } from '../lib/businessPhone';
 
 const router = Router();
 
@@ -51,10 +52,14 @@ router.put(
   validate(updateSettingsSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as UpdateSettingsInput;
+    const businessId = req.auth!.businessId;
+    // El teléfono se guarda en formato canónico (+dígitos): la resolución de
+    // llamadas/mensajes entrantes compara por coincidencia exacta.
+    const phone = normalizeOptionalPhone(data.phone);
     const update = {
       ...(data.businessName !== undefined ? { name: data.businessName } : {}),
       ...(data.slug !== undefined ? { slug: data.slug } : {}),
-      ...(data.phone !== undefined ? { phone: data.phone || null } : {}),
+      ...(phone !== undefined ? { phone } : {}),
       ...(data.email !== undefined ? { email: data.email || null } : {}),
       ...(data.address !== undefined ? { address: data.address || null } : {}),
       ...(data.timezone !== undefined ? { timezone: data.timezone } : {}),
@@ -64,9 +69,11 @@ router.put(
     };
 
     try {
-      const business = await prisma.business.update({
-        where: { id: req.auth!.businessId },
-        data: update,
+      // Mismo guard anti-hijack que White Label: el número no puede pertenecer a
+      // dos negocios (si no, las llamadas/mensajes entrantes caerían en el otro).
+      const business = await prisma.$transaction(async (tx) => {
+        if (typeof phone === 'string') await assertPhoneNumbersFree(tx, businessId, [phone]);
+        return tx.business.update({ where: { id: businessId }, data: update });
       });
       res.json(mapBusinessSettings(business));
     } catch (error: unknown) {

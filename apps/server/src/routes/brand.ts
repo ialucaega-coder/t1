@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { loadBrandVoice, saveBrandVoice } from '../services/brand/config';
@@ -11,6 +11,8 @@ const router = Router();
 router.get(
   '/',
   requireAuth,
+  // Las reglas y `infoNegocio` son instrucciones internas del bot: un CLIENT no las lee.
+  requireStaff,
   asyncHandler(async (req, res) => {
     const voice = await loadBrandVoice(req.auth!.businessId);
     res.json(voice);

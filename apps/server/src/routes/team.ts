@@ -454,6 +454,7 @@ router.delete(
 router.get(
   '/permissions',
   requireAuth,
+  requireStaff,
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
     const [overrides, planTier] = await Promise.all([

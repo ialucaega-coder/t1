@@ -59,6 +59,21 @@ describe('routes/brand', () => {
       const res = await request(app).get('/api/brand');
       expect(res.status).toBe(401);
     });
+
+    it('un CLIENT no puede leer las reglas internas del bot (403) y no se cargan', async () => {
+      const res = await request(app).get('/api/brand').set('Authorization', `Bearer ${signToken('CLIENT')}`);
+
+      expect(res.status).toBe(403);
+      expect(loadBrandVoice).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL (staff) sí puede leerlas', async () => {
+      (loadBrandVoice as ReturnType<typeof vi.fn>).mockResolvedValue({ tono: 'x' });
+
+      const res = await request(app).get('/api/brand').set('Authorization', `Bearer ${proToken}`);
+
+      expect(res.status).toBe(200);
+    });
   });
 
   describe('PUT /api/brand', () => {

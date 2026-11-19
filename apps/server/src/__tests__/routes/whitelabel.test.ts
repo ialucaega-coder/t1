@@ -15,6 +15,7 @@ vi.mock('../../lib/prisma', () => ({
   prisma: {
     $transaction: vi.fn(),
     $executeRaw: vi.fn(),
+    $queryRaw: vi.fn(),
     business: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
@@ -35,7 +36,14 @@ vi.mock('../../services/whitelabel/config', () => ({
 
 vi.mock('../../middleware/auth', () => ({
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role: (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN' };
+    next();
+  },
+  requireStaff: (req: Request, res: Response, next: NextFunction) => {
+    if (req.auth?.role === 'CLIENT') {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
     next();
   },
   requireRole:
@@ -90,7 +98,8 @@ describe('routes/whitelabel', () => {
     // de número); el mock ejecuta el callback con el prisma mockeado como tx.
     mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
     mock(prisma.$executeRaw).mockResolvedValue(0);
-    mock(prisma.business.findFirst).mockResolvedValue(null); // por defecto, número libre
+    mock(prisma.business.findFirst).mockResolvedValue(null); // por defecto, dominio libre
+    mock(prisma.$queryRaw).mockResolvedValue([]); // por defecto, número libre
   });
 
   describe('GET /api/whitelabel', () => {
@@ -157,20 +166,125 @@ describe('routes/whitelabel', () => {
     });
 
     it('rechaza (409) un whatsappNumber ya usado por otro negocio', async () => {
-      mock(prisma.business.findFirst).mockResolvedValue({ id: 'otro_biz' }); // número tomado
+      mock(prisma.$queryRaw).mockResolvedValue([{ id: 'otro_biz' }]); // número tomado
       const res = await request(app).patch('/api/whitelabel').send({ name: 'X', whatsappNumber: '+5491122223333' });
       expect(res.status).toBe(409);
       expect(prisma.business.update).not.toHaveBeenCalled();
     });
 
-    it('permite guardar un número libre (no tomado por otro negocio)', async () => {
-      mock(prisma.business.findFirst).mockResolvedValue(null);
+    it('rechaza (409) un phone ya usado por otro negocio', async () => {
+      mock(prisma.$queryRaw).mockResolvedValue([{ id: 'otro_biz' }]);
+      const res = await request(app).patch('/api/whitelabel').send({ phone: '+5491199998888' });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/ya está en uso/);
+      expect(prisma.business.update).not.toHaveBeenCalled();
+    });
+
+    it('permite guardar un número libre y lo guarda en formato canónico (+dígitos)', async () => {
       mock(prisma.business.update).mockResolvedValue({ ...businessRow, whatsappNumber: '+5491122223333' });
-      const res = await request(app).patch('/api/whitelabel').send({ name: 'X', whatsappNumber: '+5491122223333' });
+      const res = await request(app).patch('/api/whitelabel').send({ name: 'X', whatsappNumber: '+54 9 11 2222-3333' });
       expect(res.status).toBe(200);
-      expect(prisma.business.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ id: { not: 'biz_1' } }) })
-      );
+      expect(mock(prisma.business.update).mock.calls[0][0].data.whatsappNumber).toBe('+5491122223333');
+    });
+
+    it('el guard compara por DÍGITOS: "+54 9 11 …" y "+5491…" son el mismo número', async () => {
+      await request(app).patch('/api/whitelabel').send({ phone: '+54 9 (11) 2222-3333', whatsappNumber: '5491144445555' });
+
+      // $queryRaw es un template tag: (strings, businessId, dígitos, dígitos)
+      const [, bizId, digits] = mock(prisma.$queryRaw).mock.calls[0];
+      expect(bizId).toBe('biz_1');
+      expect(digits).toEqual(['5491122223333', '5491144445555']);
+      // Un advisory lock por número (en orden, sin deadlock).
+      expect(mock(prisma.$executeRaw).mock.calls.map((c) => c[1])).toEqual(['biznum:5491122223333', 'biznum:5491144445555']);
+      expect(mock(prisma.business.update).mock.calls[0][0].data).toMatchObject({ phone: '+5491122223333', whatsappNumber: '+5491144445555' });
+    });
+
+    it.each(['hola', '123', '+1234567890123456', '11 2222 33aa'])('rechaza (400) un número inválido ("%s") sin tocar la base', async (bad) => {
+      const res = await request(app).patch('/api/whitelabel').send({ phone: bad });
+      expect(res.status).toBe(400);
+      expect(prisma.business.update).not.toHaveBeenCalled();
+    });
+
+    it('borrar el número (vacío/null) no dispara el guard y guarda null', async () => {
+      mock(prisma.business.update).mockResolvedValue(businessRow);
+      const res = await request(app).patch('/api/whitelabel').send({ phone: '', whatsappNumber: null });
+      expect(res.status).toBe(200);
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+      expect(mock(prisma.business.update).mock.calls[0][0].data).toMatchObject({ phone: null, whatsappNumber: null });
+    });
+
+    describe('validación de URLs, colores y dominio (M2)', () => {
+      it.each([
+        ['javascript:', 'javascript:alert(1)'],
+        ['data:', 'data:image/svg+xml;base64,PHN2Zz4='],
+        ['ftp:', 'ftp://x.com/logo.png'],
+        ['http (no https)', 'http://x.com/logo.png'],
+      ])('el logo rechaza %s', async (_l, logo) => {
+        const res = await request(app).patch('/api/whitelabel').send({ logo });
+        expect(res.status).toBe(400);
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it.each(['instagramUrl', 'facebookUrl', 'websiteUrl'])('%s rechaza javascript:, data: y ftp:', async (field) => {
+        for (const bad of ['javascript:alert(1)', 'data:text/html,hola', 'ftp://x.com']) {
+          const res = await request(app).patch('/api/whitelabel').send({ [field]: bad });
+          expect(res.status).toBe(400);
+        }
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it('acepta URLs https', async () => {
+        mock(prisma.business.update).mockResolvedValue(businessRow);
+        const res = await request(app).patch('/api/whitelabel').send({
+          logo: 'https://cdn.x.com/logo.png', instagramUrl: 'https://instagram.com/ana', websiteUrl: 'https://ana.com',
+        });
+        expect(res.status).toBe(200);
+      });
+
+      it.each(['red', '#fff', '#GGGGGG', 'rgb(0,0,0)', 'url(javascript:x)'])('rechaza el color "%s"', async (color) => {
+        for (const field of ['primaryColor', 'secondaryColor', 'accentColor']) {
+          const res = await request(app).patch('/api/whitelabel').send({ [field]: color });
+          expect(res.status).toBe(400);
+        }
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it('acepta #RRGGBB', async () => {
+        mock(prisma.business.update).mockResolvedValue(businessRow);
+        const res = await request(app).patch('/api/whitelabel').send({ primaryColor: '#A1b2C3' });
+        expect(res.status).toBe(200);
+      });
+
+      it.each(['mi dominio.com', 'http://x.com', 'x.com/ruta', '-x.com', 'x', 'a..com', 'x.com:8080'])('rechaza el dominio "%s"', async (customDomain) => {
+        const res = await request(app).patch('/api/whitelabel').send({ customDomain });
+        expect(res.status).toBe(400);
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it('guarda el dominio en minúsculas', async () => {
+        mock(prisma.business.update).mockResolvedValue(businessRow);
+        const res = await request(app).patch('/api/whitelabel').send({ customDomain: 'Reservas.MiNegocio.COM' });
+        expect(res.status).toBe(200);
+        expect(mock(prisma.business.update).mock.calls[0][0].data.customDomain).toBe('reservas.minegocio.com');
+      });
+
+      it('rechaza (409) un dominio que ya usa otro negocio, bajo lock', async () => {
+        mock(prisma.business.findFirst).mockResolvedValue({ id: 'otro_biz' });
+        const res = await request(app).patch('/api/whitelabel').send({ customDomain: 'reservas.otro.com' });
+        expect(res.status).toBe(409);
+        expect(res.body.error).toMatch(/dominio/);
+        expect(mock(prisma.business.findFirst).mock.calls[0][0].where).toEqual({ id: { not: 'biz_1' }, customDomain: 'reservas.otro.com' });
+        expect(mock(prisma.$executeRaw).mock.calls.map((c) => c[1])).toContain('bizdomain:reservas.otro.com');
+        expect(prisma.business.update).not.toHaveBeenCalled();
+      });
+
+      it('borrar el dominio ("") guarda null sin consultar unicidad', async () => {
+        mock(prisma.business.update).mockResolvedValue(businessRow);
+        const res = await request(app).patch('/api/whitelabel').send({ customDomain: '' });
+        expect(res.status).toBe(200);
+        expect(prisma.business.findFirst).not.toHaveBeenCalled();
+        expect(mock(prisma.business.update).mock.calls[0][0].data.customDomain).toBeNull();
+      });
     });
 
     it('devuelve 400 con un name vacio (validacion Zod)', async () => {
@@ -232,9 +346,37 @@ describe('routes/whitelabel', () => {
       expect(prisma.business.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'biz_1' },
-          include: expect.objectContaining({ services: expect.anything() }),
+          select: expect.objectContaining({ services: expect.anything() }),
         })
       );
+    });
+
+    it('usa un select EXPLÍCITO: no pide (ni devuelve) campos internos como stripeCustomerId', async () => {
+      mock(prisma.business.findUnique).mockResolvedValue({ ...businessRow, services: [] });
+
+      await request(app).get('/api/whitelabel/preview');
+
+      const args = mock(prisma.business.findUnique).mock.calls[0][0];
+      expect(args.include).toBeUndefined();
+      expect(args.select).toBeDefined();
+      expect(args.select.stripeCustomerId).toBeUndefined();
+      expect(Object.keys(args.select)).not.toContain('plan');
+      expect(args.select.services.select).toBeDefined();
+    });
+
+    it('un CLIENT no puede ver la vista previa (403) y no se consulta la base', async () => {
+      const res = await request(app).get('/api/whitelabel/preview').set('x-test-role', 'CLIENT');
+
+      expect(res.status).toBe(403);
+      expect(prisma.business.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL (staff) sí puede', async () => {
+      mock(prisma.business.findUnique).mockResolvedValue({ ...businessRow, services: [] });
+
+      const res = await request(app).get('/api/whitelabel/preview').set('x-test-role', 'PROFESSIONAL');
+
+      expect(res.status).toBe(200);
     });
 
     it('usa "preview" en la URL cuando el negocio no existe', async () => {

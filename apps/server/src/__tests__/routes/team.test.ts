@@ -39,9 +39,15 @@ vi.mock('../../services/team/permissions', () => ({
 }));
 
 vi.mock('../../middleware/auth', () => ({
-  requireStaff: (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireStaff: (req: Request, res: Response, next: NextFunction) => {
+    if (req.auth?.role === 'CLIENT') {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    next();
+  },
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role: (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN' };
     next();
   },
   requireRole:
@@ -91,6 +97,19 @@ describe('routes/team', () => {
   });
 
   describe('GET /api/team/permissions', () => {
+    it('un CLIENT no puede leer el catálogo de permisos del equipo (403) y no se consulta nada', async () => {
+      const res = await request(app).get('/api/team/permissions').set('x-test-role', 'CLIENT');
+
+      expect(res.status).toBe(403);
+      expect(res.body.catalog).toBeUndefined();
+    });
+
+    it('un PROFESSIONAL (staff) sí puede leerlo', async () => {
+      const res = await request(app).get('/api/team/permissions').set('x-test-role', 'PROFESSIONAL');
+
+      expect(res.status).toBe(200);
+    });
+
     it('devuelve catálogo, defaults por rol, overrides y el plan del negocio', async () => {
       const res = await request(app).get('/api/team/permissions');
 
