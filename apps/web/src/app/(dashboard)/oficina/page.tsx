@@ -14,7 +14,7 @@
  */
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Building2, Radio, AlertTriangle, Brain, Plus, Trash2, Save, Users,
   Terminal, Gauge, CheckSquare, Bell, Zap, Share2, Activity as ActivityIcon, Sparkles, Thermometer,
@@ -26,6 +26,8 @@ import { buildOfficeLayout, petForRole, type RoomAgent } from '@/components/mrgo
 import { OfficeFloorLive } from '@/components/mrgo/OfficeFloorLive';
 import { AgentCard } from '@/components/mrgo/AgentCard';
 import { CommandPanel, type CommandPanelAgent } from '@/components/mrgo/CommandPanel';
+import { PendingParams } from '@/components/mrgo/PendingParams';
+import { lastStepIssue } from '@/components/mrgo/pending-summary';
 import { useAgentActivity } from '@/components/mrgo/useAgentActivity';
 import {
   MR_GO_COLORS,
@@ -199,6 +201,10 @@ export default function OficinaPage() {
   const [memFacts, setMemFacts] = useState<string[]>([]);
   const [nuevoHecho, setNuevoHecho] = useState('');
   const [guardandoMem, setGuardandoMem] = useState(false);
+  // Estado de la carga de la memoria. Si falla, el guardado queda bloqueado: el formulario
+  // estaría vacío y "Guardar memoria" pisaría la memoria real del negocio con nada.
+  const [memEstado, setMemEstado] = useState<'cargando' | 'ok' | 'error'>('cargando');
+  const [memError, setMemError] = useState('');
 
   // ─── Studio "Tu Mr Go" ──────────────────────────────────────────────────
   // Qué agente se está personalizando (default: el CEO/principal) + el borrador
@@ -239,23 +245,29 @@ export default function OficinaPage() {
     cargar();
   }, []);
 
-  // Carga la memoria del negocio al montar (silenciosa: si falla, se deja vacía
-  // y el dueño igual puede escribir y guardar).
-  useEffect(() => {
+  // Carga la memoria del negocio al montar (y al reintentar). Si falla se avisa y se
+  // bloquea el guardado (ver `memEstado`).
+  const cargarMemoria = useCallback(() => {
     let activo = true;
+    setMemEstado('cargando');
     getMrGoMemory()
       .then((mem) => {
         if (!activo) return;
         setMemProfile(mem.profile ?? '');
         setMemFacts(Array.isArray(mem.facts) ? mem.facts : []);
+        setMemEstado('ok');
       })
-      .catch(() => {
-        /* memoria opcional: no bloqueamos la oficina si no se pudo leer */
+      .catch((err) => {
+        if (!activo) return;
+        setMemError(err instanceof Error && err.message ? err.message : 'No se pudo cargar la memoria de Mr Go.');
+        setMemEstado('error');
       });
     return () => {
       activo = false;
     };
   }, []);
+
+  useEffect(() => cargarMemoria(), [cargarMemoria]);
 
   // Carga el estado persistente de la oficina (qué agentes están en pausa) al
   // montar, para que las pausas vuelvan igual tras recargar. Silencioso.
@@ -332,7 +344,7 @@ export default function OficinaPage() {
   }
 
   async function guardarMemoria() {
-    if (guardandoMem) return;
+    if (guardandoMem || memEstado !== 'ok') return;
     setGuardandoMem(true);
     try {
       const saved = await saveMrGoMemory({ profile: memProfile, facts: memFacts });
@@ -770,10 +782,17 @@ export default function OficinaPage() {
       } else {
         // Terminó la cadena: el agente vuelve a su escritorio.
         resetActivity(ev.agentKey);
-        toast({
-          type: 'success',
-          message: res.finalMessage ? `Listo: ${res.finalMessage}` : 'Acción confirmada y ejecutada.',
-        });
+        // El último paso es el de la acción recién confirmada: si salió omitido/error (o solo
+        // simulado), el aviso dice el motivo en vez de un "Listo" falso.
+        const issue = lastStepIssue(res.steps, toolNombre);
+        if (issue) {
+          toast({ type: issue.level, message: issue.message });
+        } else {
+          toast({
+            type: 'success',
+            message: res.finalMessage ? `Listo: ${res.finalMessage}` : 'Acción confirmada y ejecutada.',
+          });
+        }
       }
     } catch (err) {
       toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo confirmar la acción.' });
@@ -1163,6 +1182,16 @@ export default function OficinaPage() {
                                 {ev.pending ? toolNombre(ev.pending.tool) : ''}
                               </span>
                             </div>
+                            {ev.pending?.thought && (
+                              <p className="mt-2 text-[11px] italic text-[#6a5f4e]">{ev.pending.thought}</p>
+                            )}
+                            <div className="mt-2 rounded-md border border-amber-200 bg-white/70 p-2">
+                              <PendingParams
+                                params={ev.pending?.params}
+                                labelStyle={{ color: '#a99d87' }}
+                                valueStyle={{ color: '#3a322a' }}
+                              />
+                            </div>
                             <p className="mt-2 text-[11px] text-[#6a5f4e]">Esta acción se ejecuta de verdad. ¿La confirmás?</p>
                             <div className="mt-3 flex gap-2">
                               <button
@@ -1260,6 +1289,21 @@ export default function OficinaPage() {
                     <p className="mb-3 text-xs text-[#a99d87]">
                       Lo que Mr Go sabe de tu negocio. Lo usa para decidir y responder mejor.
                     </p>
+                    {memEstado === 'error' && (
+                      <div role="alert" className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-700">
+                        <p>
+                          No se pudo cargar la memoria ({memError}). Para no pisarla con un formulario vacío, el
+                          guardado está bloqueado hasta que cargue.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => cargarMemoria()}
+                          className="mt-2 rounded-md border border-red-300 bg-white px-2.5 py-1 font-medium text-red-700 hover:bg-red-100"
+                        >
+                          Reintentar
+                        </button>
+                      </div>
+                    )}
                     <label className="mb-1 block text-xs font-medium text-[#857a66]">Perfil del negocio</label>
                     <textarea
                       value={memProfile}
@@ -1329,7 +1373,7 @@ export default function OficinaPage() {
                     <button
                       type="button"
                       onClick={guardarMemoria}
-                      disabled={guardandoMem}
+                      disabled={guardandoMem || memEstado !== 'ok'}
                       className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#e8692a] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#d25e22] disabled:opacity-50"
                     >
                       {guardandoMem ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

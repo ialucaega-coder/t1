@@ -1,13 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Sparkles, Send, Loader2, Copy, Check, Save } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Sparkles, Send, Loader2, Copy, Check, Save, RefreshCw } from 'lucide-react';
 import * as aiApi from '@/lib/api/ai';
 import type { ChatTurn } from '@/types';
 import { useToast } from '@/components/common/Toast';
 import { MotorDeIA } from './MotorDeIA';
 import { UsageFinOps } from './UsageFinOps';
 import { SpendCapCard } from '@/components/ai/SpendCapCard';
+
+/** Topes del server para el chat de prueba (routes/ai.ts). */
+const MAX_CHAT_TEXT = 4000;
+const MAX_CHAT_HISTORY = 20;
 
 export default function IAPage() {
   return (
@@ -39,15 +43,29 @@ function PromptEditorSection() {
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Estado de la carga del prompt guardado. Si falla, NO se puede guardar: el editor
+  // quedaría vacío y un "Guardar" pisaría el prompt real del negocio con texto vacío.
+  const [loadState, setLoadState] = useState<'loading' | 'ok' | 'error'>('loading');
+  const [loadError, setLoadError] = useState('');
+  const [loadToken, setLoadToken] = useState(0);
 
-  // Carga el prompt de sistema guardado del negocio al montar.
+  // Carga el prompt de sistema guardado del negocio al montar (y al reintentar).
   useEffect(() => {
     let cancelled = false;
+    setLoadState('loading');
     aiApi.getSystemPrompt()
-      .then((res) => { if (!cancelled) setPrompt(res.prompt); })
-      .catch(() => { /* sin prompt guardado todavía: queda vacío */ });
+      .then((res) => {
+        if (cancelled) return;
+        setPrompt(res.prompt ?? '');
+        setLoadState('ok');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(err instanceof Error && err.message ? err.message : 'No se pudo cargar el prompt guardado');
+        setLoadState('error');
+      });
     return () => { cancelled = true; };
-  }, []);
+  }, [loadToken]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -63,6 +81,7 @@ function PromptEditorSection() {
   };
 
   const handleSave = async () => {
+    if (loadState !== 'ok') return;
     setSaving(true);
     setError(null);
     try {
@@ -105,12 +124,24 @@ function PromptEditorSection() {
             {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             Generar desde mi negocio
           </button>
-          <button className="btn-primary text-xs py-1.5" onClick={handleSave} disabled={saving}>
+          <button className="btn-primary text-xs py-1.5" onClick={handleSave} disabled={saving || loadState !== 'ok'}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             Guardar
           </button>
         </div>
       </div>
+
+      {loadState === 'error' && (
+        <div role="alert" className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <span>
+            No se pudo cargar el prompt guardado ({loadError}). Para no pisarlo con un texto vacío, el guardado
+            está bloqueado hasta que cargue.
+          </span>
+          <button className="btn-secondary text-xs py-1 px-2 shrink-0" onClick={() => setLoadToken((t) => t + 1)}>
+            <RefreshCw className="h-3 w-3" /> Reintentar
+          </button>
+        </div>
+      )}
 
       {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
 
@@ -150,6 +181,9 @@ function TestChatSection() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Conversación de la bandeja creada por el primer mensaje: se reenvía en los siguientes
+  // para que todo el chat de prueba quede en UNA conversación (antes se abría una por mensaje).
+  const conversationIdRef = useRef<string | undefined>(undefined);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -162,7 +196,9 @@ function TestChatSection() {
     setError(null);
 
     try {
-      const res = await aiApi.sendChatMessage(text, messages);
+      // El server acepta como máximo 20 turnos de historial de 4000 caracteres cada uno.
+      const res = await aiApi.sendChatMessage(text, messages.slice(-MAX_CHAT_HISTORY), conversationIdRef.current);
+      if (res.conversationId) conversationIdRef.current = res.conversationId;
       setMessages([...nextHistory, { role: 'assistant', content: res.text }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo enviar el mensaje');
@@ -211,6 +247,7 @@ function TestChatSection() {
           <input
             className="input"
             placeholder="Escribí un mensaje de prueba..."
+            maxLength={MAX_CHAT_TEXT}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {

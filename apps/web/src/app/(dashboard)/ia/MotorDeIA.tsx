@@ -11,6 +11,7 @@ import type { AIEngineStatus } from '@/lib/api/ai';
 import { useToast } from '@/components/common/Toast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 // Mapa de iconos que el backend referencia por nombre (catalog.ts).
 const ICONS: Record<string, LucideIcon> = {
@@ -144,7 +145,9 @@ export function MotorDeIA() {
 
 /** Indicador de estado de key: propia (verde), relay (azul), local (verde), sin key (rojo). */
 function StatusPill({ engine }: { engine: AIEngineStatus }) {
-  if (engine.local) return <span className="text-emerald-400">Key OK</span>;
+  // Los locales no usan key y el panel no sabe si tu servidor (Ollama / LM Studio) está levantado:
+  // no mostramos "Key OK", que sugería que ya funcionaban.
+  if (engine.local) return <span className="text-slate-400">Sin key (tu servidor)</span>;
   if (engine.hasOwnKey) return <span className="text-emerald-400">Key propia</span>;
   if (engine.relayAvailable) return <span className="text-blue-400">relay</span>;
   return <span className="text-red-400">Sin key</span>;
@@ -163,6 +166,8 @@ function ApiKeysModal({
   const { toast } = useToast();
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
+  const [toRemove, setToRemove] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   // Familias de proveedor que usan API key (excluye locales), sin duplicar.
   const providers = useMemo(() => {
@@ -184,10 +189,26 @@ function ApiKeysModal({
       toast({ type: 'success', message: `API key de ${PROVIDER_LABELS[provider] || provider} guardada` });
       setValues((v) => ({ ...v, [provider]: '' }));
       await onSaved();
-    } catch {
-      toast({ type: 'error', message: 'No se pudo guardar la API key' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo guardar la API key' });
     }
     setSaving(null);
+  }
+
+  /** Borra la key propia del proveedor (el backend borra la key cuando recibe apiKey vacío). */
+  async function removeKey() {
+    if (!toRemove) return;
+    const provider = toRemove;
+    setRemoving(true);
+    try {
+      await aiApi.setEngineKey(provider, '');
+      toast({ type: 'success', message: `API key de ${PROVIDER_LABELS[provider] || provider} eliminada` });
+      await onSaved();
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo quitar la API key' });
+    }
+    setRemoving(false);
+    setToRemove(null);
   }
 
   return (
@@ -204,7 +225,7 @@ function ApiKeysModal({
         </div>
         <p className="text-xs text-slate-400 mb-4">
           Cargá tu propia API key por proveedor. Se guarda cifrada y nunca se muestra de vuelta.
-          Dejá el campo vacío y guardá para borrarla.
+          Para borrarla usá "Quitar key".
         </p>
 
         <div className="space-y-3">
@@ -233,11 +254,32 @@ function ApiKeysModal({
                 >
                   {saving === provider ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Guardar'}
                 </button>
+                {hasKey && (
+                  <button
+                    onClick={() => setToRemove(provider)}
+                    disabled={saving === provider}
+                    className="btn-secondary text-xs px-3 text-red-400"
+                    aria-label={`Quitar key de ${PROVIDER_LABELS[provider] || provider}`}
+                  >
+                    Quitar key
+                  </button>
+                )}
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={toRemove !== null}
+        onClose={() => setToRemove(null)}
+        onConfirm={removeKey}
+        title="¿Quitar la API key?"
+        message={`Se borra la key de ${toRemove ? PROVIDER_LABELS[toRemove] || toRemove : ''}. Los motores de ese proveedor dejan de responder si no hay una key de respaldo (relay).`}
+        confirmLabel="Quitar key"
+        variant="danger"
+        loading={removing}
+      />
     </div>
   );
 }

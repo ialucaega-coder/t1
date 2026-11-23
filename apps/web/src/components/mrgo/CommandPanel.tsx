@@ -16,6 +16,7 @@
 
 import { Cpu, Wrench, Check, AlertTriangle, Loader2, Users } from 'lucide-react';
 import { MrGoAvatar } from './MrGoAvatar';
+import { PendingParams } from './PendingParams';
 import type { MrGoColorKey } from './types';
 import type { AgentActivity } from './useAgentActivity';
 import type { AgentStep, PendingAction, ActionResult } from '@/lib/api/mrgo';
@@ -317,6 +318,8 @@ export function CommandPanel({
             </span>
             {pending.thought ? `: ${pending.thought}` : '.'}
           </p>
+          {/* Qué se aprueba: destinatario (enmascarado), texto, monto, campaña… */}
+          <PendingParams params={pending.params} labelStyle={{ color: C.muted }} valueStyle={{ color: C.ink }} />
           <div className="mt-0.5 flex flex-wrap items-center gap-2">
             <button
               type="button"

@@ -5,8 +5,9 @@ export function getProviders() {
   return httpClient.get<AIProvidersResponse>('/ai/providers');
 }
 
-export function sendChatMessage(message: string, history: ChatTurn[] = []) {
-  return httpClient.post<ChatbotResponse>('/ai/chat', { message, channel: 'WEB', history });
+export function sendChatMessage(message: string, history: ChatTurn[] = [], conversationId?: string) {
+  // Con conversationId el server sigue la misma conversación en vez de abrir una nueva por mensaje.
+  return httpClient.post<ChatbotResponse>('/ai/chat', { message, channel: 'WEB', history, ...(conversationId ? { conversationId } : {}) });
 }
 
 export function generatePrompt(tone: 'formal' | 'amigable' | 'directo' = 'amigable') {
