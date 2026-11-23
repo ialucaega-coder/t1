@@ -47,10 +47,26 @@ vi.mock('../../middleware/auth', () => ({
       res.status(401).json({ error: 'No token provided' });
       return;
     }
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    const role = (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN';
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role };
     next();
   },
-  requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireStaff: (req: Request, res: Response, next: NextFunction) => {
+    if (!['ADMIN', 'PROFESSIONAL'].includes(req.auth?.role ?? '')) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    next();
+  },
+  requireRole:
+    (...roles: string[]) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      if (!roles.includes(req.auth?.role ?? '')) {
+        res.status(403).json({ error: 'Insufficient permissions' });
+        return;
+      }
+      next();
+    },
 }));
 
 // --- Mock de memoria: loadMemory/saveMemory stub; buildMemoryPrompt REAL ---
@@ -249,7 +265,15 @@ vi.mock('../../services/ai/engine', () => ({
   getAIProviderForBusiness: vi.fn(),
 }));
 
+vi.mock('../../services/ai/usage', () => ({ recordAiSpend: vi.fn(async () => undefined) }));
+vi.mock('../../services/ai/spendCap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/ai/spendCap')>();
+  return { ...actual, enforceSpendCap: vi.fn(async () => undefined) };
+});
+
 import { getAIProviderForBusiness } from '../../services/ai/engine';
+import { recordAiSpend } from '../../services/ai/usage';
+import { enforceSpendCap, SpendCapError } from '../../services/ai/spendCap';
 
 describe('services/mrgo/orchestrator', () => {
   // Importamos la implementación REAL del orquestador (el mock de arriba solo
@@ -375,6 +399,37 @@ describe('services/mrgo/orchestrator', () => {
     const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
 
     expect(dec.nextAgent).toBe('ventas');
+  });
+
+  it('registra el gasto de IA del ruteo (recordUsage -> recordAiSpend, fuente mrgo)', async () => {
+    const usage = { inputTokens: 120, outputTokens: 30, model: 'claude-sonnet-5' };
+    const gen = vi.fn(async (_p: string, ctx: { recordUsage?: (u: typeof usage) => void }) => {
+      ctx.recordUsage?.(usage);
+      return '{"nextAgent":"ceo","emotion":"neutral","reasoning":"ok"}';
+    });
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+
+    await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(recordAiSpend).toHaveBeenCalledWith('biz_1', usage, 'mrgo');
+  });
+
+  it('sin usage del proveedor no registra gasto', async () => {
+    fakeProvider('{"nextAgent":"ceo","emotion":"neutral","reasoning":"ok"}');
+    await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+    expect(recordAiSpend).not.toHaveBeenCalled();
+  });
+
+  it('con el tope de gasto alcanzado NO llama al modelo y cae al ruteo por defecto', async () => {
+    const gen = vi.fn(async () => '{}');
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+    mock(enforceSpendCap).mockRejectedValueOnce(new SpendCapError(50));
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(gen).not.toHaveBeenCalled();
+    expect(dec.nextAgent).toBe('ceo');
+    expect(dec.reasoning).toContain('tope mensual');
   });
 
   it('fallback si el motor de IA no está disponible', async () => {

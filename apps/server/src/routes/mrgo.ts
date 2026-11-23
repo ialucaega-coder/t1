@@ -15,10 +15,10 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
 import { tenantRateLimit } from '../middleware/tenantRateLimit';
 import { validate } from '../middleware/validate';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import {
   AGENT_CATALOG,
   TOOL_CATALOG,
@@ -32,10 +32,11 @@ import {
   loadAgents,
   saveAgents,
   isValidToolKey,
+  toolAllowedForAgent,
 } from '../services/mrgo/agents';
 import { orchestrate } from '../services/mrgo/orchestrator';
 import { runAgentLoop, resumeAgentLoop, type AgentStep } from '../services/mrgo/agent-loop';
-import { executeAction } from '../services/actions/executor';
+import { executeAction, actionKind } from '../services/actions/executor';
 import { loadMemory, saveMemory, MAX_PROFILE_LEN, MAX_FACT_LEN, MAX_FACTS } from '../services/mrgo/memory';
 import { loadOffice, saveOffice } from '../services/mrgo/office';
 import { loadIndustry, saveIndustry } from '../services/mrgo/industry';
@@ -60,6 +61,20 @@ async function claimLiveKey(req: Request, res: Response, businessId: string, sco
   });
   return false;
 }
+
+/**
+ * `params`/`data` que llegan del cliente: acotados en cantidad de claves y en tamaño
+ * serializado. Sin tope, un body gigante se reflejaba en el prompt del modelo (costo)
+ * y en la base de datos.
+ */
+const MAX_PARAMS_KEYS = 20;
+const MAX_PARAMS_BYTES = 8 * 1024;
+const boundedRecord = z
+  .record(z.string().max(60), z.unknown())
+  .refine(
+    (v) => Object.keys(v).length <= MAX_PARAMS_KEYS && JSON.stringify(v).length <= MAX_PARAMS_BYTES,
+    { message: `Los parámetros son demasiado grandes (máx. ${MAX_PARAMS_KEYS} claves y 8 KB)` },
+  );
 
 // Zod exige una tupla no vacía para z.enum; el catálogo nunca está vacío.
 const agentKeyEnum = z.enum(AGENT_KEYS as [string, ...string[]]);
@@ -110,7 +125,7 @@ const runSchema = z.object({
 // la única acción que se EJECUTA al reanudar es la confirmada (validada aparte).
 const stepSchema = z.object({
   tool: z.string().max(60),
-  params: z.record(z.string(), z.unknown()).optional(),
+  params: boundedRecord.optional(),
   thought: z.string().max(500).optional(),
   result: z.object({
     action: z.string().max(60).optional(),
@@ -118,14 +133,17 @@ const stepSchema = z.object({
     ok: z.boolean().optional(),
     status: z.string().max(20),
     detail: z.string().max(2000),
-    data: z.record(z.string(), z.unknown()).optional(),
+    data: boundedRecord.optional(),
   }),
 });
 
 const confirmSchema = z.object({
   tool: z.string().trim().min(1).max(60),
-  params: z.record(z.string(), z.unknown()).optional(),
+  params: boundedRecord.optional(),
   thought: z.string().trim().max(500).optional(),
+  // Agente que confirma (opcional en el camino legacy): si viene, el tool tiene que
+  // estar permitido para ESE agente; si no, para al menos un agente activo y sin pausa.
+  agentKey: agentKeyEnum.optional(),
   // Si viene `resume`, tras ejecutar la acción confirmada se REANUDA la cadena
   // (puede volver a pausar). Sin `resume`, se ejecuta sólo esa acción (legacy).
   resume: z
@@ -161,6 +179,36 @@ const industrySchema = z.object({
 
 const router = Router();
 
+// Mr Go ejecuta acciones reales del negocio: solo staff (ADMIN / PROFESSIONAL). Un
+// CLIENT con JWT no entra a nada de acá. (El montaje en index.ts además exige la
+// capacidad 'bots'.)
+router.use(requireAuth, requireStaff);
+
+/**
+ * Valida que un tool pueda confirmarse/ejecutarse: respeta el gating por rol y las
+ * restricciones del Studio (`toolAllowedForAgent`) y NO usa agentes inactivos ni
+ * pausados desde la Oficina. Lanza 403 si ningún agente elegible lo permite.
+ */
+async function assertToolConfirmable(businessId: string, tool: string, agentKey?: string): Promise<void> {
+  const agents = await loadAgents(businessId);
+  // Sin dato de la Oficina asumimos que no hay pausas (igual que el orquestador).
+  let pausedKeys: string[] = [];
+  try {
+    const office = await loadOffice(businessId);
+    if (Array.isArray(office?.paused)) pausedKeys = office.paused;
+  } catch {
+    pausedKeys = [];
+  }
+  const paused = new Set<string>(pausedKeys);
+  const eligible = agents.filter((a) => a.activo && !paused.has(a.key) && (!agentKey || a.key === agentKey));
+  if (eligible.length === 0) {
+    throw new AppError(409, agentKey ? 'El agente está inactivo o en pausa: no puede ejecutar acciones.' : 'No hay agentes activos disponibles.');
+  }
+  if (!eligible.some((a) => toolAllowedForAgent(a.key, tool, a))) {
+    throw new AppError(403, 'Ningún agente activo tiene permitido usar este tool (revisá el Studio).');
+  }
+}
+
 // Agentes resueltos del negocio + catálogos de roles y tools (para el panel).
 router.get(
   '/agents',
@@ -182,6 +230,7 @@ router.get(
 router.put(
   '/agents',
   requireAuth,
+  requireRole('ADMIN'),
   validate(putAgentsSchema),
   asyncHandler(async (req, res) => {
     const agents = await saveAgents(req.auth!.businessId, req.body.agents);
@@ -199,6 +248,10 @@ router.post(
   validate(orchestrateSchema),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
+    // Ejecutar en vivo es decisión del dueño: solo ADMIN.
+    if (req.body.execute && req.auth!.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Solo un administrador puede ejecutar acciones en vivo.' });
+    }
     if (req.body.execute && !(await claimLiveKey(req, res, businessId, 'orchestrate'))) return;
     const decision = await orchestrate({
       businessId,
@@ -206,16 +259,29 @@ router.post(
       channel: req.body.channel,
     });
 
-    // Si Mr Go decidió un tool, lo despachamos. `execute: true` → en vivo
-    // (acciones externas reales); por defecto dry_run (externas simuladas).
-    const execution = decision.tool
-      ? await executeAction({
-          businessId,
-          action: decision.tool,
-          params: decision.toolParams ?? {},
-          mode: req.body.execute ? 'live' : 'dry_run',
-        })
-      : null;
+    // Sin tool: solo ruteo.
+    if (!decision.tool) return res.json({ ...decision, execution: null });
+
+    const params = decision.toolParams ?? {};
+    // `execute: true` + acción EXTERNA (WhatsApp, pago, campaña, reserva): NO se
+    // ejecuta a ciegas; igual que /run, queda pendiente de confirmación (el dueño
+    // la aprueba con POST /confirm). Las internas sí corren en vivo.
+    if (req.body.execute && (actionKind(decision.tool) ?? 'externo') === 'externo') {
+      return res.json({
+        ...decision,
+        execution: null,
+        stoppedReason: 'needs_confirmation',
+        pending: { tool: decision.tool, params, kind: 'externo' },
+      });
+    }
+
+    // Por defecto dry_run: NADA se escribe ni se envía (ni las internas).
+    const execution = await executeAction({
+      businessId,
+      action: decision.tool,
+      params,
+      mode: req.body.execute ? 'live' : 'dry_run',
+    });
 
     res.json({ ...decision, execution });
   })
@@ -265,14 +331,16 @@ router.post(
 router.post(
   '/confirm',
   requireAuth,
+  requireRole('ADMIN'),
   tenantRateLimit({ name: 'mrgo-confirm', max: 12 }),
   validate(confirmSchema),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
-    const { tool, params, thought, resume } = req.body as {
+    const { tool, params, thought, resume, agentKey } = req.body as {
       tool: string;
       params?: Record<string, unknown>;
       thought?: string;
+      agentKey?: string;
       resume?: {
         text: string;
         channel?: string;
@@ -282,6 +350,10 @@ router.post(
       };
     };
     if (!isValidToolKey(tool)) return res.status(400).json({ error: 'Tool desconocido' });
+    // Gating en AMBOS caminos (con y sin `resume`): rol del agente + restricciones del
+    // Studio + agentes inactivos/pausados. Antes el camino legacy ejecutaba cualquier
+    // tool válido sin mirar nada de esto.
+    await assertToolConfirmable(businessId, tool, resume?.agentKey ?? agentKey);
     // /confirm siempre ejecuta EN VIVO: la clave se reserva después de validar.
     if (!(await claimLiveKey(req, res, businessId, 'confirm'))) return;
 
@@ -330,8 +402,8 @@ router.put(
 );
 
 // Estado persistente de la oficina (pausas). Se carga al abrir la Oficina y se
-// guarda cuando el dueño pausa/reactiva un agente. Cualquier miembro del negocio
-// puede cambiarlo (es foco visual del piso, no config sensible).
+// guarda cuando el dueño pausa/reactiva un agente. Solo ADMIN puede cambiarlo: la
+// pausa decide qué agentes pueden ejecutar acciones (no es solo visual).
 router.get(
   '/office',
   requireAuth,
@@ -343,6 +415,7 @@ router.get(
 router.put(
   '/office',
   requireAuth,
+  requireRole('ADMIN'),
   validate(officeSchema),
   asyncHandler(async (req, res) => {
     res.json(await saveOffice(req.auth!.businessId, req.body));

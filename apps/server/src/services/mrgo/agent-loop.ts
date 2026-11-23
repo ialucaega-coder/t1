@@ -30,8 +30,10 @@
  * Schema CONGELADO: no persiste nada acá (eso es Etapa 2+). Multi-tenant por
  * `businessId`.
  */
-import type { ConversationTurn } from '../ai/provider';
+import type { ConversationTurn, TokenUsage } from '../ai/provider';
 import { getAIProviderForBusiness } from '../ai/engine';
+import { enforceSpendCap, SpendCapError } from '../ai/spendCap';
+import { recordAiSpend } from '../ai/usage';
 import {
   AGENT_CATALOG,
   TOOL_CATALOG,
@@ -43,6 +45,7 @@ import {
 } from './agents';
 import { loadMemory, buildMemoryPrompt } from './memory';
 import { loadIndustry, buildIndustryPrompt } from './industry';
+import { loadOffice } from './office';
 import { extractJson } from './json';
 import { executeAction, actionKind, type ActionResult, type ActionKind, type ExecMode } from '../actions/executor';
 
@@ -127,10 +130,28 @@ function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-/** Elige el agente que corre el loop: el pedido, si es válido y está activo; si
- *  no, el CEO (si está activo); si no, el primer agente activo. */
-function pickAgent(agents: AgentConfig[], requested?: string): string {
-  const active = agents.filter((a) => a.activo);
+/**
+ * Claves de agentes en pausa (estado de la Oficina). Un agente pausado no recibe
+ * trabajo (igual que en el orquestador). Si la lectura falla, se asume sin pausas.
+ */
+async function loadPausedKeys(businessId: string): Promise<Set<string>> {
+  try {
+    const office = await loadOffice(businessId);
+    return new Set(Array.isArray(office?.paused) ? office.paused : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Mensaje claro cuando se alcanzó el tope mensual de gasto de IA. */
+function spendCapMessage(err: SpendCapError): string {
+  return `Alcanzaste el tope mensual de gasto de IA (USD ${err.capUsd}). Mr Go deja de ejecutar hasta el mes que viene o hasta que subas el tope.`;
+}
+
+/** Elige el agente que corre el loop: el pedido, si es válido, está activo y no está
+ *  en pausa; si no, el CEO (si está disponible); si no, el primer agente disponible. */
+function pickAgent(agents: AgentConfig[], requested?: string, paused: ReadonlySet<string> = new Set()): string {
+  const active = agents.filter((a) => a.activo && !paused.has(a.key));
   if (requested && active.some((a) => a.key === requested)) return requested;
   if (active.some((a) => a.key === DEFAULT_AGENT_KEY)) return DEFAULT_AGENT_KEY;
   return active[0]?.key ?? DEFAULT_AGENT_KEY;
@@ -213,12 +234,33 @@ async function continueLoop(ctx: LoopContext, firstPrompt: string, remaining: nu
   let currentPrompt = firstPrompt;
 
   for (let i = 0; i < remaining; i++) {
-    let raw: string;
+    // El tope mensual de gasto se vuelve a chequear en CADA llamada al modelo (el
+    // loop puede hacer hasta 10 seguidas y getAIProviderForBusiness solo lo mira
+    // una vez al resolver el proveedor).
     try {
-      raw = await provider.generateResponse(currentPrompt, { businessId, history: turns, systemPrompt });
-    } catch {
-      return { agent, emotion, steps, finalMessage: 'El motor de IA falló durante la ejecución.', stoppedReason: 'no_engine' };
+      await enforceSpendCap(businessId);
+    } catch (err) {
+      if (err instanceof SpendCapError) {
+        return { agent, emotion, steps, finalMessage: spendCapMessage(err), stoppedReason: 'no_engine' };
+      }
+      // Cualquier otro error del chequeo es fail-open (igual que en el chatbot).
     }
+
+    let raw: string;
+    let usage: TokenUsage | undefined;
+    try {
+      raw = await provider.generateResponse(currentPrompt, {
+        businessId,
+        history: turns,
+        systemPrompt,
+        recordUsage: (u) => { usage = u; },
+      });
+    } catch (err) {
+      const finalMessage = err instanceof SpendCapError ? spendCapMessage(err) : 'El motor de IA falló durante la ejecución.';
+      return { agent, emotion, steps, finalMessage, stoppedReason: 'no_engine' };
+    }
+    // Gasto del loop al libro de IA (cuenta para el tope mensual). Nunca lanza.
+    if (usage) await recordAiSpend(businessId, usage, 'mrgo');
     turns.push({ role: 'user', content: currentPrompt });
     turns.push({ role: 'assistant', content: raw });
 
@@ -301,12 +343,13 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
   // antes eran 4 round-trips seriales a la DB en cada corrida.
   const providerPromise = getAIProviderForBusiness(businessId);
   providerPromise.catch(() => {}); // evita unhandledRejection si salimos antes del await
-  const [agents, industry, memory] = await Promise.all([
+  const [agents, industry, memory, paused] = await Promise.all([
     loadAgents(businessId),
     loadIndustry(businessId),
     loadMemory(businessId),
+    loadPausedKeys(businessId),
   ]);
-  const agent = pickAgent(agents, input.agentKey);
+  const agent = pickAgent(agents, input.agentKey, paused);
   const agentConfig = agents.find((a) => a.key === agent);
   const emotion = 'neutral';
 
@@ -324,12 +367,12 @@ export async function runAgentLoop(input: RunAgentLoopInput): Promise<AgentLoopR
   let provider: AIProvider;
   try {
     provider = await providerPromise;
-  } catch {
+  } catch (err) {
     return {
       agent,
       emotion,
       steps: [],
-      finalMessage: 'El motor de IA no está disponible en este momento.',
+      finalMessage: err instanceof SpendCapError ? spendCapMessage(err) : 'El motor de IA no está disponible en este momento.',
       stoppedReason: 'no_engine',
     };
   }
@@ -372,8 +415,8 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
   const mode: ExecMode = input.mode ?? 'live';
   const maxSteps = clamp(input.maxSteps ?? DEFAULT_MAX_STEPS, 1, HARD_MAX_STEPS);
 
-  const agents = await loadAgents(businessId);
-  const agent = pickAgent(agents, input.agentKey);
+  const [agents, paused] = await Promise.all([loadAgents(businessId), loadPausedKeys(businessId)]);
+  const agent = pickAgent(agents, input.agentKey, paused);
   const agentConfig = agents.find((a) => a.key === agent);
   const emotion = 'neutral';
 
@@ -423,15 +466,17 @@ export async function resumeAgentLoop(input: ResumeAgentLoopInput): Promise<Agen
   let provider: AIProvider;
   try {
     provider = await providerPromise;
-  } catch {
-    // Sin motor no podemos continuar la cadena, pero la acción confirmada YA se
-    // ejecutó: devolvemos ese resultado para que el dueño lo vea.
+  } catch (err) {
+    // Sin motor (o con el tope de gasto alcanzado) no podemos continuar la cadena,
+    // pero la acción confirmada YA se ejecutó: devolvemos ese resultado para que el
+    // dueño lo vea.
+    const capped = err instanceof SpendCapError;
     return {
       agent,
       emotion,
       steps,
       finalMessage: confirmedResult.ok
-        ? 'Ejecuté la acción confirmada. No pude continuar la cadena: el motor de IA no está disponible.'
+        ? `Ejecuté la acción confirmada. No pude continuar la cadena: ${capped ? spendCapMessage(err as SpendCapError) : 'el motor de IA no está disponible.'}`
         : `No se pudo ejecutar la acción: ${confirmedResult.detail}`,
       stoppedReason: 'no_engine',
     };

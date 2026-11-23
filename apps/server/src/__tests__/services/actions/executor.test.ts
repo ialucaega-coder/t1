@@ -75,7 +75,7 @@ describe('executeAction — mover_lifecycle (interno)', () => {
   it('mueve la etapa cuando el cliente es del negocio y la etapa es válida', async () => {
     mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
 
-    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' } });
+    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' }, mode: 'live' });
 
     expect(r.status).toBe('ejecutado');
     expect(r.ok).toBe(true);
@@ -84,6 +84,24 @@ describe('executeAction — mover_lifecycle (interno)', () => {
     expect(prisma.user.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'c1', businessId: BIZ } }),
     );
+  });
+
+  it('en dry_run SIMULA: no escribe la etapa y el resultado lo dice', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' }, mode: 'dry_run' });
+
+    expect(r.status).toBe('simulado');
+    expect(r.detail).toMatch(/simulado/);
+    expect(r.data).toMatchObject({ dryRun: true, clientId: 'c1', stage: 'HOT' });
+    expect(setClientStage).not.toHaveBeenCalled();
+  });
+
+  it('sin modo explícito el default es dry_run (no escribe)', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' } });
+    expect(r.status).toBe('simulado');
+    expect(setClientStage).not.toHaveBeenCalled();
   });
 
   it('omite si el cliente no pertenece al negocio', async () => {
@@ -108,7 +126,7 @@ describe('executeAction — notificar (interno)', () => {
   it('notifica a todos los admins del negocio (PUSH)', async () => {
     mock(prisma.user.findMany).mockResolvedValue([{ id: 'a1' }, { id: 'a2' }]);
 
-    const r = await executeAction({ businessId: BIZ, action: 'notificar', params: { title: 'Ojo', body: 'Lead caliente' } });
+    const r = await executeAction({ businessId: BIZ, action: 'notificar', params: { title: 'Ojo', body: 'Lead caliente' }, mode: 'live' });
 
     expect(r.status).toBe('ejecutado');
     expect(r.data?.count).toBe(2);
@@ -116,6 +134,16 @@ describe('executeAction — notificar (interno)', () => {
     expect(createNotification).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'PUSH', businessId: BIZ, userId: 'a1' }),
     );
+  });
+
+  it('en dry_run SIMULA: no crea notificaciones y dice cuántas crearía', async () => {
+    mock(prisma.user.findMany).mockResolvedValue([{ id: 'a1' }, { id: 'a2' }]);
+
+    const r = await executeAction({ businessId: BIZ, action: 'notificar', params: { title: 'Ojo' }, mode: 'dry_run' });
+
+    expect(r.status).toBe('simulado');
+    expect(r.data).toMatchObject({ dryRun: true, count: 2 });
+    expect(createNotification).not.toHaveBeenCalled();
   });
 
   it('omite si el negocio no tiene admins', async () => {
@@ -129,6 +157,11 @@ describe('executeAction — notificar (interno)', () => {
 });
 
 describe('executeAction — enviar_whatsapp (externo, gated por modo)', () => {
+  beforeEach(() => {
+    // El número 5491112345678 es de un cliente del negocio (los demás no).
+    mock(prisma.user.findMany).mockResolvedValue([{ phone: '+54 9 11 1234-5678' }]);
+  });
+
   it('en dry_run SIMULA: no envía y enmascara el teléfono', async () => {
     const r = await executeAction({
       businessId: BIZ,
@@ -194,6 +227,35 @@ describe('executeAction — enviar_whatsapp (externo, gated por modo)', () => {
     const r = await executeAction({ businessId: BIZ, action: 'enviar_whatsapp', params: {}, mode: 'live' });
     expect(r.status).toBe('omitido');
   });
+
+  it('NO envía a un número que no es de un cliente del negocio (ni en dry_run lo da por bueno)', async () => {
+    mock(prisma.user.findMany).mockResolvedValue([]);
+
+    const live = await executeAction({ businessId: BIZ, action: 'enviar_whatsapp', params: { to: '+5491199999999', body: 'Hola' }, mode: 'live' });
+    const dry = await executeAction({ businessId: BIZ, action: 'enviar_whatsapp', params: { to: '+5491199999999', body: 'Hola' }, mode: 'dry_run' });
+
+    expect(live.status).toBe('omitido');
+    expect(live.detail).toMatch(/no pertenece a un cliente/);
+    expect(dry.status).toBe('omitido');
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
+    // La búsqueda va scopeada por negocio.
+    expect(mock(prisma.user.findMany).mock.calls[0][0].where).toMatchObject({ businessId: BIZ });
+  });
+
+  it.each(['12345', 'abc', '+0123456789', '1'.repeat(30), '+54 9 11 12 34 56 78 90 12 34'])('rechaza el teléfono con formato inválido %s', async (to) => {
+    const r = await executeAction({ businessId: BIZ, action: 'enviar_whatsapp', params: { to, body: 'Hola' }, mode: 'live' });
+
+    expect(r.status).toBe('omitido');
+    expect(r.detail).toMatch(/inválido/);
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('acepta el mismo número escrito con espacios y guiones', async () => {
+    const r = await executeAction({ businessId: BIZ, action: 'enviar_whatsapp', params: { to: '+54 9 11 1234-5678', body: 'Hola' }, mode: 'live' });
+    expect(r.status).toBe('ejecutado');
+    expect(whatsapp.sendMessage).toHaveBeenCalledWith('+5491112345678', 'Hola', undefined);
+  });
 });
 
 describe('executeAction — crear_cliente (interno)', () => {
@@ -201,13 +263,44 @@ describe('executeAction — crear_cliente (interno)', () => {
     mock(prisma.user.findFirst).mockResolvedValue(null); // no existe ese email
     mock(prisma.user.create).mockResolvedValue({ id: 'c_new' });
 
-    const r = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'ana@x.com', phone: '+54123' } });
+    const r = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'ana@x.com', phone: '+5491112345678' }, mode: 'live' });
 
     expect(r.status).toBe('ejecutado');
     expect(r.data?.clientId).toBe('c_new');
     expect(prisma.user.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ name: 'Ana', email: 'ana@x.com', role: 'CLIENT', businessId: BIZ }) }),
     );
+  });
+
+  it('en dry_run SIMULA: valida pero no crea el cliente', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue(null);
+
+    const r = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'ana@x.com' }, mode: 'dry_run' });
+
+    expect(r.status).toBe('simulado');
+    expect(r.data).toMatchObject({ dryRun: true });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('valida formato y largo: nombre largo, email inválido, teléfono inválido', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue(null);
+    const longName = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'x'.repeat(101), email: 'a@x.com' }, mode: 'live' });
+    const badEmail = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'no-es-email' }, mode: 'live' });
+    const longEmail = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: `${'a'.repeat(250)}@x.com` }, mode: 'live' });
+    const badPhone = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'a@x.com', phone: '123' }, mode: 'live' });
+
+    for (const r of [longName, badEmail, longEmail, badPhone]) expect(r.status).toBe('omitido');
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('una carrera con otro alta (P2002) da un mensaje genérico, sin filtrar el código de Prisma', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue(null);
+    mock(prisma.user.create).mockRejectedValue(Object.assign(new Error('Unique constraint failed on the fields: (`email`)'), { name: 'PrismaClientKnownRequestError', code: 'P2002' }));
+
+    const r = await executeAction({ businessId: BIZ, action: 'crear_cliente', params: { name: 'Ana', email: 'ana@x.com' }, mode: 'live' });
+
+    expect(r.status).toBe('omitido');
+    expect(JSON.stringify(r)).not.toMatch(/P2002|email`|Unique/);
   });
 
   it('omite si falta nombre o email', async () => {
@@ -385,6 +478,26 @@ describe('executeAction — crear_reserva (externo, gated)', () => {
   });
 });
 
+describe('executeAction — asignar_agente (interno) en dry_run', () => {
+  it('SIMULA: verifica la conversación pero no deriva ni notifica', async () => {
+    mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'conv_1' });
+
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' }, mode: 'dry_run' });
+
+    expect(r.status).toBe('simulado');
+    expect(r.data).toMatchObject({ dryRun: true, conversationId: 'conv_1' });
+    expect(transitionAttention).not.toHaveBeenCalled();
+    expect(createNotification).not.toHaveBeenCalled();
+    expect(prisma.conversation.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'conv_1', businessId: BIZ } }));
+  });
+
+  it('omite si la conversación no es del negocio', async () => {
+    mock(prisma.conversation.findFirst).mockResolvedValue(null);
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'ajena' }, mode: 'dry_run' });
+    expect(r.status).toBe('omitido');
+  });
+});
+
 describe('executeAction — asignar_agente (interno)', () => {
   it('omite si falta la conversación', async () => {
     const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: {} });
@@ -394,7 +507,7 @@ describe('executeAction — asignar_agente (interno)', () => {
 
   it('omite si la conversación no es del negocio (la transición va scopeada por negocio)', async () => {
     mock(transitionAttention).mockResolvedValue({ ok: false, reason: 'not_found' });
-    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_ajena' } });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_ajena' }, mode: 'live' });
     expect(r.status).toBe('omitido');
     expect(transitionAttention).toHaveBeenCalledWith('conv_ajena', BIZ, { type: 'handoff' });
     expect(createNotification).not.toHaveBeenCalled();
@@ -402,7 +515,7 @@ describe('executeAction — asignar_agente (interno)', () => {
 
   it('NO resucita una conversación CERRADA ni avisa a los admins', async () => {
     mock(transitionAttention).mockResolvedValue({ ok: false, reason: 'closed' });
-    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' }, mode: 'live' });
     expect(r.ok).toBe(false);
     expect(r.status).toBe('omitido');
     expect(r.detail).toMatch(/cerrada/);
@@ -413,7 +526,7 @@ describe('executeAction — asignar_agente (interno)', () => {
   it('deriva la conversación por la transición atómica (HANDOFF) y notifica a los admins', async () => {
     mock(transitionAttention).mockResolvedValue({ ok: true, changed: true, state: 'ESPERANDO', status: 'HANDOFF', metadata: {} });
     mock(prisma.user.findMany).mockResolvedValue([{ id: 'a1' }]);
-    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' }, mode: 'live' });
     expect(r.status).toBe('ejecutado');
     expect(transitionAttention).toHaveBeenCalledWith('conv_1', BIZ, { type: 'handoff' });
     // Ya no escribe el status "a mano": todo pasa por la máquina de estados.
@@ -423,7 +536,7 @@ describe('executeAction — asignar_agente (interno)', () => {
 
   it('si ya estaba derivada o la atiende una persona no cambia nada ni re-notifica', async () => {
     mock(transitionAttention).mockResolvedValue({ ok: true, changed: false, state: 'HUMANO', status: 'OPEN', metadata: {} });
-    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' } });
+    const r = await executeAction({ businessId: BIZ, action: 'asignar_agente', params: { conversationId: 'conv_1' }, mode: 'live' });
     expect(r.ok).toBe(true);
     expect(createNotification).not.toHaveBeenCalled();
   });
@@ -441,10 +554,22 @@ describe('executeAction — robustez', () => {
     mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
     mock(setClientStage).mockRejectedValue(new Error('boom'));
 
-    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' } });
+    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' }, mode: 'live' });
 
     expect(r.status).toBe('error');
     expect(r.ok).toBe(false);
+  });
+
+  it('un error de Prisma no filtra el código ni el mensaje en el detalle', async () => {
+    mock(prisma.user.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(setClientStage).mockRejectedValue(Object.assign(new Error('Unique constraint failed'), { name: 'PrismaClientKnownRequestError', code: 'P2002' }));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const r = await executeAction({ businessId: BIZ, action: 'mover_lifecycle', params: { clientId: 'c1', stage: 'HOT' }, mode: 'live' });
+
+    expect(r.status).toBe('error');
+    expect(r.detail).toBe('error de base de datos');
+    expect(r.detail).not.toMatch(/P2002/);
   });
 });
 

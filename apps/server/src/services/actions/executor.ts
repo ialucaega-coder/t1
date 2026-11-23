@@ -13,7 +13,8 @@
  *
  * Seguridad / alcance de esta primera etapa de ejecución:
  *  - `interno`: efectos reversibles, sin salida al exterior ni dinero
- *    (mover etapa de CRM, notificar al equipo in-app). Se EJECUTAN de verdad.
+ *    (mover etapa de CRM, notificar al equipo in-app). Se EJECUTAN de verdad en
+ *    `live`; en `dry_run` también se SIMULAN (validan y describen, sin escribir).
  *  - `externo`: efectos salientes (enviar WhatsApp). Cableados pero GATED tras
  *    `mode: 'live'`; en `dry_run` (por defecto) devuelven `simulado` sin enviar.
  *    Así el pipeline automático no manda mensajes reales salvo que se pida
@@ -47,9 +48,10 @@ export type ActionKind = 'interno' | 'externo';
 
 /**
  * Modo de ejecución:
- *  - `dry_run` (por defecto): las acciones externas se SIMULAN (no envían nada).
- *  - `live`: las acciones externas se ejecutan de verdad.
- * Las acciones internas se ejecutan igual en ambos modos (son reversibles).
+ *  - `dry_run` (por defecto): NADA se escribe ni se envía: las acciones externas y
+ *    las internas (crear cliente, mover etapa, derivar, notificar) se SIMULAN y el
+ *    resultado lo dice (`status: 'simulado'`, `data.dryRun: true`).
+ *  - `live`: las acciones se ejecutan de verdad.
  */
 export type ExecMode = 'dry_run' | 'live';
 
@@ -96,6 +98,21 @@ function str(params: Record<string, unknown>, ...keys: string[]): string | undef
   return undefined;
 }
 
+/** Resultado estándar de una acción interna simulada en dry_run (no escribe nada). */
+function simulated(detail: string, data?: Record<string, unknown>): HandlerOutcome {
+  return { ok: true, status: 'simulado', detail: `simulado (dry_run, no se escribió nada): ${detail}`, data: { ...data, dryRun: true } };
+}
+
+/** Teléfono tipo E.164 tolerante: opcional "+", 8 a 15 dígitos (tras sacar espacios, guiones y paréntesis). */
+const PHONE_RE = /^\+?[1-9]\d{7,14}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_NAME_LEN = 100;
+const MAX_EMAIL_LEN = 254;
+
+function cleanPhone(raw: string): string {
+  return raw.replace(/[\s\-().]/g, '');
+}
+
 /** Enmascara un teléfono para logs/respuestas: deja solo los últimos 4 dígitos. */
 function maskPhone(phone: string): string {
   const tail = phone.replace(/\D/g, '').slice(-4);
@@ -121,6 +138,11 @@ function num(params: Record<string, unknown>, ...keys: string[]): number | undef
  * services/notifications.ts y routes/campaigns.ts).
  */
 function describeError(err: unknown): string {
+  // Errores de la base (Prisma): ni el código (P2002...) ni el mensaje salen hacia
+  // afuera: delatan el esquema y qué valores ya existen.
+  if (err && typeof err === 'object' && String((err as { name?: string }).name ?? '').startsWith('PrismaClient')) {
+    return 'error de base de datos';
+  }
   if (err && typeof err === 'object') {
     const e = err as { code?: string | number; status?: number; name?: string };
     const parts: string[] = [];
@@ -154,7 +176,7 @@ async function resolveBusinessSender(businessId: string): Promise<string | undef
  */
 const moverLifecycle: ActionHandler = {
   kind: 'interno',
-  run: async ({ businessId, params }) => {
+  run: async ({ businessId, params, mode }) => {
     const clientId = str(params, 'clientId', 'cliente', 'userId');
     const stage = str(params, 'stage', 'etapa');
     if (!clientId) return { ok: false, status: 'omitido', detail: 'falta clientId' };
@@ -169,6 +191,8 @@ const moverLifecycle: ActionHandler = {
     });
     if (!client) return { ok: false, status: 'omitido', detail: 'cliente no encontrado en el negocio' };
 
+    if (mode !== 'live') return simulated(`se movería al cliente a ${stage}`, { clientId, stage });
+
     const efectiva = await setClientStage(businessId, clientId, stage);
     return { ok: true, status: 'ejecutado', detail: `cliente movido a ${efectiva}`, data: { clientId, stage: efectiva } };
   },
@@ -180,7 +204,7 @@ const moverLifecycle: ActionHandler = {
  */
 const notificar: ActionHandler = {
   kind: 'interno',
-  run: async ({ businessId, params }) => {
+  run: async ({ businessId, params, mode }) => {
     const title = str(params, 'title', 'titulo') ?? 'Automatización';
     const body = str(params, 'body', 'message', 'mensaje', 'texto') ?? 'Se activó una automatización.';
 
@@ -189,6 +213,7 @@ const notificar: ActionHandler = {
       select: { id: true },
     });
     if (admins.length === 0) return { ok: false, status: 'omitido', detail: 'el negocio no tiene admins para notificar' };
+    if (mode !== 'live') return simulated(`se notificaría a ${admins.length} admin(s)`, { count: admins.length });
 
     await Promise.all(
       admins.map((a) =>
@@ -206,6 +231,22 @@ const notificar: ActionHandler = {
   },
 };
 
+/** ¿El teléfono (solo dígitos, sin +) es el de algún cliente del negocio? */
+async function isClientPhone(businessId: string, phone: string): Promise<boolean> {
+  const digits = phone.replace(/\D/g, '');
+  const tail = digits.slice(-8);
+  const rows = await prisma.user.findMany({
+    where: { businessId, phone: { contains: tail } },
+    select: { phone: true },
+    take: 50,
+  });
+  return rows.some((u) => {
+    const d = (u.phone ?? '').replace(/\D/g, '');
+    // Mismo número aunque uno traiga el prefijo de país y el otro no.
+    return d !== '' && (d === digits || d.endsWith(digits) || digits.endsWith(d));
+  });
+}
+
 /**
  * Envía un WhatsApp al cliente. EXTERNO: solo se envía de verdad en `mode:'live'`;
  * en `dry_run` se simula (describe a quién iría, sin mandar nada). Respeta la
@@ -220,6 +261,16 @@ const enviarWhatsapp: ActionHandler = {
     // Destinatario: por teléfono directo o resolviendo el cliente del negocio.
     let phone = str(params, 'to', 'phone', 'telefono');
     const clientId = str(params, 'clientId', 'cliente', 'userId');
+    if (phone) {
+      // Un teléfono directo tiene que ser válido (E.164) Y de un cliente de ESTE
+      // negocio: antes se mandaba a cualquier número que propusiera el modelo o el
+      // body (el negocio se volvía un relé de WhatsApp hacia terceros).
+      phone = cleanPhone(phone);
+      if (!PHONE_RE.test(phone)) return { ok: false, status: 'omitido', detail: 'teléfono de destino inválido' };
+      if (!(await isClientPhone(businessId, phone))) {
+        return { ok: false, status: 'omitido', detail: 'el teléfono no pertenece a un cliente del negocio' };
+      }
+    }
     if (!phone && clientId) {
       const client = await prisma.user.findFirst({
         where: { id: clientId, businessId },
@@ -250,22 +301,38 @@ const enviarWhatsapp: ActionHandler = {
  */
 const crearCliente: ActionHandler = {
   kind: 'interno',
-  run: async ({ businessId, params }) => {
+  run: async ({ businessId, params, mode }) => {
     const name = str(params, 'name', 'nombre');
     if (!name) return { ok: false, status: 'omitido', detail: 'falta el nombre del cliente' };
+    if (name.length > MAX_NAME_LEN) return { ok: false, status: 'omitido', detail: `el nombre supera ${MAX_NAME_LEN} caracteres` };
     const email = str(params, 'email', 'correo');
     if (!email) return { ok: false, status: 'omitido', detail: 'falta el email del cliente' };
-    const phone = str(params, 'phone', 'telefono');
+    if (email.length > MAX_EMAIL_LEN || !EMAIL_RE.test(email)) return { ok: false, status: 'omitido', detail: 'email inválido' };
+    const rawPhone = str(params, 'phone', 'telefono');
+    let phone: string | undefined;
+    if (rawPhone) {
+      phone = cleanPhone(rawPhone);
+      if (!PHONE_RE.test(phone)) return { ok: false, status: 'omitido', detail: 'teléfono inválido' };
+    }
 
     const existing = await prisma.user.findFirst({ where: { businessId, email }, select: { id: true } });
     if (existing) return { ok: false, status: 'omitido', detail: 'ya existe un cliente con ese email' };
+    if (mode !== 'live') return simulated('se crearía el cliente');
 
     const passwordHash = await hashPassword(crypto.randomBytes(32).toString('hex'));
-    const client = await prisma.user.create({
-      data: { name, email, phone: phone ?? null, passwordHash, role: 'CLIENT', businessId },
-      select: { id: true },
-    });
-    return { ok: true, status: 'ejecutado', detail: 'cliente creado', data: { clientId: client.id } };
+    try {
+      const client = await prisma.user.create({
+        data: { name, email, phone: phone ?? null, passwordHash, role: 'CLIENT', businessId },
+        select: { id: true },
+      });
+      return { ok: true, status: 'ejecutado', detail: 'cliente creado', data: { clientId: client.id } };
+    } catch (err) {
+      // Carrera con otro alta del mismo email (unique): mensaje genérico, sin el código de Prisma.
+      if ((err as { code?: string })?.code === 'P2002') {
+        return { ok: false, status: 'omitido', detail: 'ya existe un cliente con esos datos' };
+      }
+      throw err;
+    }
   },
 };
 
@@ -398,9 +465,15 @@ const crearReserva: ActionHandler = {
  */
 const asignarAgente: ActionHandler = {
   kind: 'interno',
-  run: async ({ businessId, params }) => {
+  run: async ({ businessId, params, mode }) => {
     const conversationId = str(params, 'conversationId', 'conversacionId', 'conversacion');
     if (!conversationId) return { ok: false, status: 'omitido', detail: 'falta la conversación a derivar' };
+
+    if (mode !== 'live') {
+      const conv = await prisma.conversation.findFirst({ where: { id: conversationId, businessId }, select: { id: true } });
+      if (!conv) return { ok: false, status: 'omitido', detail: 'conversación no encontrada en el negocio' };
+      return simulated('se derivaría la conversación al equipo', { conversationId });
+    }
 
     // Transición atómica BOT -> ESPERANDO (status + metadata, FOR UPDATE, scopeada
     // por negocio). No resucita una CERRADA ni pisa una que un humano ya atiende.

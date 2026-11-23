@@ -20,12 +20,22 @@ vi.mock('../../services/ai/engine', () => ({
   getAIProviderForBusiness: vi.fn(),
 }));
 
+vi.mock('../../services/ai/usage', () => ({ recordAiSpend: vi.fn(async () => undefined) }));
+vi.mock('../../services/ai/spendCap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/ai/spendCap')>();
+  return { ...actual, enforceSpendCap: vi.fn(async () => undefined) };
+});
+vi.mock('../../services/mrgo/office', () => ({ loadOffice: vi.fn(async () => ({ paused: [], positions: {} })) }));
+
 vi.mock('../../services/actions/executor', () => ({
   executeAction: vi.fn(),
   actionKind: vi.fn(),
 }));
 
 import { getAIProviderForBusiness } from '../../services/ai/engine';
+import { recordAiSpend } from '../../services/ai/usage';
+import { enforceSpendCap, SpendCapError } from '../../services/ai/spendCap';
+import { loadOffice } from '../../services/mrgo/office';
 import { executeAction, actionKind, type ActionResult } from '../../services/actions/executor';
 import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
 
@@ -291,5 +301,72 @@ describe('services/mrgo/agent-loop — resumeAgentLoop', () => {
     expect(res.steps).toHaveLength(0);
     expect(executeAction).not.toHaveBeenCalled();
     expect(generateResponse).not.toHaveBeenCalled();
+  });
+});
+
+describe('services/mrgo/agent-loop: gasto de IA, tope y pausas', () => {
+  const finalJson = '{"action":"final","message":"Listo","emotion":"neutral"}';
+
+  it('registra el gasto de CADA llamada al modelo (recordUsage -> recordAiSpend, fuente mrgo)', async () => {
+    const usage1 = { inputTokens: 100, outputTokens: 20, model: 'claude-sonnet-5' };
+    const usage2 = { inputTokens: 150, outputTokens: 10, model: 'claude-sonnet-5' };
+    const usages = [usage1, usage2];
+    let i = 0;
+    const responses = ['{"action":"tool","tool":"crear_cliente","toolParams":{"name":"Ana","email":"a@x.com"}}', finalJson];
+    const generateResponse = vi.fn(async (_p: string, ctx: { recordUsage?: (u: typeof usage1) => void }) => {
+      ctx.recordUsage?.(usages[i]);
+      return responses[i++];
+    });
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'mock', generateResponse });
+
+    await runAgentLoop({ businessId: 'biz_1', text: 'creá a Ana' });
+
+    expect(recordAiSpend).toHaveBeenCalledTimes(2);
+    expect(recordAiSpend).toHaveBeenNthCalledWith(1, 'biz_1', usage1, 'mrgo');
+    expect(recordAiSpend).toHaveBeenNthCalledWith(2, 'biz_1', usage2, 'mrgo');
+  });
+
+  it('si el proveedor no informa usage no registra gasto', async () => {
+    const { provider } = providerWith([finalJson]);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+    await runAgentLoop({ businessId: 'biz_1', text: 'hola' });
+    expect(recordAiSpend).not.toHaveBeenCalled();
+  });
+
+  it('el tope se chequea ANTES de cada llamada: si se alcanza a mitad del loop, corta con un mensaje claro', async () => {
+    const { provider, generateResponse } = providerWith([
+      '{"action":"tool","tool":"crear_cliente","toolParams":{"name":"Ana","email":"a@x.com"}}',
+      finalJson,
+    ]);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+    // 1ª llamada ok; en la 2ª ya se llegó al tope.
+    mock(enforceSpendCap).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new SpendCapError(25));
+
+    const res = await runAgentLoop({ businessId: 'biz_1', text: 'creá a Ana' });
+
+    expect(generateResponse).toHaveBeenCalledTimes(1);
+    expect(res.stoppedReason).toBe('no_engine');
+    expect(res.finalMessage).toContain('tope mensual de gasto de IA');
+    expect(res.finalMessage).toContain('25');
+    expect(res.steps).toHaveLength(1);
+  });
+
+  it('si el tope ya está alcanzado al resolver el proveedor, devuelve el mensaje del tope (no "motor no disponible")', async () => {
+    mock(getAIProviderForBusiness).mockRejectedValue(new SpendCapError(10));
+
+    const res = await runAgentLoop({ businessId: 'biz_1', text: 'hola' });
+
+    expect(res.stoppedReason).toBe('no_engine');
+    expect(res.finalMessage).toContain('tope mensual de gasto de IA');
+  });
+
+  it('un agente pausado desde la Oficina no corre el loop: se usa otro disponible', async () => {
+    const { provider } = providerWith([finalJson]);
+    mock(getAIProviderForBusiness).mockResolvedValue(provider);
+    mock(loadOffice).mockResolvedValueOnce({ paused: ['ventas'], positions: {} });
+
+    const res = await runAgentLoop({ businessId: 'biz_1', text: 'cobrá', agentKey: 'ventas' });
+
+    expect(res.agent).not.toBe('ventas');
   });
 });

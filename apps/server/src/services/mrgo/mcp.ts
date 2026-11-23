@@ -104,6 +104,7 @@ export async function handleMcpMessage(
   businessId: string,
   msg: JsonRpcRequest,
   defaultMode: ExecMode,
+  allowLive = true,
 ): Promise<JsonRpcResponse | null> {
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return fail(msg?.id ?? null, ERR_INVALID_REQUEST, 'JSON-RPC inválido');
@@ -133,7 +134,8 @@ export async function handleMcpMessage(
       if (typeof name !== 'string') return fail(msg.id, ERR_INVALID_PARAMS, 'Falta el nombre del tool');
       const args = (msg.params?.arguments as Record<string, unknown> | undefined) ?? {};
       const params = (args.params as Record<string, unknown> | undefined) ?? {};
-      const mode = resolveMcpMode(args.execute, defaultMode);
+      // Sin permiso para ejecutar en vivo, todo se simula (ni `execute:true` ni el modo del negocio).
+      const mode = allowLive ? resolveMcpMode(args.execute, defaultMode) : 'dry_run';
 
       const result = await executeAction({ businessId, action: name, params, mode });
       // MCP: el resultado del tool va como `content`. Marcamos isError si no ok.
@@ -157,12 +159,13 @@ export async function handleMcpBody(
   businessId: string,
   body: unknown,
   defaultMode: ExecMode,
+  allowLive = true,
 ): Promise<JsonRpcResponse[]> {
   const messages = Array.isArray(body) ? body : [body];
   const responses: JsonRpcResponse[] = [];
   for (const m of messages) {
     try {
-      const res = await handleMcpMessage(businessId, m as JsonRpcRequest, defaultMode);
+      const res = await handleMcpMessage(businessId, m as JsonRpcRequest, defaultMode, allowLive);
       if (res) responses.push(res);
     } catch (err) {
       responses.push(fail((m as JsonRpcRequest)?.id ?? null, ERR_INTERNAL, err instanceof Error ? err.name : 'error interno'));

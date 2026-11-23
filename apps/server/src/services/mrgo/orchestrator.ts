@@ -11,6 +11,9 @@
  * real de los tools a sus endpoints es un paso posterior (ver TODO abajo).
  */
 import { getAIProviderForBusiness } from '../ai/engine';
+import { enforceSpendCap, SpendCapError } from '../ai/spendCap';
+import { recordAiSpend } from '../ai/usage';
+import type { TokenUsage } from '../ai/provider';
 import {
   AGENT_CATALOG,
   TOOL_CATALOG,
@@ -194,18 +197,31 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestrator
   const userPrompt = channel ? `[canal: ${channel}]\n${text}` : text;
 
   let rawResponse: string;
+  let usage: TokenUsage | undefined;
   try {
     const provider = await providerPromise;
+    // getAIProviderForBusiness ya miró el tope al resolver el proveedor (cacheado);
+    // se vuelve a chequear acá, justo antes de gastar, para que un proveedor en
+    // caché no esquive el tope. SpendCapError cae en el fallback de abajo.
+    await enforceSpendCap(businessId);
     rawResponse = await provider.generateResponse(userPrompt, {
       businessId,
       history: [],
       systemPrompt,
+      recordUsage: (u) => { usage = u; },
     });
-  } catch {
-    // El motor de IA no está disponible (sin key/relay/default) o falló la
-    // generación: degradamos a un routing por defecto en vez de romper.
-    return fallbackDecision(activeAgents, 'el motor de IA no está disponible');
+  } catch (err) {
+    // El motor de IA no está disponible (sin key/relay/default), se alcanzó el tope
+    // mensual de gasto o falló la generación: degradamos a un routing por defecto
+    // en vez de romper.
+    return fallbackDecision(
+      activeAgents,
+      err instanceof SpendCapError ? 'se alcanzó el tope mensual de gasto de IA' : 'el motor de IA no está disponible',
+    );
   }
+
+  // El gasto del ruteo cuenta para el tope mensual (libro de IA, fuente 'mrgo').
+  if (usage) await recordAiSpend(businessId, usage, 'mrgo');
 
   const json = extractJson(rawResponse);
   if (!json) return fallbackDecision(activeAgents, 'la respuesta del modelo no fue un JSON válido');

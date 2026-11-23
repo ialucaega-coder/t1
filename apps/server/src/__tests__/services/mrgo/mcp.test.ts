@@ -146,6 +146,17 @@ describe('handleMcpMessage', () => {
     expect(r.structuredContent.ok).toBe(true);
   });
 
+  it('sin permiso para ejecutar en vivo (allowLive=false) execute:true se ignora y queda en dry_run', async () => {
+    execMock.mockResolvedValue(result());
+    await handleMcpMessage(
+      BIZ,
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'crear_cliente', arguments: { execute: true } } },
+      'live',
+      false,
+    );
+    expect(execMock).toHaveBeenCalledWith(expect.objectContaining({ mode: 'dry_run' }));
+  });
+
   it('tools/call con execute:true fuerza modo live', async () => {
     await handleMcpMessage(
       BIZ,

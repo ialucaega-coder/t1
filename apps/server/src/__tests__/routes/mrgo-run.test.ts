@@ -18,10 +18,26 @@ vi.mock('../../middleware/auth', () => ({
       res.status(401).json({ error: 'No token provided' });
       return;
     }
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    const role = (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN';
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role };
     next();
   },
-  requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireStaff: (req: Request, res: Response, next: NextFunction) => {
+    if (!['ADMIN', 'PROFESSIONAL'].includes(req.auth?.role ?? '')) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    next();
+  },
+  requireRole:
+    (...roles: string[]) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      if (!roles.includes(req.auth?.role ?? '')) {
+        res.status(403).json({ error: 'Insufficient permissions' });
+        return;
+      }
+      next();
+    },
 }));
 
 vi.mock('../../services/mrgo/agent-loop', async (importOriginal) => {
@@ -47,6 +63,11 @@ vi.mock('../../lib/idempotency', async (importOriginal) => {
   return { ...actual, claimIdempotentKey: vi.fn() };
 });
 
+vi.mock('../../services/mrgo/agents', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/agents')>();
+  return { ...actual, loadAgents: vi.fn() };
+});
+
 vi.mock('../../services/mrgo/office', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/mrgo/office')>();
   return { ...actual, loadOffice: vi.fn(), saveOffice: vi.fn() };
@@ -59,6 +80,7 @@ vi.mock('../../services/mrgo/industry', async (importOriginal) => {
 
 import { runAgentLoop, resumeAgentLoop } from '../../services/mrgo/agent-loop';
 import { loadOffice, saveOffice } from '../../services/mrgo/office';
+import { loadAgents, resolveAgents } from '../../services/mrgo/agents';
 import { loadIndustry, saveIndustry } from '../../services/mrgo/industry';
 import { orchestrate } from '../../services/mrgo/orchestrator';
 import { executeAction } from '../../services/actions/executor';
@@ -85,6 +107,9 @@ describe('routes/mrgo — loop agéntico', () => {
     // Por defecto el CEO se queda con la orden (sin delegar en un especialista).
     mock(orchestrate).mockResolvedValue({ nextAgent: 'ceo', emotion: 'neutral', reasoning: '' });
     mock(claimIdempotentKey).mockResolvedValue(true);
+    // Todos los agentes activos y sin restricciones del Studio; sin agentes pausados.
+    mock(loadAgents).mockResolvedValue(resolveAgents([]));
+    mock(loadOffice).mockResolvedValue({ paused: [], positions: {} });
   });
 
   describe('Idempotency-Key (at-most-once en acciones en vivo)', () => {
@@ -448,6 +473,211 @@ describe('routes/mrgo — loop agéntico', () => {
       const res = await request(app).get('/api/mrgo/industry');
       expect(res.status).toBe(401);
       expect(loadIndustry).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('routes/mrgo — permisos, gating y topes (auditoría de seguridad)', () => {
+  const app = buildApp();
+  const as = (role: 'ADMIN' | 'PROFESSIONAL' | 'CLIENT') => ['x-test-role', role] as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(orchestrate).mockResolvedValue({ nextAgent: 'ceo', emotion: 'neutral', reasoning: '' });
+    mock(claimIdempotentKey).mockResolvedValue(true);
+    mock(loadAgents).mockResolvedValue(resolveAgents([]));
+    mock(loadOffice).mockResolvedValue({ paused: [], positions: {} });
+    mock(executeAction).mockResolvedValue({ action: 'x', kind: 'interno', ok: true, status: 'ejecutado', detail: 'ok' });
+  });
+
+  describe('solo staff (A1)', () => {
+    it.each([
+      ['get', '/api/mrgo/agents'],
+      ['get', '/api/mrgo/memory'],
+      ['get', '/api/mrgo/office'],
+      ['post', '/api/mrgo/run'],
+      ['post', '/api/mrgo/confirm'],
+      ['post', '/api/mrgo/orchestrate'],
+    ] as const)('un CLIENT no entra a %s %s (403)', async (method, path) => {
+      const res = await request(app)[method](path).set(...AUTH).set(...as('CLIENT')).send({ text: 'hola', tool: 'enviar_whatsapp' });
+
+      expect(res.status).toBe(403);
+      expect(runAgentLoop).not.toHaveBeenCalled();
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL sí puede consultar y correr /run en dry_run', async () => {
+      mock(runAgentLoop).mockResolvedValue({ agent: 'ceo', emotion: 'neutral', steps: [], finalMessage: 'ok', stoppedReason: 'final' });
+
+      const res = await request(app).post('/api/mrgo/run').set(...AUTH).set(...as('PROFESSIONAL')).send({ text: 'hola' });
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('acciones que cambian el negocio: solo ADMIN (A1)', () => {
+    it('/confirm: un PROFESSIONAL recibe 403 y no se ejecuta nada', async () => {
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).set(...as('PROFESSIONAL')).send({ tool: 'enviar_whatsapp', params: { to: '+5491112345678', body: 'x' } });
+
+      expect(res.status).toBe(403);
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('/orchestrate con execute:true: un PROFESSIONAL recibe 403 (sin ruteo ni ejecución)', async () => {
+      const res = await request(app).post('/api/mrgo/orchestrate').set(...AUTH).set(...as('PROFESSIONAL')).send({ text: 'mandá un whatsapp', execute: true });
+
+      expect(res.status).toBe(403);
+      expect(orchestrate).not.toHaveBeenCalled();
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('/orchestrate SIN execute sí lo puede usar un PROFESSIONAL (solo rutea / simula)', async () => {
+      const res = await request(app).post('/api/mrgo/orchestrate').set(...AUTH).set(...as('PROFESSIONAL')).send({ text: 'hola' });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('PUT /agents y PUT /office: un PROFESSIONAL recibe 403', async () => {
+      const agents = await request(app).put('/api/mrgo/agents').set(...AUTH).set(...as('PROFESSIONAL')).send({ agents: [] });
+      const office = await request(app).put('/api/mrgo/office').set(...AUTH).set(...as('PROFESSIONAL')).send({ paused: [] });
+
+      expect(agents.status).toBe(403);
+      expect(office.status).toBe(403);
+      expect(saveOffice).not.toHaveBeenCalled();
+    });
+
+    it('PUT /office: un ADMIN sí puede', async () => {
+      mock(saveOffice).mockResolvedValue({ paused: [], positions: {} });
+      const res = await request(app).put('/api/mrgo/office').set(...AUTH).set(...as('ADMIN')).send({ paused: [] });
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('/confirm legacy (sin resume) aplica el gating (A3)', () => {
+    it('ejecuta el tool cuando algún agente activo lo tiene permitido', async () => {
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'enviar_whatsapp', params: { clientId: 'c1', body: 'hola' } });
+
+      expect(res.status).toBe(200);
+      expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({ businessId: 'biz_1', action: 'enviar_whatsapp', mode: 'live' }));
+    });
+
+    it('rechaza (403) un tool que el Studio apagó en TODOS los agentes activos', async () => {
+      const noWa = resolveAgents([]).map((a) => ({ ...a, tools: ['crear_cliente'] }));
+      mock(loadAgents).mockResolvedValue(noWa);
+
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'enviar_whatsapp', params: { clientId: 'c1', body: 'hola' } });
+
+      expect(res.status).toBe(403);
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('con agentKey: el tool tiene que estar permitido para ESE agente (soporte no genera links de pago)', async () => {
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'generar_link_pago', agentKey: 'soporte', params: { amount: 100 } });
+
+      expect(res.status).toBe(403);
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (409) si el agente está pausado desde la Oficina', async () => {
+      mock(loadOffice).mockResolvedValue({ paused: ['ventas'], positions: {} });
+
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'generar_link_pago', agentKey: 'ventas', params: { amount: 100 } });
+
+      expect(res.status).toBe(409);
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('con resume también valida el agente (pausado => 409, no reanuda)', async () => {
+      mock(loadOffice).mockResolvedValue({ paused: ['ventas'], positions: {} });
+
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({
+        tool: 'generar_link_pago',
+        params: { amount: 100 },
+        resume: { text: 'cobrá', agentKey: 'ventas' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(resumeAgentLoop).not.toHaveBeenCalled();
+    });
+
+    it('si todos los agentes están pausados no ejecuta nada (409)', async () => {
+      mock(loadOffice).mockResolvedValue({ paused: resolveAgents([]).map((a) => a.key), positions: {} });
+
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'crear_cliente', params: {} });
+
+      expect(res.status).toBe(409);
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('/orchestrate con execute:true no ejecuta externas a ciegas (A3)', () => {
+    it('una acción EXTERNA queda pendiente de confirmación (como /run), sin ejecutarse', async () => {
+      mock(orchestrate).mockResolvedValue({
+        nextAgent: 'ventas', emotion: 'neutral', reasoning: 'r', tool: 'enviar_whatsapp', toolParams: { clientId: 'c1', body: 'hola' },
+      });
+
+      const res = await request(app).post('/api/mrgo/orchestrate').set(...AUTH).send({ text: 'avisale', execute: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.stoppedReason).toBe('needs_confirmation');
+      expect(res.body.pending).toMatchObject({ tool: 'enviar_whatsapp', params: { clientId: 'c1', body: 'hola' } });
+      expect(res.body.execution).toBeNull();
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('una acción INTERNA sí se ejecuta en vivo', async () => {
+      mock(orchestrate).mockResolvedValue({
+        nextAgent: 'ceo', emotion: 'neutral', reasoning: 'r', tool: 'crear_cliente', toolParams: { title: 'x' },
+      });
+
+      const res = await request(app).post('/api/mrgo/orchestrate').set(...AUTH).send({ text: 'avisá al equipo', execute: true });
+
+      expect(res.status).toBe(200);
+      expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'crear_cliente', mode: 'live' }));
+      expect(res.body.pending).toBeUndefined();
+    });
+
+    it('sin execute todo va en dry_run (incluidas las internas)', async () => {
+      mock(orchestrate).mockResolvedValue({
+        nextAgent: 'ceo', emotion: 'neutral', reasoning: 'r', tool: 'crear_cliente', toolParams: {},
+      });
+
+      await request(app).post('/api/mrgo/orchestrate').set(...AUTH).send({ text: 'avisá' });
+
+      expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'crear_cliente', mode: 'dry_run' }));
+    });
+  });
+
+  describe('topes de tamaño de params/data (M1)', () => {
+    const many = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`k${i}`, 1]));
+    const huge = { texto: 'x'.repeat(9000) };
+
+    it('/confirm rechaza (400) params con más de 20 claves o de más de 8 KB', async () => {
+      const keys = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'crear_cliente', params: many });
+      const bytes = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'crear_cliente', params: huge });
+
+      expect(keys.status).toBe(400);
+      expect(bytes.status).toBe(400);
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it('/confirm acepta params dentro del tope', async () => {
+      const res = await request(app).post('/api/mrgo/confirm').set(...AUTH).send({ tool: 'crear_cliente', params: { title: 'ok' } });
+      expect(res.status).toBe(200);
+    });
+
+    it('los steps de resume también están acotados (params y result.data)', async () => {
+      const step = (over: Record<string, unknown>) => ({
+        tool: 'crear_cliente', params: {}, result: { status: 'ejecutado', detail: 'ok', ...over },
+      });
+      const body = (steps: unknown[]) => ({ tool: 'crear_cliente', params: {}, resume: { text: 't', agentKey: 'ceo', steps } });
+
+      const badParams = await request(app).post('/api/mrgo/confirm').set(...AUTH).send(body([{ ...step({}), params: huge }]));
+      const badData = await request(app).post('/api/mrgo/confirm').set(...AUTH).send(body([step({ data: many })]));
+
+      expect(badParams.status).toBe(400);
+      expect(badData.status).toBe(400);
+      expect(resumeAgentLoop).not.toHaveBeenCalled();
     });
   });
 });
