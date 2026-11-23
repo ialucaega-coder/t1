@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { httpClient } from '@/lib/api/http-client';
 import { todayArgentinaKey } from '@/lib/date-range';
 import {
@@ -23,11 +23,64 @@ type DrawerStatus = 'closed' | 'open' | 'reconciling';
 
 interface CashMovement {
   id: string;
-  type: 'OPENING' | 'SALE' | 'WITHDRAWAL' | 'DEPOSIT' | 'CLOSING';
+  type: 'OPENING' | 'SALE' | 'REFUND' | 'WITHDRAWAL' | 'DEPOSIT' | 'CLOSING';
+  /** Con signo: las devoluciones y retiros son negativos. */
   amount: number;
   notes: string;
   user: string;
   createdAt: string;
+  /** Método de cobro de las ventas y devoluciones del sistema (CASH, CARD, TRANSFER, QR). */
+  method?: string;
+}
+
+const METHOD_LABELS: Record<string, string> = {
+  CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', QR: 'QR', OTHER: 'Otro',
+};
+
+/** Tamaño de página que acepta el server (máx. 100) y tope de páginas por seguridad (3000 movimientos). */
+const PAGE_SIZE = 100;
+const MAX_PAGES = 30;
+
+/**
+ * Pasa un movimiento del sistema (Transaction) al modelo de la caja:
+ *  - VENTA y COBRO PARCIAL suman; DEVOLUCIÓN (REFUND) resta.
+ *  - Una nota "Retiro"/"Ingreso" en un movimiento que no es venta es un retiro (resta) o
+ *    un ingreso de efectivo (suma).
+ * Antes todo lo que no era venta se tomaba como venta positiva (una devolución sumaba).
+ */
+function toCashMovement(t: TransactionRecord): CashMovement {
+  const raw = Math.abs(Number(t.amount));
+  const notes = t.notes || '';
+  const base = { id: t.id, user: t.reference || 'Sistema', createdAt: t.createdAt, method: t.paymentMethod };
+  const methodLabel = METHOD_LABELS[t.paymentMethod] ?? t.paymentMethod;
+
+  if (t.type === 'REFUND') {
+    return { ...base, type: 'REFUND', amount: -raw, notes: notes || `Devolución · ${methodLabel}` };
+  }
+  if (t.type !== 'SALE' && t.type !== 'PARTIAL') {
+    if (notes.includes('Retiro')) return { ...base, type: 'WITHDRAWAL', amount: -raw, notes };
+    if (notes.includes('Ingreso')) return { ...base, type: 'DEPOSIT', amount: raw, notes };
+  }
+  const label = t.type === 'PARTIAL' ? 'Cobro parcial' : 'Venta';
+  return { ...base, type: 'SALE', amount: raw, notes: notes || `${label} · ${methodLabel}` };
+}
+
+/** Trae TODOS los movimientos del día paginando (el server acepta máx. 100 por página). */
+async function fetchDayTransactions(day: string): Promise<{ rows: TransactionRecord[]; truncated: boolean }> {
+  const rows: TransactionRecord[] = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const res = await httpClient.get<{ data: TransactionRecord[]; totalPages?: number }>(
+      `/transactions?from=${day}&to=${day}&page=${page}&pageSize=${PAGE_SIZE}`
+    );
+    rows.push(...(res.data || []));
+    if (page >= (res.totalPages ?? 1)) return { rows, truncated: false };
+  }
+  return { rows, truncated: true };
+}
+
+/** Un cobro o devolución que NO es en efectivo no entra al cajón. */
+function isNonCash(m: CashMovement): boolean {
+  return (m.type === 'SALE' || m.type === 'REFUND') && m.method !== undefined && m.method !== 'CASH';
 }
 
 const DENOMINATIONS = [
@@ -46,7 +99,14 @@ const DENOMINATIONS = [
 export function CashDrawer() {
   const [status, setStatus] = useState<DrawerStatus>('closed');
   const [openingBalance, setOpeningBalance] = useState('');
-  const [movements, setMovements] = useState<CashMovement[]>([]);
+  // Movimientos que vienen del sistema (ventas del día) y movimientos locales de la
+  // caja (apertura, retiros, ingresos, cierre). Separados para que la carga del
+  // servidor, que llega async, nunca pise lo que ya se cargó a mano.
+  const [serverMovements, setServerMovements] = useState<CashMovement[]>([]);
+  const [localMovements, setLocalMovements] = useState<CashMovement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [counts, setCounts] = useState<Record<number, number>>({});
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawNote, setWithdrawNote] = useState('');
@@ -61,21 +121,19 @@ export function CashDrawer() {
   }, []);
 
   async function loadMovements() {
+    setLoading(true);
+    setLoadError(null);
     try {
       // Día de hoy en hora argentina (no UTC): de 21:00 a 24:00 AR el UTC ya es "mañana".
-      const today = todayArgentinaKey();
-      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&to=${today}&pageSize=100`);
-      const txs: CashMovement[] = (res.data || []).map((t: TransactionRecord) => ({
-        id: t.id,
-        type: (t.type === 'SALE' ? 'SALE' : (t.notes?.includes('Retiro') ? 'WITHDRAWAL' : t.notes?.includes('Ingreso') ? 'DEPOSIT' : 'SALE')) as CashMovement['type'],
-        amount: Number(t.amount),
-        notes: t.notes || '',
-        user: t.reference || 'Sistema',
-        createdAt: t.createdAt,
-      }));
-      setMovements(txs);
-    } catch {
-      setMovements([]);
+      const { rows, truncated: cut } = await fetchDayTransactions(todayArgentinaKey());
+      setServerMovements(rows.map(toCashMovement));
+      setTruncated(cut);
+    } catch (err) {
+      // No mostramos $0 como si fuera el saldo real: avisamos el error y se puede reintentar.
+      setServerMovements([]);
+      setLoadError(err instanceof Error && err.message ? err.message : 'No se pudieron cargar las ventas de hoy');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -83,7 +141,7 @@ export function CashDrawer() {
     const amount = Number(openingBalance) || 0;
     setStatus('open');
     setOpenedAt(new Date());
-    setMovements((prev) => [{
+    setLocalMovements((prev) => [{
       id: crypto.randomUUID(),
       type: 'OPENING',
       amount,
@@ -96,7 +154,7 @@ export function CashDrawer() {
   function handleWithdraw() {
     const amt = Number(withdrawAmount);
     if (amt <= 0) return;
-    setMovements((prev) => [{
+    setLocalMovements((prev) => [{
       id: crypto.randomUUID(),
       type: 'WITHDRAWAL',
       amount: -amt,
@@ -112,7 +170,7 @@ export function CashDrawer() {
   function handleDeposit() {
     const amt = Number(depositAmount);
     if (amt <= 0) return;
-    setMovements((prev) => [{
+    setLocalMovements((prev) => [{
       id: crypto.randomUUID(),
       type: 'DEPOSIT',
       amount: amt,
@@ -132,7 +190,7 @@ export function CashDrawer() {
 
   function finishReconciliation() {
     const countedTotal = DENOMINATIONS.reduce((s, d) => s + d.value * (counts[d.value] || 0), 0) + (counts[0] || 0);
-    setMovements((prev) => [{
+    setLocalMovements((prev) => [{
       id: crypto.randomUUID(),
       type: 'CLOSING',
       amount: countedTotal,
@@ -145,12 +203,30 @@ export function CashDrawer() {
     setOpeningBalance('');
   }
 
-  const expectedBalance = movements.reduce((s, m) => s + m.amount, 0);
+  const movements = useMemo(() => [...localMovements, ...serverMovements], [localMovements, serverMovements]);
+
+  // Efectivo esperado en el cajón: apertura + ventas en EFECTIVO - devoluciones en efectivo
+  // +/- ingresos y retiros. Los cobros con tarjeta, transferencia o QR no entran al cajón.
+  const expectedBalance = movements.reduce((s, m) => s + (isNonCash(m) ? 0 : m.amount), 0);
   const countedTotal = DENOMINATIONS.reduce((s, d) => s + d.value * (counts[d.value] || 0), 0) + (counts[0] || 0);
   const difference = countedTotal - expectedBalance;
 
-  const salesCount = movements.filter((m) => m.type === 'SALE').length;
-  const salesTotal = movements.filter((m) => m.type === 'SALE').reduce((s, m) => s + m.amount, 0);
+  const sales = movements.filter((m) => m.type === 'SALE');
+  const salesCount = sales.length;
+  const salesTotal = sales.reduce((s, m) => s + m.amount, 0);
+  const refundsTotal = movements.filter((m) => m.type === 'REFUND').reduce((s, m) => s + Math.abs(m.amount), 0);
+  // Medios que no son efectivo (neto de devoluciones), aparte del cajón.
+  const nonCash = movements.filter(isNonCash);
+  const nonCashTotal = nonCash.reduce((s, m) => s + m.amount, 0);
+  const nonCashByMethod = Object.entries(
+    nonCash.reduce<Record<string, number>>((acc, m) => {
+      const k = m.method ?? 'OTHER';
+      acc[k] = (acc[k] ?? 0) + m.amount;
+      return acc;
+    }, {})
+  );
+  const NA = '—';
+  const money = (n: number) => `$${n.toLocaleString('es-AR')}`;
   const withdrawals = movements.filter((m) => m.type === 'WITHDRAWAL').reduce((s, m) => s + Math.abs(m.amount), 0);
   const deposits = movements.filter((m) => m.type === 'DEPOSIT').reduce((s, m) => s + m.amount, 0);
 
@@ -164,6 +240,25 @@ export function CashDrawer() {
           vienen del sistema.
         </p>
       </div>
+
+      {loadError && (
+        <div role="alert" className="flex items-center justify-between gap-3 bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+          <p className="text-xs text-red-400">
+            No se pudieron cargar las ventas de hoy ({loadError}). Los montos del sistema no están disponibles hasta reintentar.
+          </p>
+          <button onClick={loadMovements} disabled={loading} className="btn-secondary text-xs shrink-0 disabled:opacity-50">
+            {loading ? 'Reintentando...' : 'Reintentar'}
+          </button>
+        </div>
+      )}
+      {truncated && !loadError && (
+        <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5">
+          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-400">
+            Hay más de {PAGE_SIZE * MAX_PAGES} movimientos hoy: el saldo esperado puede estar incompleto.
+          </p>
+        </div>
+      )}
 
       {/* Estado de caja */}
       <div className="flex gap-4 flex-wrap">
@@ -187,15 +282,32 @@ export function CashDrawer() {
             </div>
           )}
           <p className="text-2xl font-bold text-white font-mono mt-2">
-            ${expectedBalance.toLocaleString('es-AR')}
+            {loadError ? NA : money(expectedBalance)}
           </p>
           <p className="text-[10px] text-slate-500 uppercase font-mono">Saldo esperado</p>
+          <p className="text-[10px] text-slate-600 mt-1">Solo efectivo: apertura, ventas en efectivo, ingresos y retiros.</p>
         </div>
 
         <div className="card flex-1 min-w-[150px]">
           <p className="text-[10px] text-slate-500 uppercase font-mono">Ventas hoy</p>
-          <p className="text-xl font-bold text-green-400 font-mono">{salesCount}</p>
-          <p className="text-sm text-slate-400 font-mono">${salesTotal.toLocaleString('es-AR')}</p>
+          <p className="text-xl font-bold text-green-400 font-mono">{loadError ? NA : salesCount}</p>
+          <p className="text-sm text-slate-400 font-mono">{loadError ? NA : money(salesTotal)}</p>
+          <p className="text-[10px] text-slate-600">Todos los medios de pago</p>
+        </div>
+
+        <div className="card flex-1 min-w-[150px]">
+          <p className="text-[10px] text-slate-500 uppercase font-mono">Otros medios (no efectivo)</p>
+          <p className="text-xl font-bold text-purple-400 font-mono">{loadError ? NA : money(nonCashTotal)}</p>
+          <p className="text-[10px] text-slate-500">
+            {loadError || nonCashByMethod.length === 0
+              ? 'No suman al efectivo del cajón'
+              : nonCashByMethod.map(([k, v]) => `${METHOD_LABELS[k] ?? k} ${money(v)}`).join(' · ')}
+          </p>
+        </div>
+
+        <div className="card flex-1 min-w-[150px]">
+          <p className="text-[10px] text-slate-500 uppercase font-mono">Devoluciones</p>
+          <p className="text-xl font-bold text-orange-400 font-mono">{loadError ? NA : money(refundsTotal)}</p>
         </div>
 
         <div className="card flex-1 min-w-[150px]">
@@ -243,7 +355,12 @@ export function CashDrawer() {
             <Plus className="h-3.5 w-3.5" /> Ingreso
           </button>
           <div className="flex-1" />
-          <button onClick={startReconciliation} className="btn-primary text-xs">
+          <button
+            onClick={startReconciliation}
+            disabled={loading || loadError !== null}
+            title={loadError ? 'Reintentá la carga de ventas antes de arquear' : undefined}
+            className="btn-primary text-xs disabled:opacity-40"
+          >
             <Calculator className="h-3.5 w-3.5" /> Cerrar y arquear
           </button>
         </div>
@@ -378,17 +495,19 @@ export function CashDrawer() {
                     m.type === 'OPENING' ? 'bg-blue-400' :
                     m.type === 'SALE' ? 'bg-green-400' :
                     m.type === 'WITHDRAWAL' ? 'bg-red-400' :
+                    m.type === 'REFUND' ? 'bg-orange-400' :
                     m.type === 'DEPOSIT' ? 'bg-purple-400' :
                     'bg-amber-400'
                   }`} />
                   <span className="text-xs text-slate-300">{m.notes}</span>
+                  {isNonCash(m) && <span className="text-[9px] text-slate-500 border border-slate-700 rounded px-1">no suma al cajón</span>}
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-[10px] text-slate-500 font-mono">
                     {new Date(m.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                   </span>
                   <span className={`text-xs font-mono font-medium ${m.amount >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {m.amount >= 0 ? '+' : ''}${Math.abs(m.amount).toLocaleString('es-AR')}
+                    {m.amount >= 0 ? '+' : '-'}${Math.abs(m.amount).toLocaleString('es-AR')}
                   </span>
                 </div>
               </div>

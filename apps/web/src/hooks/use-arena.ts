@@ -17,10 +17,12 @@ export interface UseArenaResult {
   error: string | null;
   refetch: () => void;
   createBuilder: (data: CreateBuilderInput) => Promise<void>;
+  updateBuilder: (id: string, data: Partial<CreateBuilderInput>) => Promise<void>;
+  deleteBuilder: (id: string) => Promise<void>;
   voteIdea: (id: string) => Promise<void>;
   voteBuilder: (id: string) => Promise<void>;
   createIdea: (data: CreateIdeaInput) => Promise<void>;
-  sendChat: (message: string, conversationId?: string) => Promise<ArenaChatResponse>;
+  sendChat: (message: string, conversationId?: string, builderId?: string) => Promise<ArenaChatResponse>;
 }
 
 export function useArena(): UseArenaResult {
@@ -67,6 +69,16 @@ export function useArena(): UseArenaResult {
     refetch();
   }, [refetch]);
 
+  const updateBuilder = useCallback(async (id: string, data: Partial<CreateBuilderInput>) => {
+    await arenaApi.updateBuilder(id, data);
+    refetch();
+  }, [refetch]);
+
+  const deleteBuilder = useCallback(async (id: string) => {
+    await arenaApi.deleteBuilder(id);
+    refetch();
+  }, [refetch]);
+
   const voteIdea = useCallback(async (id: string) => {
     await arenaApi.voteIdea(id);
     refetch();
@@ -82,9 +94,10 @@ export function useArena(): UseArenaResult {
     refetch();
   }, [refetch]);
 
-  const sendChat = useCallback(async (message: string, conversationId?: string) => {
-    return arenaApi.sendChat(message, conversationId);
+  const sendChat = useCallback(async (message: string, conversationId?: string, builderId?: string) => {
+    // Sin builder se mantiene la llamada de siempre (message, conversationId).
+    return builderId ? arenaApi.sendChat(message, conversationId, builderId) : arenaApi.sendChat(message, conversationId);
   }, []);
 
-  return { builders, ideas, isLoading, error, refetch, createBuilder, voteIdea, voteBuilder, createIdea, sendChat };
+  return { builders, ideas, isLoading, error, refetch, createBuilder, updateBuilder, deleteBuilder, voteIdea, voteBuilder, createIdea, sendChat };
 }

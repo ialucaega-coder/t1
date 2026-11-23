@@ -114,6 +114,110 @@ describe('components/pos/CashDrawer', () => {
     expect(url).not.toContain('2026-11-17');
   });
 
+  describe('movimientos del sistema', () => {
+    const get = httpClient.get as ReturnType<typeof vi.fn>;
+    const tx = (over: Record<string, unknown>) => ({
+      id: `t${Math.random()}`, amount: 0, type: 'SALE', paymentMethod: 'CASH', reference: null,
+      notes: null, createdAt: '2026-11-16T15:00:00.000Z', orderId: null, ...over,
+    });
+
+    it('una devolución (REFUND) RESTA del saldo esperado y de las ventas no la cuentan', async () => {
+      get.mockResolvedValueOnce({
+        data: [tx({ amount: 1000, type: 'SALE' }), tx({ amount: 300, type: 'REFUND' })],
+      });
+      render(<CashDrawer />);
+      await waitFor(() => expect(saldoEsperado()).toBe('$700'));
+      expect(valorTrasEtiqueta('Devoluciones')).toBe('$300');
+      // Ventas hoy: 1 venta de $1.000 (la devolución no es una venta).
+      expect(screen.getByText('Ventas hoy').nextElementSibling?.textContent).toBe('1');
+    });
+
+    it('un cobro parcial suma como cobro', async () => {
+      get.mockResolvedValueOnce({ data: [tx({ amount: 400, type: 'PARTIAL' })] });
+      render(<CashDrawer />);
+      await waitFor(() => expect(saldoEsperado()).toBe('$400'));
+    });
+
+    it('el saldo esperado solo suma ventas en EFECTIVO; el resto se muestra aparte', async () => {
+      get.mockResolvedValueOnce({
+        data: [
+          tx({ amount: 1000, paymentMethod: 'CASH' }),
+          tx({ amount: 2000, paymentMethod: 'CARD' }),
+          tx({ amount: 500, paymentMethod: 'QR' }),
+          tx({ amount: 100, paymentMethod: 'CARD', type: 'REFUND' }),
+        ],
+      });
+      render(<CashDrawer />);
+      await waitFor(() => expect(saldoEsperado()).toBe('$1.000'));
+      // Otros medios, neto de devoluciones: 2000 + 500 - 100 = 2400, con desglose por método.
+      expect(valorTrasEtiqueta('Otros medios (no efectivo)')).toBe('$2.400');
+      expect(screen.getByText(/Tarjeta \$1\.900 · QR \$500/)).toBeInTheDocument();
+      // Las ventas del día cuentan todos los medios: 1000 + 2000 + 500.
+      expect(screen.getByText('Ventas hoy').nextElementSibling?.nextElementSibling?.textContent).toBe('$3.500');
+    });
+
+    it('un retiro del sistema resta y un ingreso suma (antes sumaban como venta)', async () => {
+      get.mockResolvedValueOnce({
+        data: [
+          tx({ amount: 1000 }),
+          tx({ amount: 200, type: 'REFUND', notes: 'Retiro de caja' }),
+          tx({ amount: 50, type: 'OTHER', notes: 'Retiro por delivery' }),
+          tx({ amount: 80, type: 'OTHER', notes: 'Ingreso de cambio' }),
+        ],
+      });
+      render(<CashDrawer />);
+      // 1000 - 200 (refund) - 50 (retiro) + 80 (ingreso) = 830
+      await waitFor(() => expect(saldoEsperado()).toBe('$830'));
+      expect(valorTrasEtiqueta('Retiros')).toBe('$50');
+      expect(valorTrasEtiqueta('Ingresos extra')).toBe('$80');
+    });
+
+    it('pagina hasta cubrir el día con pageSize <= 100 (no se queda con las primeras 100)', async () => {
+      get
+        .mockResolvedValueOnce({ data: [tx({ amount: 100 })], totalPages: 3 })
+        .mockResolvedValueOnce({ data: [tx({ amount: 200 })], totalPages: 3 })
+        .mockResolvedValueOnce({ data: [tx({ amount: 300 })], totalPages: 3 });
+      render(<CashDrawer />);
+      await waitFor(() => expect(saldoEsperado()).toBe('$600'));
+      expect(get).toHaveBeenCalledTimes(3);
+      const urls = get.mock.calls.map((c) => c[0] as string);
+      expect(urls.map((u) => new URLSearchParams(u.split('?')[1]).get('page'))).toEqual(['1', '2', '3']);
+      for (const u of urls) expect(Number(new URLSearchParams(u.split('?')[1]).get('pageSize'))).toBeLessThanOrEqual(100);
+    });
+
+    it('si la carga falla muestra el error con Reintentar (no $0) y al reintentar se recupera', async () => {
+      get.mockRejectedValueOnce(new Error('boom de red')).mockResolvedValueOnce({ data: [tx({ amount: 900 })] });
+      render(<CashDrawer />);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('boom de red');
+      expect(saldoEsperado()).toBe('—');
+      expect(saldoEsperado()).not.toContain('$0');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+      await waitFor(() => expect(saldoEsperado()).toBe('$900'));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('con error de carga no se puede arquear (el esperado no es confiable)', async () => {
+      get.mockRejectedValueOnce(new Error('caído'));
+      render(<CashDrawer />);
+      await screen.findByRole('alert');
+      fireEvent.click(screen.getByRole('button', { name: /Abrir/ }));
+      await screen.findByText('CAJA ABIERTA');
+      expect(screen.getByRole('button', { name: /Cerrar y arquear/ })).toBeDisabled();
+    });
+
+    it('una carga tardía no pisa la apertura de caja ya hecha', async () => {
+      let resolve!: (v: unknown) => void;
+      get.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+      render(<CashDrawer />);
+      await abrirCaja('500');
+      resolve({ data: [tx({ amount: 100 })] });
+      await waitFor(() => expect(saldoEsperado()).toBe('$600'));
+    });
+  });
+
   it('avisa que la caja se guarda solo en este dispositivo', async () => {
     render(<CashDrawer />);
     expect(await screen.findByText(/La caja se guarda solo en este dispositivo/)).toBeInTheDocument();

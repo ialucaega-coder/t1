@@ -39,6 +39,13 @@ export function voteBuilder(id: string) {
   return httpClient.post<ArenaBuilder>(`/arena/builders/${id}/vote`, {});
 }
 
-export function sendChat(message: string, conversationId?: string) {
-  return httpClient.post<ArenaChatResponse>('/arena/chat', conversationId ? { message, conversationId } : { message });
+/**
+ * Chat de prueba. Con `builderId` el server suma el systemPrompt de ese builder (de este
+ * negocio) al del bot; sin él prueba el bot tal cual está configurado.
+ */
+export function sendChat(message: string, conversationId?: string, builderId?: string) {
+  const body: { message: string; conversationId?: string; builderId?: string } = { message };
+  if (conversationId) body.conversationId = conversationId;
+  if (builderId) body.builderId = builderId;
+  return httpClient.post<ArenaChatResponse>('/arena/chat', body);
 }

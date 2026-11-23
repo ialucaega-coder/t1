@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Clock, Zap, Trophy, Github, ThumbsUp, Upload, Code2, Lightbulb, X } from 'lucide-react';
+import { Send, Bot, User, Clock, Zap, Trophy, Github, ThumbsUp, Upload, Code2, Lightbulb, X, Pencil, Trash2 } from 'lucide-react';
 import { useArena } from '@/hooks/use-arena';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { useToast } from '@/components/common/Toast';
 import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 import type { ArenaBuilder, ArenaIdea } from '@/types/arena';
@@ -36,7 +37,7 @@ const prizes = [
 ];
 
 export default function ArenaPage() {
-  const { builders, ideas, isLoading, error, refetch, voteIdea, voteBuilder, createBuilder, createIdea, sendChat } = useArena();
+  const { builders, ideas, isLoading, error, refetch, voteIdea, voteBuilder, createBuilder, updateBuilder, deleteBuilder, createIdea, sendChat } = useArena();
   const { toast } = useToast();
   const [tab, setTab] = useState<Tab>('chat');
   // Proponer idea (antes el botón "Proponer idea" no hacía nada).
@@ -56,6 +57,51 @@ export default function ArenaPage() {
   const [builderDesc, setBuilderDesc] = useState('');
   const [builderPrompt, setBuilderPrompt] = useState('');
   const [submittingBuilder, setSubmittingBuilder] = useState(false);
+  // Editar / borrar una contribución (el server lo permite solo a ADMIN).
+  const [editingBuilder, setEditingBuilder] = useState<ArenaBuilder | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ArenaBuilder | null>(null);
+  const [deletingBuilder, setDeletingBuilder] = useState(false);
+  // Builder con el que se prueba el bot en el chat ('' = el bot tal cual está configurado).
+  const [chatBuilderId, setChatBuilderId] = useState('');
+
+  /** Mensaje del server si lo hay; el 403 en inglés se traduce a algo entendible. */
+  function errorText(err: unknown, fallback: string) {
+    const msg = err instanceof Error ? err.message.trim() : '';
+    if (!msg) return fallback;
+    if (msg === 'Insufficient permissions') return 'Solo un administrador puede hacer esto';
+    return msg;
+  }
+
+  function openCreateBuilder() {
+    setEditingBuilder(null);
+    setBuilderName(''); setBuilderTitle(''); setBuilderDesc(''); setBuilderPrompt('');
+    setShowBuilderForm(true);
+  }
+
+  function openEditBuilder(b: ArenaBuilder) {
+    setEditingBuilder(b);
+    setBuilderName(b.name || '');
+    setBuilderTitle(b.title || '');
+    setBuilderDesc(b.description || '');
+    setBuilderPrompt(b.systemPrompt || '');
+    setShowBuilderForm(true);
+  }
+
+  async function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    setDeletingBuilder(true);
+    try {
+      await deleteBuilder(pendingDelete.id);
+      // Si el chat estaba probando justo este builder, vuelve al bot por defecto.
+      if (chatBuilderId === pendingDelete.id) selectChatBuilder('');
+      toast({ type: 'success', message: 'Contribución eliminada' });
+    } catch (err) {
+      toast({ type: 'error', message: errorText(err, 'No se pudo eliminar la contribución') });
+    } finally {
+      setDeletingBuilder(false);
+      setPendingDelete(null);
+    }
+  }
 
   async function handleVoteBuilder(id: string) {
     setVotingId(id);
@@ -85,18 +131,29 @@ export default function ArenaPage() {
     }
     setSubmittingBuilder(true);
     try {
-      await createBuilder({
-        name,
-        title,
-        description: builderDesc.trim(),
-        systemPrompt: builderPrompt.trim(),
-        model: 'claude-sonnet-5',
-      });
-      toast({ type: 'success', message: 'Contribución subida — ¡gracias por participar!' });
+      if (editingBuilder) {
+        await updateBuilder(editingBuilder.id, {
+          name,
+          title,
+          description: builderDesc.trim(),
+          systemPrompt: builderPrompt.trim(),
+        });
+        toast({ type: 'success', message: 'Contribución actualizada' });
+      } else {
+        await createBuilder({
+          name,
+          title,
+          description: builderDesc.trim(),
+          systemPrompt: builderPrompt.trim(),
+          model: 'claude-sonnet-5',
+        });
+        toast({ type: 'success', message: 'Contribución subida — ¡gracias por participar!' });
+      }
       setBuilderName(''); setBuilderTitle(''); setBuilderDesc(''); setBuilderPrompt('');
+      setEditingBuilder(null);
       setShowBuilderForm(false);
     } catch (err) {
-      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo subir la contribución' });
+      toast({ type: 'error', message: errorText(err, editingBuilder ? 'No se pudo actualizar la contribución' : 'No se pudo subir la contribución') });
     } finally {
       setSubmittingBuilder(false);
     }
@@ -131,6 +188,13 @@ export default function ArenaPage() {
   const [lastResponseTime, setLastResponseTime] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Cambiar de builder cambia el prompt del bot: la charla anterior ya no corresponde,
+  // así que se empieza una conversación nueva (sin conversationId).
+  function selectChatBuilder(id: string) {
+    setChatBuilderId(id);
+    setConversationId(undefined);
+  }
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const sendMessage = async (text: string) => {
@@ -141,7 +205,10 @@ export default function ArenaPage() {
     setIsTyping(true);
     const start = Date.now();
     try {
-      const res = await sendChat(text.trim(), conversationId);
+      // Con un builder elegido, el server suma su systemPrompt al del bot.
+      const res = chatBuilderId
+        ? await sendChat(text.trim(), conversationId, chatBuilderId)
+        : await sendChat(text.trim(), conversationId);
       const elapsed = Date.now() - start;
       if (res?.conversationId) setConversationId(res.conversationId);
       if (!res?.reply) throw new Error('El bot no devolvió una respuesta');
@@ -179,6 +246,21 @@ export default function ArenaPage() {
       {tab === 'chat' && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-1 space-y-3">
+            <div>
+              <label htmlFor="arena-chat-builder" className="mono-label block mb-1.5">PROBAR CON</label>
+              <select
+                id="arena-chat-builder"
+                value={chatBuilderId}
+                onChange={(e) => selectChatBuilder(e.target.value)}
+                disabled={isTyping}
+                className="input w-full text-xs"
+              >
+                <option value="">Mi bot (sin builder)</option>
+                {builders.map((b: ArenaBuilder) => (
+                  <option key={b.id} value={b.id}>{b.title || b.name}</option>
+                ))}
+              </select>
+            </div>
             <p className="mono-label">ESCENARIOS DE PRUEBA</p>
             <div className="space-y-2">
               {testScenarios.map((s) => (
@@ -266,7 +348,7 @@ export default function ArenaPage() {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <p className="mono-label">PODIO</p>
-                  <button onClick={() => setShowBuilderForm(true)} className="btn-primary text-xs"><Upload className="h-3.5 w-3.5" /> Subir contribución</button>
+                  <button onClick={openCreateBuilder} className="btn-primary text-xs"><Upload className="h-3.5 w-3.5" /> Subir contribución</button>
                 </div>
                 {podio.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -285,7 +367,11 @@ export default function ArenaPage() {
                             </div>
                             <p className="text-xs text-white">{entry.name || 'Anónimo'}</p>
                           </div>
-                          <button onClick={() => handleVoteBuilder(entry.id)} disabled={votingId === entry.id} className="flex items-center gap-1 text-slate-400 hover:text-brand-400 disabled:opacity-50"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm font-bold">{entry.votes}</span></button>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => openEditBuilder(entry)} aria-label={`Editar ${entry.title}`} title="Editar" className="p-1 rounded text-slate-500 hover:text-white hover:bg-surface-100"><Pencil className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => setPendingDelete(entry)} aria-label={`Eliminar ${entry.title}`} title="Eliminar" className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => handleVoteBuilder(entry.id)} disabled={votingId === entry.id} className="flex items-center gap-1 text-slate-400 hover:text-brand-400 disabled:opacity-50"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm font-bold">{entry.votes}</span></button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -306,6 +392,8 @@ export default function ArenaPage() {
                           {(entry.name || 'U').split(' ').map((n: string) => n[0]).join('')}
                         </div>
                         <div className="flex-1"><p className="text-sm font-medium text-white">{entry.title}</p><p className="text-xs text-slate-500">por {entry.name || 'Anónimo'}</p></div>
+                        <button onClick={() => openEditBuilder(entry)} aria-label={`Editar ${entry.title}`} title="Editar" className="p-1 rounded text-slate-500 hover:text-white hover:bg-surface-100"><Pencil className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => setPendingDelete(entry)} aria-label={`Eliminar ${entry.title}`} title="Eliminar" className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /></button>
                         <button onClick={() => handleVoteBuilder(entry.id)} disabled={votingId === entry.id} className="flex items-center gap-1 text-slate-400 hover:text-brand-400 disabled:opacity-50"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm">{entry.votes}</span></button>
                       </div>
                     ))}
@@ -382,11 +470,11 @@ export default function ArenaPage() {
 
       {showBuilderForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={submittingBuilder ? undefined : () => setShowBuilderForm(false)} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={submittingBuilder ? undefined : () => { setShowBuilderForm(false); setEditingBuilder(null); }} />
           <div className="relative z-10 w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-white flex items-center gap-2"><Upload className="h-4 w-4 text-brand-400" /> Subir contribución</h2>
-              <button onClick={() => setShowBuilderForm(false)} disabled={submittingBuilder} className="rounded-lg p-1 text-slate-500 hover:text-white hover:bg-surface-100 transition-colors disabled:opacity-50">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2"><Upload className="h-4 w-4 text-brand-400" /> {editingBuilder ? 'Editar contribución' : 'Subir contribución'}</h2>
+              <button onClick={() => { setShowBuilderForm(false); setEditingBuilder(null); }} disabled={submittingBuilder} className="rounded-lg p-1 text-slate-500 hover:text-white hover:bg-surface-100 transition-colors disabled:opacity-50">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -409,14 +497,25 @@ export default function ArenaPage() {
               </div>
             </div>
             <div className="flex items-center justify-end gap-2 mt-5">
-              <button onClick={() => setShowBuilderForm(false)} disabled={submittingBuilder} className="btn-secondary text-xs disabled:opacity-50">Cancelar</button>
+              <button onClick={() => { setShowBuilderForm(false); setEditingBuilder(null); }} disabled={submittingBuilder} className="btn-secondary text-xs disabled:opacity-50">Cancelar</button>
               <button onClick={handleCreateBuilder} disabled={submittingBuilder} className="btn-primary text-xs disabled:opacity-50">
-                {submittingBuilder ? 'Subiendo...' : 'Subir contribución'}
+                {submittingBuilder ? (editingBuilder ? 'Guardando...' : 'Subiendo...') : editingBuilder ? 'Guardar cambios' : 'Subir contribución'}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        onClose={() => { if (!deletingBuilder) setPendingDelete(null); }}
+        onConfirm={handleConfirmDelete}
+        title="Eliminar contribución"
+        message={`¿Eliminar "${pendingDelete?.title || pendingDelete?.name || ''}"? Se pierden también sus votos y no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deletingBuilder}
+      />
     </div>
   );
 }
