@@ -15,6 +15,8 @@
  */
 import { prisma } from '../../lib/prisma';
 import { getAIProviderForBusiness } from './engine';
+import type { TokenUsage } from './provider';
+import { recordAiSpend } from './usage';
 import { loadSystemPrompt } from './system-prompt';
 import { loadBrandVoice, buildBrandVoicePrompt } from '../brand/config';
 
@@ -122,14 +124,18 @@ export async function generateCopilot(businessId: string, conversationId: string
 
   // Pasamos la charla como texto en un único turno de usuario (history vacío)
   // para no depender de la alternancia de roles entre proveedores. No
-  // registramos uso de tokens: es una herramienta interna del agente, no un
-  // mensaje facturable del bot (el dashboard de FinOps cuenta mensajes BOT).
+  // guardamos mensajes: es una herramienta interna del agente. Pero el consumo SÍ
+  // se registra en el libro de gasto (recordAiSpend), para que cuente en el tope
+  // mensual aunque no haya un mensaje BOT.
   const provider = await getAIProviderForBusiness(businessId);
+  let usage: TokenUsage | undefined;
   const raw = await provider.generateResponse(instruction, {
     businessId,
     history: [],
     systemPrompt,
+    recordUsage: (u) => { usage = u; },
   });
+  if (usage) await recordAiSpend(businessId, usage, 'copilot');
 
   return parseCopilot(raw);
 }

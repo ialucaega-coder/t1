@@ -7,7 +7,11 @@
  * negocio vía la conversación. El costo es una ESTIMACIÓN con precios de lista
  * públicos por modelo (pueden cambiar; es orientativo, no facturación real).
  */
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { cache, cacheKey } from '../../lib/cache';
+import { lockSingleton } from '../../lib/singletonLock';
+import type { TokenUsage } from './provider';
 
 /**
  * Precio APROXIMADO en USD por 1M de tokens (input/output). Son estimaciones para
@@ -73,8 +77,134 @@ interface SpendRow {
   output_tokens: bigint | number | string | { toString(): string };
 }
 
-/** Gasto estimado (USD) del negocio desde `since`. Solo cuenta respuestas del bot con usage. */
+// ────────────────────────────────────────────────────────────────
+// Libro de gasto de IA FUERA del chatbot
+//
+// El gasto del bot de chat sale de `messages.metadata.usage`. El resto de las
+// llamadas al modelo (copiloto, lead score, analista, agentes de Mr Go) no
+// generan mensajes BOT, así que antes no contaban para el tope mensual. Lo
+// registramos acá: una `Connection` (type 'AI_SPEND_LEDGER') por negocio con
+//   { months: { 'YYYY-MM': { costUsd, bySource: { [fuente]: costUsd } } } }
+// sin tablas nuevas. El read-modify-write va en una transacción con advisory lock
+// (mismo patrón que el tope), así llamadas concurrentes no se pisan.
+// ────────────────────────────────────────────────────────────────
+
+const LEDGER_TYPE = 'AI_SPEND_LEDGER';
+/** Meses que se conservan en el libro (el tope es mensual; el resto se poda). */
+const LEDGER_KEEP_MONTHS = 3;
+
+interface LedgerMonth { costUsd: number; bySource: Record<string, number> }
+interface LedgerConfig { months: Record<string, LedgerMonth> }
+
+function parseLedger(raw: unknown): LedgerConfig {
+  const out: LedgerConfig = { months: {} };
+  const months = (raw && typeof raw === 'object' ? (raw as { months?: unknown }).months : undefined);
+  if (!months || typeof months !== 'object') return out;
+  for (const [month, value] of Object.entries(months as Record<string, unknown>)) {
+    if (!/^\d{4}-\d{2}$/.test(month) || !value || typeof value !== 'object') continue;
+    const v = value as { costUsd?: unknown; bySource?: unknown };
+    const costUsd = typeof v.costUsd === 'number' && Number.isFinite(v.costUsd) && v.costUsd > 0 ? v.costUsd : 0;
+    const bySource: Record<string, number> = {};
+    if (v.bySource && typeof v.bySource === 'object') {
+      for (const [src, n] of Object.entries(v.bySource as Record<string, unknown>)) {
+        if (typeof n === 'number' && Number.isFinite(n) && n > 0) bySource[src] = n;
+      }
+    }
+    out.months[month] = { costUsd, bySource };
+  }
+  return out;
+}
+
+/** Instante UTC en que arranca el mes 'YYYY-MM' en Argentina (UTC-3 fijo). */
+function monthStart(month: string): number {
+  const [y, m] = month.split('-').map(Number);
+  return Date.UTC(y, m - 1, 1, 3);
+}
+
+/** Lo que `recordAiSpend` acepta: el `usage` de tokens del proveedor, o un costo ya calculado. */
+export type AiSpendInput = TokenUsage | { costUsd: number };
+
+/**
+ * Registra gasto de IA que NO sale del chatbot, para que cuente en el tope mensual
+ * (`getSpendSince` / `enforceSpendCap`).
+ *
+ *   recordAiSpend(businessId, usage | { costUsd }, source)
+ *
+ *  - `usage`: el `TokenUsage` que el proveedor entrega por `recordUsage` (se
+ *    estima el costo con la tabla de precios de este módulo); o `{ costUsd }` si el
+ *    caller ya lo calculó.
+ *  - `source`: etiqueta libre del origen ('copilot', 'lead-score', 'analysis',
+ *    'mrgo', ...). Se acumula por fuente dentro del mes.
+ *
+ * Nunca lanza (el gasto de IA no puede romper la feature que lo origina): ante un
+ * error lo loguea y sigue. Montos nulos, negativos o no finitos se ignoran.
+ */
+export async function recordAiSpend(businessId: string, spend: AiSpendInput, source: string): Promise<void> {
+  try {
+    const cost =
+      'costUsd' in spend
+        ? spend.costUsd
+        : estimateCostUsd(spend.model ?? 'desconocido', spend.inputTokens ?? 0, spend.outputTokens ?? 0);
+    if (!Number.isFinite(cost) || cost <= 0) return;
+
+    const { month } = currentMonthWindow();
+    const src = (source || 'otros').slice(0, 60);
+
+    await prisma.$transaction(async (tx) => {
+      await lockSingleton(tx, businessId, LEDGER_TYPE);
+      const conn = await tx.connection.findFirst({
+        where: { businessId, type: LEDGER_TYPE },
+        select: { id: true, config: true },
+        orderBy: { id: 'asc' },
+      });
+      const ledger = parseLedger(conn?.config);
+      const cur = ledger.months[month] ?? { costUsd: 0, bySource: {} };
+      cur.costUsd += cost;
+      cur.bySource[src] = (cur.bySource[src] ?? 0) + cost;
+      ledger.months[month] = cur;
+      // Poda: solo los últimos meses.
+      const keep = Object.keys(ledger.months).sort().slice(-LEDGER_KEEP_MONTHS);
+      for (const k of Object.keys(ledger.months)) if (!keep.includes(k)) delete ledger.months[k];
+
+      const json = ledger as unknown as Prisma.InputJsonObject;
+      if (conn) {
+        await tx.connection.update({ where: { id: conn.id }, data: { config: json } });
+      } else {
+        await tx.connection.create({
+          data: { name: 'Gasto de IA (fuera del chat)', type: LEDGER_TYPE, icon: 'Gauge', config: json, isActive: false, businessId },
+        });
+      }
+    });
+    // El estado del tope está cacheado 30 s: que el próximo chequeo vea este gasto.
+    cache.invalidate(cacheKey(businessId, 'ai-spend'));
+  } catch (err) {
+    console.error('No se pudo registrar el gasto de IA:', (err as Error).message);
+  }
+}
+
+/** Gasto (USD) registrado en el libro desde `since` (meses cuyo inicio es >= since). */
+async function getLedgerSpendSince(businessId: string, since: Date): Promise<number> {
+  const conn = await prisma.connection.findFirst({
+    where: { businessId, type: LEDGER_TYPE },
+    select: { config: true },
+    orderBy: { id: 'asc' },
+  });
+  const ledger = parseLedger(conn?.config);
+  let total = 0;
+  for (const [month, value] of Object.entries(ledger.months)) {
+    if (monthStart(month) >= since.getTime()) total += value.costUsd;
+  }
+  return total;
+}
+
+/** Gasto estimado (USD) del negocio desde `since`: respuestas del bot con usage + libro fuera del chat. */
 export async function getSpendSince(businessId: string, since: Date): Promise<number> {
+  const [chat, other] = await Promise.all([getChatSpendSince(businessId, since), getLedgerSpendSince(businessId, since)]);
+  return chat + other;
+}
+
+/** Solo respuestas del bot de chat con usage (messages.metadata.usage). */
+async function getChatSpendSince(businessId: string, since: Date): Promise<number> {
   const rows = await prisma.$queryRaw<SpendRow[]>`
     SELECT
       COALESCE(m.metadata->'usage'->>'model', 'desconocido') AS model,
@@ -97,6 +227,23 @@ export async function getSpendSince(businessId: string, since: Date): Promise<nu
 
 /** Gasto estimado (USD) por negocio desde `since` (para el panel del Super Admin). */
 export async function getSpendByBusinessSince(since: Date): Promise<Map<string, number>> {
+  const out = await getChatSpendByBusinessSince(since);
+  const ledgers = await prisma.connection.findMany({
+    where: { type: LEDGER_TYPE },
+    select: { businessId: true, config: true },
+  });
+  for (const row of ledgers) {
+    const ledger = parseLedger(row.config);
+    let total = 0;
+    for (const [month, value] of Object.entries(ledger.months)) {
+      if (monthStart(month) >= since.getTime()) total += value.costUsd;
+    }
+    if (total > 0) out.set(row.businessId, (out.get(row.businessId) ?? 0) + total);
+  }
+  return out;
+}
+
+async function getChatSpendByBusinessSince(since: Date): Promise<Map<string, number>> {
   const rows = await prisma.$queryRaw<SpendRow[]>`
     SELECT
       c."businessId" AS "businessId",

@@ -13,7 +13,9 @@
  *   GET /api/superpowers/gaps
  */
 import { prisma } from '../../lib/prisma';
-import { getDefaultAIProvider } from '../ai';
+import { getAIProviderForBusiness } from '../ai/engine';
+import type { TokenUsage } from '../ai/provider';
+import { recordAiSpend } from '../ai/usage';
 
 /** Resumen estructurado que produce el superpoder "Analista IA". */
 export interface ConversationAnalysis {
@@ -81,11 +83,15 @@ export async function analyzeConversation(
     'Respondé en español.',
   ].join('\n');
 
-  const provider = getDefaultAIProvider();
+  // El motor DEL NEGOCIO (su key, su modelo) con el tope de gasto aplicado; antes
+  // usaba el proveedor por defecto de la plataforma (key de la plataforma, sin tope).
+  const provider = await getAIProviderForBusiness(businessId);
+  let usage: TokenUsage | undefined;
   const raw = await provider.generateResponse(
     `Transcripción de la conversación:\n\n${transcript}`,
-    { businessId, history: [], systemPrompt },
+    { businessId, history: [], systemPrompt, recordUsage: (u) => { usage = u; } },
   );
+  if (usage) await recordAiSpend(businessId, usage, 'analysis');
 
   const parsed = extractJson(raw);
   if (!parsed) {

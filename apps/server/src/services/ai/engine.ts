@@ -116,9 +116,17 @@ async function upsertConfig(businessId: string, mutate: (cfg: EngineConfig) => E
 }
 
 /** Cambia el motor activo del negocio. Valida que el id exista en el catálogo. */
+/** El motor pedido no existe en el catálogo (error del cliente, no del servidor). */
+export class UnknownEngineError extends Error {
+  constructor(public readonly engineId: string) {
+    super(`Motor de IA desconocido: ${engineId}`);
+    this.name = 'UnknownEngineError';
+  }
+}
+
 export async function setActiveEngine(businessId: string, engineId: string): Promise<EngineConfig> {
   if (!getEngineById(engineId)) {
-    throw new Error(`Motor de IA desconocido: ${engineId}`);
+    throw new UnknownEngineError(engineId);
   }
   return upsertConfig(businessId, (cfg) => ({ ...cfg, activeEngineId: engineId }));
 }

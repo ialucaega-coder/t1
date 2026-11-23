@@ -18,6 +18,8 @@ vi.mock('../../services/ai/engine', () => ({
   getAIProviderForBusiness: vi.fn(),
 }));
 
+vi.mock('../../services/ai/usage', () => ({ recordAiSpend: vi.fn(async () => undefined) }));
+
 vi.mock('../../services/ai/system-prompt', () => ({
   loadSystemPrompt: vi.fn(async () => ''),
 }));
@@ -30,6 +32,7 @@ vi.mock('../../services/brand/config', () => ({
 import { prisma } from '../../lib/prisma';
 import { getAIProviderForBusiness } from '../../services/ai/engine';
 import { generateCopilot, parseCopilot } from '../../services/ai/copilot';
+import { recordAiSpend } from '../../services/ai/usage';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -97,6 +100,30 @@ describe('services/ai/copilot', () => {
       // Historial vacío: la charla va como texto en un único turno de usuario.
       const context = calls[0][1] as { history: unknown[] };
       expect(context.history).toEqual([]);
+    });
+
+    it('registra el consumo en el libro de gasto (fuente "copilot") para que cuente en el tope mensual', async () => {
+      mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'c1', contactName: 'Ana' });
+      mock(prisma.message.findMany).mockResolvedValue([{ role: 'USER', text: 'hola' }]);
+      const generateResponse = vi.fn(async (_p: string, ctx: { recordUsage?: (u: unknown) => void }) => {
+        ctx.recordUsage?.({ inputTokens: 800, outputTokens: 200, model: 'gpt-4o' });
+        return 'RESUMEN:\nx\n\nSUGERENCIA:\ny';
+      });
+      mock(getAIProviderForBusiness).mockResolvedValue({ name: 'openai', generateResponse });
+
+      await generateCopilot('biz_1', 'c1');
+
+      expect(recordAiSpend).toHaveBeenCalledWith('biz_1', { inputTokens: 800, outputTokens: 200, model: 'gpt-4o' }, 'copilot');
+    });
+
+    it('sin consumo reportado no registra nada', async () => {
+      mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'c1', contactName: null });
+      mock(prisma.message.findMany).mockResolvedValue([]);
+      mock(getAIProviderForBusiness).mockResolvedValue({ name: 'openai', generateResponse: vi.fn(async () => 'RESUMEN:\nx\n\nSUGERENCIA:\ny') });
+
+      await generateCopilot('biz_1', 'c1');
+
+      expect(recordAiSpend).not.toHaveBeenCalled();
     });
   });
 });

@@ -85,7 +85,7 @@ router.post(
         description,
         systemPrompt: systemPrompt || '',
         model: model || 'claude-sonnet-5-5',
-        temperature: temperature || 0.7,
+        temperature: temperature ?? 0.7,
         businessId: req.auth!.businessId,
       },
     });

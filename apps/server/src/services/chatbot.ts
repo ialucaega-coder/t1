@@ -612,10 +612,8 @@ export async function processMessage(
       systemPrompt += '\n\n' + options.systemPromptExtra.trim();
     }
     const catalogText = formatCatalogText(catalog);
-    let enrichedPrompt = systemPrompt + '\n\n' + catalogText;
-    if (options.systemPromptExtra?.trim()) {
-      enrichedPrompt += '\n\n' + options.systemPromptExtra.trim();
-    }
+    // `systemPrompt` ya incluye `systemPromptExtra` (arriba): no se repite.
+    const enrichedPrompt = systemPrompt + '\n\n' + catalogText;
 
     // Superpoder "Oído y vista": solo pasamos imágenes al proveedor si está
     // activo para el negocio. Si no, se ignoran (aunque hayan venido en options).
@@ -864,7 +862,13 @@ async function getOrCreateConversation(
     if (prev) return prev;
   }
 
-  const botId = options.botId || await getDefaultBotId(businessId);
+  // El `botId` que llega puede venir de un request: se usa SOLO si el bot es de
+  // ESTE negocio. Si no, se ignora y se usa el bot por defecto del negocio (nunca se
+  // crea una conversación colgada de un bot ajeno).
+  const ownBotId = options.botId
+    ? (await prisma.bot.findFirst({ where: { id: options.botId, businessId }, select: { id: true } }))?.id
+    : undefined;
+  const botId = ownBotId || await getDefaultBotId(businessId);
 
   // Mapa al enum BotChannel del schema (TELEGRAM | WHATSAPP | WEBCHAT | INSTAGRAM).
   // MESSENGER no existe en el enum todavía, así que — igual que VOICE — cae en
@@ -934,7 +938,7 @@ async function getOrCreateConversation(
         businessId,
         channel: channelMap[channel] as any,
         status: { in: ['OPEN', 'HANDOFF'] },
-        ...(options.botId ? { botId: options.botId } : {}),
+        ...(ownBotId ? { botId: ownBotId } : {}),
         AND: [
           options.contactPhone
             ? { contactPhone: options.contactPhone }

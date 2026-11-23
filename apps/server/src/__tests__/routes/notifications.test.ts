@@ -18,7 +18,9 @@ vi.mock('../../lib/prisma', () => ({
       create: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn(),
+      findFirst: vi.fn(),
     },
+    user: { findFirst: vi.fn() },
   },
 }));
 
@@ -123,6 +125,7 @@ describe('routes/notifications', () => {
     };
 
     it('crea una notificacion con datos validos', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'user_1' });
       mock(prisma.notification.create).mockResolvedValue({ id: 'n1', ...validPayload });
 
       const res = await request(app)
@@ -134,6 +137,56 @@ describe('routes/notifications', () => {
       expect(prisma.notification.create).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ businessId: 'biz_1', title: 'Hola' }) })
       );
+    });
+
+    it('el destinatario se valida CONTRA el negocio (findFirst id + businessId)', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue({ id: 'user_1' });
+      mock(prisma.notification.create).mockResolvedValue({ id: 'n1' });
+
+      await request(app).post('/api/notifications').set('Authorization', `Bearer ${token}`).send(validPayload);
+
+      expect(prisma.user.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user_1', businessId: 'biz_1' } })
+      );
+    });
+
+    it('un userId de OTRO negocio da 404 y no se crea la notificación', async () => {
+      mock(prisma.user.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/notifications')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...validPayload, userId: 'user_de_otro_negocio' });
+
+      expect(res.status).toBe(404);
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+    });
+
+    it('un CLIENT no puede crear notificaciones (403)', async () => {
+      const clientToken = signToken({ userId: 'cli_1', businessId: 'biz_1', role: 'CLIENT' });
+
+      const res = await request(app)
+        .post('/api/notifications')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .send(validPayload);
+
+      expect(res.status).toBe(403);
+      expect(prisma.user.findFirst).not.toHaveBeenCalled();
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['título de más de 120 caracteres', { title: 't'.repeat(121) }],
+      ['cuerpo de más de 2000 caracteres', { body: 'b'.repeat(2001) }],
+      ['título vacío tras recortar', { title: '   ' }],
+    ])('rechaza (400) un %s', async (_l, override) => {
+      const res = await request(app)
+        .post('/api/notifications')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...validPayload, ...override });
+
+      expect(res.status).toBe(400);
+      expect(prisma.notification.create).not.toHaveBeenCalled();
     });
 
     it('devuelve 400 cuando faltan campos requeridos', async () => {
@@ -175,8 +228,9 @@ describe('routes/notifications', () => {
   });
 
   describe('PUT /api/notifications/:id/read', () => {
-    it('marca una notificacion como leida', async () => {
-      mock(prisma.notification.update).mockResolvedValue({ id: 'n1', isRead: true });
+    it('marca una notificacion como leida (solo si es DEL usuario y del negocio)', async () => {
+      mock(prisma.notification.updateMany).mockResolvedValue({ count: 1 });
+      mock(prisma.notification.findFirst).mockResolvedValue({ id: 'n1', isRead: true });
 
       const res = await request(app)
         .put('/api/notifications/n1/read')
@@ -184,19 +238,42 @@ describe('routes/notifications', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.isRead).toBe(true);
-      expect(prisma.notification.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'n1', businessId: 'biz_1' }, data: { isRead: true } })
+      expect(prisma.notification.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'n1', businessId: 'biz_1', userId: 'user_1' }, data: { isRead: true } })
       );
     });
 
-    it('el alias PATCH /:id/read tambien funciona', async () => {
-      mock(prisma.notification.update).mockResolvedValue({ id: 'n1', isRead: true });
+    it('la notificación de OTRO usuario del mismo negocio no se puede marcar: 404', async () => {
+      mock(prisma.notification.updateMany).mockResolvedValue({ count: 0 });
+
+      const res = await request(app)
+        .put('/api/notifications/n_de_otro_usuario/read')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(404);
+      expect(prisma.notification.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('el alias PATCH /:id/read tambien funciona y aplica el mismo filtro por usuario', async () => {
+      mock(prisma.notification.updateMany).mockResolvedValue({ count: 1 });
+      mock(prisma.notification.findFirst).mockResolvedValue({ id: 'n1', isRead: true });
 
       const res = await request(app)
         .patch('/api/notifications/n1/read')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
+      expect(mock(prisma.notification.updateMany).mock.calls[0][0].where).toEqual({ id: 'n1', businessId: 'biz_1', userId: 'user_1' });
+    });
+
+    it('el alias también devuelve 404 para la de otro usuario', async () => {
+      mock(prisma.notification.updateMany).mockResolvedValue({ count: 0 });
+
+      const res = await request(app)
+        .patch('/api/notifications/n_ajena/read')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(404);
     });
   });
 });

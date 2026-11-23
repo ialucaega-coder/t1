@@ -111,6 +111,23 @@ describe('routes/arena', () => {
       );
     });
 
+    it('temperature 0 (respuestas deterministas) se respeta: no se convierte en 0.7', async () => {
+      mock(prisma.arenaBuilder.create).mockResolvedValue({ id: 'b1' });
+
+      const res = await request(app).post('/api/arena/builders').send({ name: 'Bot frío', temperature: 0 });
+
+      expect(res.status).toBe(201);
+      expect(mock(prisma.arenaBuilder.create).mock.calls[0][0].data.temperature).toBe(0);
+    });
+
+    it('un valor intermedio se guarda tal cual', async () => {
+      mock(prisma.arenaBuilder.create).mockResolvedValue({ id: 'b1' });
+
+      await request(app).post('/api/arena/builders').send({ name: 'Bot', temperature: 1.3 });
+
+      expect(mock(prisma.arenaBuilder.create).mock.calls[0][0].data.temperature).toBe(1.3);
+    });
+
     it('guarda title y github, y el rank inicial queda fuera del podio (nunca 0 ni el que mande el cliente)', async () => {
       mock(prisma.arenaBuilder.count).mockResolvedValue(2);
       mock(prisma.arenaBuilder.create).mockResolvedValue({ id: 'b1' });

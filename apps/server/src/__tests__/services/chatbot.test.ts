@@ -968,3 +968,82 @@ describe('services/chatbot — intención HUMAN exige una frase, no la palabra "
     expect(await intentOf(text)).toBe('HUMAN');
   });
 });
+
+
+describe('services/chatbot — botId validado y prompt sin duplicados', () => {
+  const botConvNew = (data: Record<string, unknown>) => ({ id: 'c_new', status: 'OPEN', metadata: null, ...data });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.conversation.findFirst).mockResolvedValue(null);
+    mock(prisma.conversation.findUnique).mockResolvedValue({ status: 'OPEN', metadata: null });
+    mock(prisma.conversation.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => botConvNew(data));
+    mock(prisma.conversation.update).mockResolvedValue({});
+    mock(prisma.$transaction).mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
+    mock(prisma.$queryRaw).mockResolvedValue([{ id: 'c_new' }]);
+    mock(prisma.message.create).mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'm', ...data }));
+    mock(prisma.message.findMany).mockResolvedValue([]);
+    mock(prisma.service.findMany).mockResolvedValue([]);
+    mock(prisma.product.findMany).mockResolvedValue([]);
+    mock(prisma.skill.findMany).mockResolvedValue([]);
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse: vi.fn().mockResolvedValue('respuesta del bot') });
+  });
+
+  it('un botId de OTRO negocio se ignora: la conversación se crea con el bot por defecto del propio negocio', async () => {
+    // 1ª búsqueda (¿es mío ese botId?): no. 2ª (bot por defecto del negocio): bot_default.
+    mock(prisma.bot.findFirst).mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'bot_default' });
+
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_ajeno' });
+
+    expect(mock(prisma.bot.findFirst).mock.calls[0][0].where).toEqual({ id: 'bot_ajeno', businessId: 'biz_1' });
+    expect(mock(prisma.conversation.create).mock.calls[0][0].data).toMatchObject({ businessId: 'biz_1', botId: 'bot_default' });
+  });
+
+  it('un botId del propio negocio se respeta', async () => {
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_mio' });
+
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_mio' });
+
+    expect(mock(prisma.conversation.create).mock.calls[0][0].data.botId).toBe('bot_mio');
+  });
+
+  it('un botId ajeno tampoco se usa para buscar una conversación existente del contacto (no filtra por el bot ajeno)', async () => {
+    mock(prisma.bot.findFirst).mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'bot_default' });
+    mock(prisma.$executeRaw).mockResolvedValue(1);
+
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WHATSAPP', { botId: 'bot_ajeno', contactPhone: '+549111' });
+
+    const lookup = mock(prisma.conversation.findFirst).mock.calls[0][0].where;
+    expect(lookup.botId).toBeUndefined();
+  });
+
+  it('sin botId usa el bot por defecto (no consulta si es propio)', async () => {
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_default' });
+
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', {});
+
+    expect(mock(prisma.bot.findFirst).mock.calls).toHaveLength(1);
+    expect(mock(prisma.conversation.create).mock.calls[0][0].data.botId).toBe('bot_default');
+  });
+
+  it('systemPromptExtra llega UNA sola vez al prompt del proveedor (antes se duplicaba)', async () => {
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    const generateResponse = vi.fn().mockResolvedValue('respuesta del bot');
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse });
+
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'VOICE', { botId: 'bot_1', systemPromptExtra: 'PERSONA-VOZ-UNICA' });
+
+    const prompt = generateResponse.mock.calls[0][1].systemPrompt as string;
+    expect(prompt.split('PERSONA-VOZ-UNICA')).toHaveLength(2); // exactamente una aparición
+  });
+
+  it('sin systemPromptExtra el prompt no cambia', async () => {
+    mock(prisma.bot.findFirst).mockResolvedValue({ id: 'bot_1' });
+    const generateResponse = vi.fn().mockResolvedValue('respuesta del bot');
+    mock(getAIProviderForBusiness).mockResolvedValue({ generateResponse });
+
+    await processMessage('biz_1', 'hola, ¿tienen novedades?', 'WEB', { botId: 'bot_1' });
+
+    expect(generateResponse.mock.calls[0][1].systemPrompt).toContain('Todavía no hay servicios ni productos cargados');
+  });
+});

@@ -19,6 +19,8 @@ vi.mock('../../services/ai/engine', () => ({
   getAIProviderForBusiness: vi.fn(),
 }));
 
+vi.mock('../../services/ai/usage', () => ({ recordAiSpend: vi.fn(async () => undefined) }));
+
 vi.mock('../../services/ai/system-prompt', () => ({
   loadSystemPrompt: vi.fn(async () => ''),
 }));
@@ -26,6 +28,7 @@ vi.mock('../../services/ai/system-prompt', () => ({
 import { prisma } from '../../lib/prisma';
 import { getAIProviderForBusiness } from '../../services/ai/engine';
 import { generateLeadScore, parseLeadScore } from '../../services/ai/lead-score';
+import { recordAiSpend } from '../../services/ai/usage';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -111,6 +114,30 @@ describe('services/ai/lead-score', () => {
       // Historial vacío: la charla va como texto en un único turno de usuario.
       const context = calls[0][1] as { history: unknown[] };
       expect(context.history).toEqual([]);
+    });
+
+    it('registra el consumo en el libro de gasto (fuente "lead-score") para que cuente en el tope mensual', async () => {
+      mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'c1', contactName: null });
+      mock(prisma.message.findMany).mockResolvedValue([{ role: 'USER', text: 'hola' }]);
+      const generateResponse = vi.fn(async (_p: string, ctx: { recordUsage?: (u: unknown) => void }) => {
+        ctx.recordUsage?.({ inputTokens: 500, outputTokens: 50, model: 'claude-sonnet-5-5' });
+        return 'TEMPERATURA: TIBIO\nPUNTAJE: 50\nMOTIVO: x';
+      });
+      mock(getAIProviderForBusiness).mockResolvedValue({ name: 'anthropic', generateResponse });
+
+      await generateLeadScore('biz_1', 'c1');
+
+      expect(recordAiSpend).toHaveBeenCalledWith('biz_1', { inputTokens: 500, outputTokens: 50, model: 'claude-sonnet-5-5' }, 'lead-score');
+    });
+
+    it('sin consumo reportado no registra nada', async () => {
+      mock(prisma.conversation.findFirst).mockResolvedValue({ id: 'c1', contactName: null });
+      mock(prisma.message.findMany).mockResolvedValue([]);
+      mock(getAIProviderForBusiness).mockResolvedValue({ name: 'anthropic', generateResponse: vi.fn(async () => 'TEMPERATURA: FRIO\nPUNTAJE: 5\nMOTIVO: x') });
+
+      await generateLeadScore('biz_1', 'c1');
+
+      expect(recordAiSpend).not.toHaveBeenCalled();
     });
   });
 });

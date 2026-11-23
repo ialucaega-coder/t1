@@ -11,9 +11,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const generateResponse = vi.fn();
 
-vi.mock('../../services/ai', () => ({
-  getDefaultAIProvider: vi.fn(() => ({ generateResponse })),
+// El análisis usa el motor DEL NEGOCIO (key propia + tope de gasto), no el proveedor
+// por defecto de la plataforma.
+vi.mock('../../services/ai/engine', () => ({
+  getAIProviderForBusiness: vi.fn(async () => ({ generateResponse })),
 }));
+vi.mock('../../services/ai/usage', () => ({ recordAiSpend: vi.fn(async () => undefined) }));
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
@@ -22,6 +25,8 @@ vi.mock('../../lib/prisma', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
+import { getAIProviderForBusiness } from '../../services/ai/engine';
+import { recordAiSpend } from '../../services/ai/usage';
 import { analyzeConversation, detectKnowledgeGaps } from '../../services/superpowers/analysis';
 
 const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -70,6 +75,41 @@ describe('services/superpowers/analysis', () => {
       generateResponse.mockResolvedValue('{"objeciones":"muy caro"}');
       const result = await analyzeConversation('biz_1', [msg('USER', 'x')]);
       expect(result.objeciones).toEqual(['muy caro']);
+    });
+
+    it('usa el motor del NEGOCIO (getAIProviderForBusiness con su businessId), no el proveedor por defecto', async () => {
+      generateResponse.mockResolvedValue('{"resumen":"ok"}');
+
+      await analyzeConversation('biz_9', [msg('USER', 'hola')]);
+
+      expect(getAIProviderForBusiness).toHaveBeenCalledWith('biz_9');
+      expect(generateResponse.mock.calls[0][1]).toMatchObject({ businessId: 'biz_9' });
+    });
+
+    it('si el tope mensual de gasto se alcanzó, el error se propaga y no se llama al modelo', async () => {
+      (getAIProviderForBusiness as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Se alcanzó el tope mensual de gasto de IA'));
+
+      await expect(analyzeConversation('biz_1', [msg('USER', 'hola')])).rejects.toThrow(/tope mensual/);
+      expect(generateResponse).not.toHaveBeenCalled();
+    });
+
+    it('registra el consumo en el libro de gasto (fuente "analysis") cuando el proveedor lo reporta', async () => {
+      generateResponse.mockImplementation(async (_p: string, ctx: { recordUsage?: (u: unknown) => void }) => {
+        ctx.recordUsage?.({ inputTokens: 1200, outputTokens: 300, model: 'claude-sonnet-5-5' });
+        return '{"resumen":"ok"}';
+      });
+
+      await analyzeConversation('biz_1', [msg('USER', 'hola')]);
+
+      expect(recordAiSpend).toHaveBeenCalledWith('biz_1', { inputTokens: 1200, outputTokens: 300, model: 'claude-sonnet-5-5' }, 'analysis');
+    });
+
+    it('si el proveedor no reporta consumo, no registra nada', async () => {
+      generateResponse.mockResolvedValue('{"resumen":"ok"}');
+
+      await analyzeConversation('biz_1', [msg('USER', 'hola')]);
+
+      expect(recordAiSpend).not.toHaveBeenCalled();
     });
 
     it('cae a best-effort cuando el modelo no devuelve JSON (usa el texto crudo como resumen)', async () => {

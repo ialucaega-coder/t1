@@ -29,6 +29,7 @@ vi.mock('../../services/ai/engine', () => ({
   listEnginesForBusiness: vi.fn(),
   setActiveEngine: vi.fn(),
   setEngineKey: vi.fn(),
+  UnknownEngineError: class UnknownEngineError extends Error {},
 }));
 vi.mock('../../services/ai/usage', () => ({ getUsageSummary: vi.fn() }));
 vi.mock('../../services/billing/quota', () => ({ getMessageQuota: vi.fn() }));
@@ -36,7 +37,7 @@ vi.mock('../../services/billing/quota', () => ({ getMessageQuota: vi.fn() }));
 import { prisma } from '../../lib/prisma';
 import { processMessage } from '../../services/chatbot';
 import { getDefaultAIProvider } from '../../services/ai';
-import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../../services/ai/engine';
+import { listEnginesForBusiness, setActiveEngine, setEngineKey, UnknownEngineError } from '../../services/ai/engine';
 import { getUsageSummary } from '../../services/ai/usage';
 import { getMessageQuota } from '../../services/billing/quota';
 import { aiRouter } from '../../routes/ai';
@@ -73,6 +74,38 @@ describe('routes/ai', () => {
       const res = await request(app).post('/api/ai/chat').send({ message: '' });
       expect(res.status).toBe(400);
       expect(mock(processMessage)).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (400) un mensaje de más de 4000 caracteres, sin gastar IA', async () => {
+      const res = await request(app).post('/api/ai/chat').send({ message: 'a'.repeat(4001) });
+      expect(res.status).toBe(400);
+      expect(mock(processMessage)).not.toHaveBeenCalled();
+    });
+
+    it('acepta un mensaje de exactamente 4000 caracteres', async () => {
+      mock(processMessage).mockResolvedValue({ text: 'ok', conversationId: 'c1', intent: 'FAQ', actions: [] });
+      const res = await request(app).post('/api/ai/chat').send({ message: 'a'.repeat(4000) });
+      expect(res.status).toBe(200);
+    });
+
+    it('rechaza (400) un historial de más de 20 turnos', async () => {
+      const history = Array.from({ length: 21 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'hola' }));
+      const res = await request(app).post('/api/ai/chat').send({ message: 'hola', history });
+      expect(res.status).toBe(400);
+      expect(mock(processMessage)).not.toHaveBeenCalled();
+    });
+
+    it('rechaza (400) un turno del historial de más de 4000 caracteres', async () => {
+      const res = await request(app).post('/api/ai/chat').send({ message: 'hola', history: [{ role: 'user', content: 'x'.repeat(4001) }] });
+      expect(res.status).toBe(400);
+      expect(mock(processMessage)).not.toHaveBeenCalled();
+    });
+
+    it('acepta un historial de 20 turnos', async () => {
+      mock(processMessage).mockResolvedValue({ text: 'ok', conversationId: 'c1', intent: 'FAQ', actions: [] });
+      const history = Array.from({ length: 20 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'hola' }));
+      const res = await request(app).post('/api/ai/chat').send({ message: 'hola', history });
+      expect(res.status).toBe(200);
     });
   });
 
@@ -126,9 +159,18 @@ describe('routes/ai', () => {
     });
 
     it('PUT /engine responde 400 si el motor es desconocido', async () => {
-      mock(setActiveEngine).mockRejectedValue(new Error('Motor de IA desconocido'));
+      mock(setActiveEngine).mockRejectedValue(new UnknownEngineError('no-existe'));
       const res = await request(app).put('/api/ai/engine').send({ engineId: 'no-existe' });
       expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/desconocido/);
+    });
+
+    it('PUT /engine: un fallo real (la base, etc.) es 500, no un falso "motor desconocido"', async () => {
+      mock(setActiveEngine).mockRejectedValue(new Error('connection refused'));
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await request(app).put('/api/ai/engine').send({ engineId: 'gpt-4o' });
+      expect(res.status).toBe(500);
+      err.mockRestore();
     });
 
     it('PUT /keys guarda la key de una familia válida', async () => {

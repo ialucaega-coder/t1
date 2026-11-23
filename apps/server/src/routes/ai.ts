@@ -10,7 +10,7 @@ import { validate } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
 import { processMessage } from '../services/chatbot';
 import { listAvailableProviders, getDefaultAIProvider } from '../services/ai';
-import { listEnginesForBusiness, setActiveEngine, setEngineKey } from '../services/ai/engine';
+import { listEnginesForBusiness, setActiveEngine, setEngineKey, UnknownEngineError } from '../services/ai/engine';
 import { loadSystemPrompt, saveSystemPrompt, MAX_SYSTEM_PROMPT_LENGTH } from '../services/ai/system-prompt';
 import { getUsageSummary, currentMonthWindow, getSpendByBusinessSince } from '../services/ai/usage';
 import { getSpendStatus, setSpendCap, levelFor, MAX_CAP_USD } from '../services/ai/spendCap';
@@ -26,16 +26,21 @@ const PROVIDER_FAMILIES: ProviderFamily[] = [
   'together', 'perplexity', 'cohere', 'openrouter', 'ollama', 'lmstudio',
 ];
 
+/** Topes del chat de prueba: cada mensaje del historial entra al prompt (costo de IA). */
+const MAX_CHAT_TEXT = 4000;
+const MAX_CHAT_HISTORY = 20;
+
 const chatSchema = z.object({
-  message: z.string().min(1),
+  message: z.string().min(1).max(MAX_CHAT_TEXT),
   channel: z.enum(['WEB', 'TELEGRAM', 'WHATSAPP', 'VOICE']).default('WEB'),
   history: z
     .array(
       z.object({
         role: z.enum(['user', 'assistant']),
-        content: z.string(),
+        content: z.string().max(MAX_CHAT_TEXT),
       })
     )
+    .max(MAX_CHAT_HISTORY)
     .optional(),
   clientId: z.string().optional(),
   conversationId: z.string().optional(),
@@ -180,15 +185,23 @@ const setEngineSchema = z.object({ engineId: z.string().min(1) });
 
 /**
  * PUT /api/ai/engine
- * Cambia el motor de IA activo del negocio.
+ * Cambia el motor de IA activo del negocio. Solo ADMIN: define con qué modelo (y
+ * con qué key) responde el bot, o sea el costo y el comportamiento del negocio.
  */
-router.put('/engine', requireAuth, asyncHandler(async (req, res) => {
+router.put('/engine', requireAuth, requireRole('ADMIN'), asyncHandler(async (req, res) => {
   const { engineId } = setEngineSchema.parse(req.body);
   try {
     const cfg = await setActiveEngine(req.auth!.businessId, engineId);
     res.json({ success: true, activeEngineId: cfg.activeEngineId });
-  } catch {
-    res.status(400).json({ error: 'Motor de IA desconocido' });
+  } catch (err) {
+    // Solo un motor inexistente es culpa del cliente (400). Un fallo real (la base,
+    // etc.) sigue de largo al manejador de errores como 500, en vez de disfrazarse
+    // de "motor desconocido".
+    if (err instanceof UnknownEngineError) {
+      res.status(400).json({ error: 'Motor de IA desconocido' });
+      return;
+    }
+    throw err;
   }
 }));
 
@@ -201,9 +214,9 @@ const setKeySchema = z.object({
  * PUT /api/ai/keys
  * Guarda (o borra, con apiKey vacía) la API key propia del negocio para una
  * familia de proveedor. La key se guarda cifrada-en-reposo por la DB; nunca se
- * devuelve al cliente.
+ * devuelve al cliente. Solo ADMIN (reemplazar o borrar la key deja al bot sin motor).
  */
-router.put('/keys', requireAuth, asyncHandler(async (req, res) => {
+router.put('/keys', requireAuth, requireRole('ADMIN'), asyncHandler(async (req, res) => {
   const { provider, apiKey } = setKeySchema.parse(req.body);
   if (!PROVIDER_FAMILIES.includes(provider as ProviderFamily)) {
     res.status(400).json({ error: 'Proveedor desconocido' });
