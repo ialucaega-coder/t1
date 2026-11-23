@@ -300,9 +300,13 @@ router.get('/spend-overview', requireAuth, requirePlatformAdmin, asyncHandler(as
   }
   const ids = [...new Set([...spendMap.keys(), ...capMap.keys()])];
   const businesses = ids.length
-    ? await prisma.business.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
+    ? await prisma.business.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true, subscription: { select: { plan: { select: { name: true } } } } },
+      })
     : [];
   const names = new Map(businesses.map((b) => [b.id, b.name]));
+  const plans = new Map(businesses.map((b) => [b.id, b.subscription?.plan?.name ?? null]));
   const round = (n: number) => Math.round(n * 10000) / 10000;
   const rows = ids
     .map((id) => {
@@ -311,6 +315,8 @@ router.get('/spend-overview', requireAuth, requirePlatformAdmin, asyncHandler(as
       return {
         businessId: id,
         name: names.get(id) ?? id,
+        /** Plan contratado (null si no tiene suscripción). */
+        planName: plans.get(id) ?? null,
         spentUsd,
         capUsd,
         ratio: capUsd ? spentUsd / capUsd : null,

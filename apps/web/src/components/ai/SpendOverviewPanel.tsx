@@ -105,6 +105,7 @@ export function SpendOverviewPanel() {
               <thead>
                 <tr className="border-b border-slate-700 text-left text-slate-400">
                   <th scope="col" className="px-4 py-3 font-medium">Negocio</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Plan</th>
                   <th scope="col" className="px-4 py-3 font-medium text-right">Gasto del mes</th>
                   <th scope="col" className="px-4 py-3 font-medium text-right">Tope</th>
                   <th scope="col" className="px-4 py-3 font-medium text-right">% usado</th>
@@ -117,6 +118,7 @@ export function SpendOverviewPanel() {
                   return (
                     <tr key={row.businessId} className="border-b border-slate-700/50">
                       <td className="px-4 py-3 text-white font-medium">{row.name}</td>
+                      <td className="px-4 py-3 text-slate-300">{row.planName ?? 'Sin plan'}</td>
                       <td className="px-4 py-3 text-right text-slate-200">{fmtUsd(row.spentUsd)}</td>
                       <td className="px-4 py-3 text-right text-slate-300">
                         {row.capUsd == null ? '—' : fmtUsd(row.capUsd)}

@@ -10,7 +10,7 @@ vi.mock('@/lib/api/ai', () => ({
 import { SpendOverviewPanel } from '@/components/ai/SpendOverviewPanel';
 
 const rows = [
-  { businessId: 'a', name: 'Alfa', spentUsd: 50, capUsd: null, ratio: null, level: 'ok' },
+  { businessId: 'a', name: 'Alfa', planName: 'Mr Go +', spentUsd: 50, capUsd: null, ratio: null, level: 'ok' },
   { businessId: 'b', name: 'Beta', spentUsd: 9, capUsd: 10, ratio: 0.9, level: 'warn' },
   { businessId: 'c', name: 'Gamma', spentUsd: 12, capUsd: 10, ratio: 1.2, level: 'blocked' },
   { businessId: 'd', name: 'Delta', spentUsd: 1, capUsd: 100, ratio: 0.01, level: 'ok' },
@@ -39,8 +39,20 @@ describe('SpendOverviewPanel', () => {
     // Sin tope: tope y % usado en blanco (no se inventa un 0 %).
     const alfa = screen.getByText('Alfa').closest('tr') as HTMLElement;
     const cells = within(alfa).getAllByRole('cell').map((c) => c.textContent);
-    expect(cells.slice(2, 4)).toEqual(['—', '—']);
+    expect(cells.slice(3, 5)).toEqual(['—', '—']);
     expect(screen.getByText(/precios son aproximados/i)).toBeInTheDocument();
+  });
+
+  it('muestra el plan de cada negocio y "Sin plan" cuando no tiene suscripción', async () => {
+    getSpendOverview.mockResolvedValue({ month: '2026-11', totalUsd: 72, businesses: rows });
+    render(<SpendOverviewPanel />);
+
+    await screen.findByRole('table');
+    expect(screen.getByRole('columnheader', { name: 'Plan' })).toBeInTheDocument();
+    const alfa = screen.getByText('Alfa').closest('tr') as HTMLElement;
+    expect(within(alfa).getAllByRole('cell')[1].textContent).toBe('Mr Go +');
+    const beta = screen.getByText('Beta').closest('tr') as HTMLElement;
+    expect(within(beta).getAllByRole('cell')[1].textContent).toBe('Sin plan');
   });
 
   it('ordena por % usado por defecto (sin tope al final) y por gasto al cambiar', async () => {

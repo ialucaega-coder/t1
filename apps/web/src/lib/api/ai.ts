@@ -130,6 +130,8 @@ export function setSpendCap(capUsd: number | null) {
 export interface SpendOverviewRow {
   businessId: string;
   name: string;
+  /** Plan contratado; null si el negocio no tiene suscripción. */
+  planName?: string | null;
   spentUsd: number;
   capUsd: number | null;
   /** null cuando el negocio no tiene tope. */

@@ -260,7 +260,7 @@ Montaje con `requireAuth` y `requireStaff`: todos los endpoints exigen staff (AD
 | GET | /api/ai/quota | Sí | Staff | Cupo mensual de mensajes del bot: uso, límite del plan y restante. Forma de la respuesta: `(no verificado)`. |
 | GET | /api/ai/spend-cap | Sí | Staff | Tope mensual de gasto de IA del negocio y cuánto lleva gastado este mes. Forma de la respuesta: `(no verificado)`. |
 | PUT | /api/ai/spend-cap | Sí | ADMIN | Fija o quita el tope mensual de gasto de IA. Body: `capUsd` (número positivo, dentro del máximo permitido, o `null` para quitarlo). Responde el estado del tope. |
-| GET | /api/ai/spend-overview | Sí | Super Admin | Gasto de IA del mes por negocio (con tope y nivel), hasta 200 negocios. Responde `{ month, totalUsd, businesses[] }`. Cruza todos los negocios. |
+| GET | /api/ai/spend-overview | Sí | Super Admin | Gasto de IA del mes por negocio (con tope, nivel y plan), hasta 200 negocios. Responde `{ month, totalUsd, businesses[] }`; cada negocio trae `planName` (null si no tiene suscripción). Cruza todos los negocios. |
 
 ## Telegram — `/api/telegram`
 
