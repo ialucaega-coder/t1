@@ -41,6 +41,7 @@ import { marketplaceRouter } from './routes/marketplace';
 import { agencyRouter } from './routes/agency';
 import { analyticsRouter } from './routes/analytics';
 import { campaignsRouter } from './routes/campaigns';
+import { trackingRouter } from './routes/tracking';
 import { whitelabelRouter } from './routes/whitelabel';
 import { arenaRouter } from './routes/arena';
 import { conversationsRouter } from './routes/conversations';
@@ -310,6 +311,8 @@ app.use('/api/mcp', mcpRouter);
 app.use('/api/platform', requireAuth, requirePlatformAdmin, platformRouter);
 // El CORS permisivo de /api/public ya se registró arriba (antes del CORS
 // global), así que acá solo montamos el router.
+// Pixel de apertura y redirección de clics de campañas por email (públicos, token firmado).
+app.use('/api/public/track', trackingRouter);
 app.use('/api/public', publicChatRouter);
 
 // Ruta no encontrada (404) y manejador de errores centralizado.

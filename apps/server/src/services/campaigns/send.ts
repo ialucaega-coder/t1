@@ -24,6 +24,7 @@ import { sharedGet, sharedSet, sharedDel, sharedIncr } from '../../lib/sharedSta
 import * as whatsapp from '../whatsapp/client';
 import { sendGenericNotification } from '../email';
 import { emitCampaignFailed, emitCampaignProgress } from './events';
+import { renderCampaignEmailHtml } from './tracking';
 
 export interface SendCampaignResult {
   envio: { enviados: number; fallidos: number; canalSoportado: boolean; enCola?: boolean };
@@ -391,7 +392,13 @@ async function deliverCampaign(
           if (channel === 'email') {
             if (!r.email) {
               cursor.fallidos++;
-            } else if (await sendGenericNotification(r.email, subject, body)) {
+            } else if (
+              await sendGenericNotification(
+                r.email,
+                subject,
+                renderCampaignEmailHtml(body, { businessId, campaignId: id, recipientId: r.id }),
+              )
+            ) {
               cursor.enviados++;
             } else {
               cursor.fallidos++;

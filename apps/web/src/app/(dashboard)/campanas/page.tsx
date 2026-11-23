@@ -348,9 +348,20 @@ export default function CampanasPage() {
                     </span>
                   </div>
                   {/*
-                    Aperturas y clicks: no hay tracking (el backend guarda openRate/clickRate en 0),
-                    así que no se muestran para no exhibir un "0 %" falso. Decisión del dueño pendiente.
+                    Aperturas y clics: solo campañas de email, y solo si ya hay datos (0 = todavía sin
+                    registros o campaña anterior al tracking: no se muestra un "0 %" falso).
                   */}
+                  {c.status === 'sent' && c.channel === 'email' && ((c.openRate ?? 0) > 0 || (c.clickRate ?? 0) > 0) && (
+                    <p className="mt-2 text-xs text-slate-400" data-testid={`metricas-${c.id}`}>
+                      {(c.openRate ?? 0) > 0 && (
+                        <span title="Aproximado: algunos clientes de correo precargan o bloquean las imágenes">
+                          Aperturas (aprox.): {c.openRate}%
+                        </span>
+                      )}
+                      {(c.openRate ?? 0) > 0 && (c.clickRate ?? 0) > 0 && ' · '}
+                      {(c.clickRate ?? 0) > 0 && <span>Clics: {c.clickRate}%</span>}
+                    </p>
+                  )}
                   {c.status === 'sending' && progress[c.id] && (
                     <div className="mt-3" data-testid={`progreso-${c.id}`}>
                       <div

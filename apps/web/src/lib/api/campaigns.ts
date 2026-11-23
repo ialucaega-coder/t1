@@ -7,8 +7,9 @@ export interface Campaign {
   channel: string;
   status: string;
   sentCount: number;
-  // openRate/clickRate existen en la base pero siempre valen 0 (no hay tracking de
-  // aperturas ni clicks): no se exponen en el front. Decisión del dueño pendiente.
+  /** % de destinatarios que abrieron / hicieron clic (solo email; 0 = sin datos todavía). */
+  openRate?: number;
+  clickRate?: number;
   scheduledAt: string | null;
   createdAt: string;
   updatedAt: string;

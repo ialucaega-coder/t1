@@ -119,7 +119,27 @@ describe('campanas: estados', () => {
     expect(screen.queryByRole('button', { name: /Enviar ahora|Reintentar envío/ })).not.toBeInTheDocument();
   });
 
-  it('no muestra aperturas ni clicks (no hay tracking)', () => {
+  it('email con aperturas y clics registrados los muestra (apertura como aproximada)', () => {
+    campaigns = [make({ status: 'sent', channel: 'email', sentCount: 10, openRate: 42.5, clickRate: 7 })];
+    render(<CampanasPage />);
+
+    expect(screen.getByText(/Aperturas \(aprox\.\): 42\.5%/)).toBeInTheDocument();
+    expect(screen.getByText(/Clics: 7%/)).toBeInTheDocument();
+  });
+
+  it('email sin datos de tracking (0) no muestra un 0 % falso', () => {
+    campaigns = [make({ status: 'sent', channel: 'email', sentCount: 10, openRate: 0, clickRate: 0 })];
+    const { container } = render(<CampanasPage />);
+    expect(container.textContent).not.toMatch(/apertura|clics/i);
+  });
+
+  it('WhatsApp nunca muestra aperturas ni clics aunque el valor no sea 0', () => {
+    campaigns = [make({ status: 'sent', channel: 'whatsapp', sentCount: 10, openRate: 30, clickRate: 5 })];
+    const { container } = render(<CampanasPage />);
+    expect(container.textContent).not.toMatch(/apertura|clics/i);
+  });
+
+  it('no muestra aperturas ni clicks cuando no hay datos (campaña de WhatsApp)', () => {
     campaigns = [make({ status: 'sent', sentCount: 3, openRate: 0, clickRate: 0 })];
     const { container } = render(<CampanasPage />);
 
