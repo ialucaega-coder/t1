@@ -28,6 +28,8 @@ trackingRouter.get('/o/:token', (req: Request, res: Response) => {
   const payload = verifyTrackingToken(token, 'o');
   if (payload) void recordTrackingEvent(payload);
   noStore(res);
+  // El pixel se carga desde otro sitio (el cliente de correo): helmet lo limitaba a same-site.
+  res.set('Cross-Origin-Resource-Policy', 'cross-origin');
   res.type('image/gif').send(PIXEL);
 });
 

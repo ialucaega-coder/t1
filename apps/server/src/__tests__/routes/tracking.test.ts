@@ -25,6 +25,7 @@ describe('GET /o/:token.gif', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/image\/gif/);
     expect(res.headers['cache-control']).toMatch(/no-store/);
+    expect(res.headers['cross-origin-resource-policy']).toBe('cross-origin');
     expect(record).toHaveBeenCalledWith({ k: 'o', b: 'b1', c: 'c1', r: 'u1' });
   });
 
