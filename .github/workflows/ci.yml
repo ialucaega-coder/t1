@@ -244,14 +244,12 @@ jobs:
   # Migra una DB efímera, siembra el usuario demo (admin@localb.com), levanta el
   # server compilado y el web en modo producción, y corre e2e/*.spec.ts, que
   # incluye el smoke de TODAS las pantallas del panel (falla ante pageerror o
-  # error boundary). Arranca como NO bloqueante (continue-on-error) hasta
-  # verificar que corre estable en GitHub Actions; quitar esa línea para
-  # volverlo obligatorio.
+  # error boundary). Es OBLIGATORIO desde que corrió verde en GitHub Actions
+  # (antes era continue-on-error mientras se verificaba que corriera estable).
   # -------------------------------------------------------------------
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 40
     services:
       postgres:
