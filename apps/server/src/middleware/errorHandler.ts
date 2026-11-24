@@ -35,8 +35,9 @@ export function asyncHandler(
 function handlePrismaError(err: Prisma.PrismaClientKnownRequestError, res: Response) {
   switch (err.code) {
     case 'P2002': {
-      const target = Array.isArray(err.meta?.target) ? (err.meta?.target as string[]).join(', ') : 'campo';
-      res.status(409).json({ error: `Ya existe un registro con ese ${target}` });
+      // Sin nombrar el campo: "ya existe un registro con ese email" confirma a un
+      // anónimo qué emails/valores existen (enumeración).
+      res.status(409).json({ error: 'Ya existe un registro con esos datos' });
       return;
     }
     case 'P2025':

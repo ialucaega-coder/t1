@@ -7,8 +7,10 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { z } from 'zod';
 import { registerSchema, loginSchema, twoFactorCodeSchema, secondFactorCodeSchema, passwordSchema, acceptInviteSchema, RegisterInput, LoginInput, AcceptInviteInput } from '../validators/auth';
 import { requireAuth } from '../middleware/auth';
-import { getAuthSecret } from '../lib/secrets';
+import { getAuthSecret, JWT_ALGORITHM } from '../lib/secrets';
+import { sharedIncr } from '../lib/sharedState';
 import { revokeUserSessions, isSessionRevoked } from '../services/auth/revocation';
+import { isBusinessActive } from '../services/auth/businessStatus';
 import { generateTwoFactorSetup, verifyTwoFactorToken } from '../services/twoFactor';
 import {
   generateRecoveryCodes,
@@ -28,7 +30,7 @@ const updateMeSchema = z.object({
   newPassword: passwordSchema.optional(),
 });
 import { auditAuthEvent } from '../middleware/audit';
-import type { Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 const router = Router();
 
@@ -61,10 +63,59 @@ function clearSessionCookie(res: Response) {
   res.clearCookie('session_token', { path: '/' });
 }
 
-function signToken(payload: { userId: string; businessId: string; role: string }) {
-  return jwt.sign(payload, getAuthSecret(), {
+function signToken(payload: { userId: string; businessId: string; role: string }, iatSeconds?: number) {
+  return jwt.sign(iatSeconds ? { ...payload, iat: iatSeconds } : payload, getAuthSecret(), {
+    algorithm: JWT_ALGORITHM,
     expiresIn: JWT_EXPIRES_IN,
   });
+}
+
+/** Mensaje genérico para un negocio suspendido por la plataforma. */
+const SUSPENDED_MESSAGE = 'Cuenta suspendida. Contactá a soporte.';
+
+/**
+ * Registra UN intento fallido de login de forma atómica (`increment` en la base) y
+ * decide el bloqueo con el valor devuelto: antes se leía `failedLogins`, se sumaba 1
+ * en memoria y se escribía, así que N intentos paralelos contaban como 1 y el tope de
+ * 5 se podía esquivar con ráfagas.
+ */
+async function registerFailedLogin(userId: string): Promise<{ failedLogins: number; locked: boolean }> {
+  const row = await prisma.user.update({
+    where: { id: userId },
+    data: { failedLogins: { increment: 1 } },
+    select: { failedLogins: true },
+  });
+  const failedLogins = row.failedLogins;
+  const locked = failedLogins >= MAX_FAILED_LOGINS;
+  if (locked) {
+    await prisma.user.update({ where: { id: userId }, data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) } });
+  }
+  return { failedLogins, locked };
+}
+
+/**
+ * Tope de intentos de código 2FA por usuario (además del límite por IP): sin él, una
+ * sesión robada podía probar códigos TOTP desde muchas IPs.
+ */
+const TWO_FA_USER_WINDOW_MS = 10 * 60 * 1000;
+const TWO_FA_USER_MAX = 10;
+async function twoFactorUserLimit(req: Request, res: Response, next: NextFunction) {
+  // Igual que tenantRateLimit: en tests no corre salvo TENANT_RL_FORCE=true (los tests
+  // de las rutas hacen muchas llamadas con el mismo usuario).
+  if (process.env.NODE_ENV === 'test' && process.env.TENANT_RL_FORCE !== 'true') {
+    next();
+    return;
+  }
+  try {
+    const count = await sharedIncr(`2fa-attempts:${req.auth!.userId}:${Math.floor(Date.now() / TWO_FA_USER_WINDOW_MS)}`, TWO_FA_USER_WINDOW_MS);
+    if (count > TWO_FA_USER_MAX) {
+      res.status(429).json({ error: 'Demasiados intentos. Esperá unos minutos e intentá de nuevo.' });
+      return;
+    }
+  } catch {
+    /* sin contador compartido no se bloquea: queda el límite por IP */
+  }
+  next();
 }
 
 router.post(
@@ -137,6 +188,7 @@ router.post(
     // siquiera con la contraseña correcta. Respuesta genérica para no revelar
     // el estado de la cuenta.
     if (!user.isActive || user.deletedAt) {
+      await equalizeVerifyTiming();
       auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
         userId: user.id,
         businessId: user.businessId,
@@ -147,27 +199,45 @@ router.post(
     }
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
+      // Cuenta bloqueada: misma respuesta que unas credenciales inválidas (antes era
+      // 423, que confirmaba que el email existe y que estaba bajo ataque) y el mismo
+      // costo de tiempo. El motivo queda en la auditoría.
+      await equalizeVerifyTiming();
       auditAuthEvent('AUTH_ACCOUNT_LOCKED', req, { userId: user.id, businessId: user.businessId });
-      res.status(423).json({ error: 'Account locked. Try again later.' });
+      res.status(401).json({ error: 'Invalid credentials' });
       return;
+    }
+    // Bloqueo vencido: el contador arranca de cero (antes seguía en 5 y el primer
+    // error posterior volvía a bloquear al instante).
+    if (user.lockedUntil) {
+      await prisma.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null } });
+      user.failedLogins = 0;
+      user.lockedUntil = null;
     }
 
     const { valid: validPassword, needsRehash } = await verifyPassword(data.password, user.passwordHash);
     if (!validPassword) {
-      const failedLogins = user.failedLogins + 1;
-      const update: { failedLogins: number; lockedUntil?: Date } = { failedLogins };
-      if (failedLogins >= MAX_FAILED_LOGINS) {
-        update.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
-      }
-      await prisma.user.update({ where: { id: user.id }, data: update });
+      const { failedLogins, locked } = await registerFailedLogin(user.id);
 
       auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
         userId: user.id,
         businessId: user.businessId,
-        metadata: { failedLogins, locked: failedLogins >= MAX_FAILED_LOGINS },
+        metadata: { failedLogins, locked },
       });
 
       res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Negocio suspendido por la plataforma: ni con la contraseña correcta se entra.
+    // (Después de validar la contraseña, para no revelar el estado a quien no la tiene.)
+    if (user.business.isActive === false) {
+      auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
+        userId: user.id,
+        businessId: user.businessId,
+        metadata: { reason: 'business_suspended' },
+      });
+      res.status(403).json({ error: SUSPENDED_MESSAGE });
       return;
     }
 
@@ -189,16 +259,11 @@ router.post(
         // Un código 2FA incorrecto cuenta para el bloqueo igual que una contraseña
         // incorrecta; si no, quien ya conoce la clave podría probar los 10^6
         // códigos posibles sin consecuencias.
-        const failedLogins = user.failedLogins + 1;
-        const update: { failedLogins: number; lockedUntil?: Date } = { failedLogins };
-        if (failedLogins >= MAX_FAILED_LOGINS) {
-          update.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
-        }
-        await prisma.user.update({ where: { id: user.id }, data: update });
+        const { failedLogins, locked } = await registerFailedLogin(user.id);
         auditAuthEvent('AUTH_LOGIN_FAILURE', req, {
           userId: user.id,
           businessId: user.businessId,
-          metadata: { reason: 'invalid_2fa_code', failedLogins, locked: failedLogins >= MAX_FAILED_LOGINS },
+          metadata: { reason: 'invalid_2fa_code', failedLogins, locked },
         });
         res.status(401).json({ error: 'Invalid 2FA code' });
         return;
@@ -311,7 +376,7 @@ router.get(
     }
     try {
       const token = header.slice(7);
-      const payload = jwt.verify(token, getAuthSecret()) as { userId: string; businessId: string; role: string; iat?: number };
+      const payload = jwt.verify(token, getAuthSecret(), { algorithms: [JWT_ALGORITHM] }) as { userId: string; businessId: string; role: string; iat?: number };
       // Misma revocación que requireAuth: un logout, cambio de rol o baja corta la
       // sesión también acá (antes /me seguía devolviendo datos con un JWT revocado).
       if (await isSessionRevoked(payload.businessId, payload.userId, payload.iat)) {
@@ -329,6 +394,10 @@ router.get(
       // Cuenta dada de baja (p. ej. quitada del equipo): su JWT no sirve aunque no venza.
       if (user.isActive === false || user.deletedAt) {
         res.status(401).json({ error: 'User not found' });
+        return;
+      }
+      if (user.business.isActive === false) {
+        res.status(403).json({ error: 'Account suspended' });
         return;
       }
       res.json({
@@ -354,7 +423,7 @@ router.patch(
     let payload: { userId: string; businessId: string; role: string; iat?: number };
     try {
       const token = header.slice(7);
-      payload = jwt.verify(token, getAuthSecret()) as typeof payload;
+      payload = jwt.verify(token, getAuthSecret(), { algorithms: [JWT_ALGORITHM] }) as typeof payload;
     } catch {
       res.status(401).json({ error: 'Invalid token' });
       return;
@@ -367,6 +436,10 @@ router.patch(
     const current = await prisma.user.findUnique({ where: { id: payload.userId } });
     if (!current || current.isActive === false || current.deletedAt) {
       res.status(401).json({ error: 'User not found' });
+      return;
+    }
+    if (!(await isBusinessActive(payload.businessId))) {
+      res.status(403).json({ error: 'Account suspended' });
       return;
     }
 
@@ -406,16 +479,26 @@ router.patch(
       include: { business: true },
     });
 
-    // Si cambió la contraseña, revocamos todas las sesiones ANTERIORES a la
-    // actual: un atacante con un token viejo robado queda afuera, pero el
-    // usuario que acaba de cambiar su clave NO se desloguea (su token, emitido
-    // en `iat`, sobrevive porque el corte es su propio `iat`).
+    // Si cambió la contraseña, revocamos TODAS las sesiones emitidas hasta AHORA
+    // (incluida la actual) y devolvemos un token nuevo. Antes el corte era el `iat`
+    // del token actual: un atacante que se había logueado DESPUÉS de ese instante
+    // seguía válido hasta 14 días con la clave ya cambiada.
+    let newToken: string | undefined;
     if (update.passwordHash) {
-      const cutoffMs = (payload.iat ?? Math.floor(Date.now() / 1000)) * 1000;
+      const cutoffMs = Date.now();
       await revokeUserSessions(payload.businessId, payload.userId, cutoffMs);
+      // El token nuevo lleva un `iat` posterior al corte (el `iat` va en segundos
+      // enteros y el corte en ms: se usa el segundo siguiente para que NO caiga del
+      // lado revocado). Las sesiones anteriores quedan todas atrás.
+      newToken = signToken(
+        { userId: updated.id, businessId: updated.businessId, role: updated.role },
+        Math.floor(cutoffMs / 1000) + 1,
+      );
+      setSessionCookie(res, newToken);
     }
 
     res.json({
+      ...(newToken ? { token: newToken } : {}),
       user: { id: updated.id, email: updated.email, name: updated.name, role: updated.role },
       business: { id: updated.business.id, name: updated.business.name, slug: updated.business.slug },
     });
@@ -482,7 +565,9 @@ router.post(
 /** Confirma el alta de 2FA verificando el primer código TOTP. */
 router.post(
   '/2fa/verify',
+  authRateLimit,
   requireAuth,
+  twoFactorUserLimit,
   validate(twoFactorCodeSchema),
   asyncHandler(async (req, res) => {
     const user = await prisma.user.findUnique({
@@ -508,7 +593,9 @@ router.post(
 /** Desactiva 2FA (requiere un código TOTP válido vigente). */
 router.post(
   '/2fa/disable',
+  authRateLimit,
   requireAuth,
+  twoFactorUserLimit,
   validate(secondFactorCodeSchema),
   asyncHandler(async (req, res) => {
     const user = await prisma.user.findUnique({
@@ -546,7 +633,9 @@ router.post(
  */
 router.post(
   '/2fa/recovery-codes',
+  authRateLimit,
   requireAuth,
+  twoFactorUserLimit,
   validate(secondFactorCodeSchema),
   asyncHandler(async (req, res) => {
     const user = await prisma.user.findUnique({

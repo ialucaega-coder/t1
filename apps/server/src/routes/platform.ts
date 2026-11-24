@@ -18,6 +18,8 @@ import { validate } from '../middleware/validate';
 import { asyncHandler } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { invalidateCapabilityCache } from '../services/team/capabilityCache';
+import { invalidateBusinessActive } from '../services/auth/businessStatus';
+import { revokeUserSessions } from '../services/auth/revocation';
 
 // ─── Feature flags de plataforma (persistidos en Connection) ────────────────
 
@@ -161,6 +163,26 @@ router.patch(
       data: { isActive },
       select: { id: true, name: true, slug: true, isActive: true },
     });
+    // requireAuth y el login miran este flag (caché de 30 s): se refresca ya en esta instancia.
+    invalidateBusinessActive(updated.id);
+
+    // Al SUSPENDER, además se cortan las sesiones vigentes de todos sus usuarios
+    // (los tokens emitidos hasta ahora dejan de servir aunque el negocio se reactive:
+    // al volver tienen que iniciar sesión de nuevo). Reactivar no revoca nada.
+    if (!isActive) {
+      try {
+        const users = await prisma.user.findMany({ where: { businessId: updated.id }, select: { id: true }, take: 5000 });
+        for (const u of users ?? []) {
+          // Best-effort por usuario: una falla no frena al resto ni a la suspensión
+          // (que igual aplica por el chequeo de requireAuth, ≤ 30 s).
+          await revokeUserSessions(updated.id, u.id).catch((err) =>
+            console.error('[platform] no se pudo revocar la sesión al suspender:', (err as Error).message),
+          );
+        }
+      } catch (err) {
+        console.error('[platform] no se pudieron listar los usuarios a revocar:', (err as Error).message);
+      }
+    }
     res.json(updated);
   }),
 );

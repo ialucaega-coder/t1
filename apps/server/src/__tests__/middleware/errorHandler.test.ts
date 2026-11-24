@@ -116,9 +116,9 @@ describe('middleware/errorHandler - errorHandler', () => {
     errorHandler(err, dummyReq, res, dummyNext);
 
     expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.stringContaining('email') })
-    );
+    // Mensaje genérico: no nombra el campo (no confirma qué email/valor ya existe).
+    expect(res.json).toHaveBeenCalledWith({ error: 'Ya existe un registro con esos datos' });
+    expect(JSON.stringify((res.json as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('email');
   });
 
   it('responde 404 ante un error Prisma P2025 (record not found)', () => {

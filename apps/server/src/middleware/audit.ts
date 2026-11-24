@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { redactUrl } from './accessLog';
 
 /**
  * audit.ts
@@ -103,7 +104,7 @@ export function auditAuthEvent(
 ) {
   recordAuditEvent({
     type,
-    resource: req.originalUrl,
+    resource: redactUrl(req.originalUrl),
     ip: getClientIp(req),
     userId: extra.userId,
     businessId: extra.businessId,
@@ -138,7 +139,7 @@ export function auditDataMutations(req: Request, res: Response, next: NextFuncti
     if (res.statusCode >= 200 && res.statusCode < 300) {
       recordAuditEvent({
         type: auditType,
-        resource: req.originalUrl,
+        resource: redactUrl(req.originalUrl),
         userId: req.auth?.userId,
         businessId: req.auth?.businessId,
         ip: getClientIp(req),
@@ -161,7 +162,7 @@ export function auditRateLimitViolations(req: Request, res: Response, next: Next
     if (res.statusCode === 429) {
       recordAuditEvent({
         type: 'RATE_LIMIT_EXCEEDED',
-        resource: req.originalUrl,
+        resource: redactUrl(req.originalUrl),
         ip: getClientIp(req),
         metadata: { method: req.method },
       });

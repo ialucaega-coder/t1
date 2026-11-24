@@ -50,6 +50,12 @@ vi.mock('../../lib/prisma', () => {
   return { prisma };
 });
 
+// El límite por IP (10 por ventana) se acumularía entre los tests de este archivo.
+vi.mock('../../middleware/rateLimit', () => ({
+  authRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+  apiRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 import { prisma } from '../../lib/prisma';
 import { authRouter } from '../../routes/auth';
 import { encrypt } from '../../lib/crypto';
@@ -264,22 +270,26 @@ describe('routes/auth · 2FA', () => {
       expect(res.body.token).toBeTruthy();
     });
 
-    it('un código 2FA incorrecto suma un intento fallido', async () => {
+    it('un código 2FA incorrecto suma un intento fallido (incremento atómico)', async () => {
+      mock(prisma.user.update).mockResolvedValue({ failedLogins: 1 });
       await request(app).post('/api/auth/login')
         .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: '000000' });
-      const data = mock(prisma.user.update).mock.calls[0][0].data;
-      expect(data.failedLogins).toBe(1);
-      expect(data.lockedUntil).toBeUndefined();
+      const calls = mock(prisma.user.update).mock.calls;
+      expect(calls[0][0].data).toEqual({ failedLogins: { increment: 1 } });
+      // Con 1 intento no hay bloqueo: no hay segunda escritura.
+      expect(calls).toHaveLength(1);
     });
 
     it('el 5º código 2FA incorrecto bloquea la cuenta 15 minutos', async () => {
       mock(prisma.user.findUnique).mockResolvedValue({ ...baseUser, failedLogins: 4 });
+      // El bloqueo se decide con el valor que DEVUELVE el incremento atómico.
+      mock(prisma.user.update).mockResolvedValue({ failedLogins: 5 });
       const res = await request(app).post('/api/auth/login')
         .send({ email: 'ana@x.com', password: 'Password123', twoFactorCode: '000000' });
       expect(res.status).toBe(401);
-      const data = mock(prisma.user.update).mock.calls[0][0].data;
-      expect(data.failedLogins).toBe(5);
-      expect(data.lockedUntil).toBeInstanceOf(Date);
+      const calls = mock(prisma.user.update).mock.calls;
+      expect(calls[0][0].data).toEqual({ failedLogins: { increment: 1 } });
+      expect(calls[1][0].data.lockedUntil).toBeInstanceOf(Date);
     });
 
     it('un código de recuperación válido permite entrar y se gasta (un solo uso)', async () => {

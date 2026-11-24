@@ -158,6 +158,16 @@ export function sanitizeString(value: string): string {
   return out;
 }
 
+/**
+ * Campos que NO se sanean: son secretos o credenciales y sacarles `<...>`,
+ * `javascript:` o `on...=` los corrompe en silencio (una contraseña o API key con
+ * esos caracteres se guardaba distinta de la que escribió el usuario y después no
+ * entraba). Se comparan sin distinguir mayúsculas.
+ */
+const UNSANITIZED_KEYS = new Set(
+  ['password', 'currentPassword', 'newPassword', 'apiKey', 'secret', 'token', 'code', 'webhookSecret', 'twoFactorCode'].map((k) => k.toLowerCase()),
+);
+
 function sanitizeValue(value: unknown, depth = 0): unknown {
   if (depth > 10) return value; // evita recursión excesiva / DoS
   if (typeof value === 'string') {
@@ -169,7 +179,7 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
   if (value && typeof value === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = sanitizeValue(val, depth + 1);
+      result[key] = UNSANITIZED_KEYS.has(key.toLowerCase()) ? val : sanitizeValue(val, depth + 1);
     }
     return result;
   }

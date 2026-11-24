@@ -1,7 +1,7 @@
 /**
  * Formato canónico y guard anti-hijack de teléfonos de negocio (lib/businessPhone.ts).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { assertPhoneNumbersFree, normalizeOptionalPhone, normalizePhone, phoneDigits } from '../../lib/businessPhone';
 
 describe('normalizePhone', () => {
@@ -67,5 +67,43 @@ describe('assertPhoneNumbersFree', () => {
     await expect(assertPhoneNumbersFree(tx([{ id: 'otro' }]) as never, 'biz_1', ['+5491122223333'])).rejects.toMatchObject({
       statusCode: 409,
     });
+  });
+});
+
+describe('assertPhoneNumbersFree: números reservados de la plataforma (M2)', () => {
+  const tx = (rows: { id: string }[] = []) => ({
+    $executeRaw: vi.fn(async () => 1),
+    $queryRaw: vi.fn(async () => rows),
+  });
+  const OLD = process.env.TWILIO_PHONE_NUMBER;
+  afterEach(() => {
+    if (OLD === undefined) delete process.env.TWILIO_PHONE_NUMBER;
+    else process.env.TWILIO_PHONE_NUMBER = OLD;
+  });
+
+  it('rechaza (409) el número global de la plataforma (TWILIO_PHONE_NUMBER), en cualquier formato', async () => {
+    process.env.TWILIO_PHONE_NUMBER = '+54 9 11 5555-0000';
+    for (const candidate of ['+5491155550000', '5491155550000', '+54 (9) 11 5555 0000']) {
+      const t = tx();
+      await expect(assertPhoneNumbersFree(t as never, 'biz_1', [candidate])).rejects.toMatchObject({ statusCode: 409 });
+      // Corta ANTES de tomar locks o consultar a la base.
+      expect(t.$executeRaw).not.toHaveBeenCalled();
+      expect(t.$queryRaw).not.toHaveBeenCalled();
+    }
+  });
+
+  it('también con el prefijo whatsapp: en la variable de entorno', async () => {
+    process.env.TWILIO_PHONE_NUMBER = 'whatsapp:+14155238886';
+    await expect(assertPhoneNumbersFree(tx() as never, 'biz_1', ['+14155238886'])).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('un número distinto sigue pasando', async () => {
+    process.env.TWILIO_PHONE_NUMBER = '+5491155550000';
+    await expect(assertPhoneNumbersFree(tx() as never, 'biz_1', ['+5491177778888'])).resolves.toBeUndefined();
+  });
+
+  it('sin la variable seteada no rechaza nada', async () => {
+    delete process.env.TWILIO_PHONE_NUMBER;
+    await expect(assertPhoneNumbersFree(tx() as never, 'biz_1', ['+5491155550000'])).resolves.toBeUndefined();
   });
 });

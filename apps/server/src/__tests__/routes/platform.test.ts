@@ -18,7 +18,7 @@ process.env.PLATFORM_ADMIN_EMAILS = 'owner@localb.app, segundo@localb.app';
 
 vi.mock('../../lib/prisma', () => ({
   prisma: {
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findMany: vi.fn() },
     business: {
       count: vi.fn(),
       findMany: vi.fn(),
@@ -37,9 +37,12 @@ vi.mock('../../lib/prisma', () => ({
 // La revocación de sesiones no es el objeto de estas pruebas: la neutralizamos.
 vi.mock('../../services/auth/revocation', () => ({
   isSessionRevoked: vi.fn(async () => false),
+  revokeUserSessions: vi.fn(async () => undefined),
 }));
 
 import { prisma } from '../../lib/prisma';
+import { revokeUserSessions } from '../../services/auth/revocation';
+import { invalidateBusinessActive } from '../../services/auth/businessStatus';
 import { requireAuth } from '../../middleware/auth';
 import { requirePlatformAdmin } from '../../middleware/platformAdmin';
 import { platformRouter } from '../../routes/platform';
@@ -204,6 +207,72 @@ describe('routes/platform (Super Admin)', () => {
       expect(prisma.business.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'biz_1' }, data: { isActive: false } }),
       );
+    });
+
+    it('al SUSPENDER revoca las sesiones de TODOS los usuarios del negocio', async () => {
+      mock(prisma.business.update).mockResolvedValue({ id: 'biz_9', name: 'N', slug: 'n', isActive: false });
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }]);
+
+      await request(app).patch('/api/platform/businesses/biz_9/active').set('Authorization', `Bearer ${token}`).send({ isActive: false });
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { businessId: 'biz_9' } }));
+      expect(revokeUserSessions).toHaveBeenCalledTimes(3);
+      expect(revokeUserSessions).toHaveBeenCalledWith('biz_9', 'u1');
+      expect(revokeUserSessions).toHaveBeenCalledWith('biz_9', 'u3');
+    });
+
+    it('al REACTIVAR no revoca nada', async () => {
+      mock(prisma.business.update).mockResolvedValue({ id: 'biz_9', name: 'N', slug: 'n', isActive: true });
+
+      const res = await request(app).patch('/api/platform/businesses/biz_9/active').set('Authorization', `Bearer ${token}`).send({ isActive: true });
+
+      expect(res.status).toBe(200);
+      expect(revokeUserSessions).not.toHaveBeenCalled();
+    });
+
+    it('un fallo al revocar una sesión no impide suspender (best-effort por usuario)', async () => {
+      mock(prisma.business.update).mockResolvedValue({ id: 'biz_9', name: 'N', slug: 'n', isActive: false });
+      mock(prisma.user.findMany).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+      mock(revokeUserSessions).mockRejectedValueOnce(new Error('db'));
+      const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const res = await request(app).patch('/api/platform/businesses/biz_9/active').set('Authorization', `Bearer ${token}`).send({ isActive: false });
+
+      expect(res.status).toBe(200);
+      expect(revokeUserSessions).toHaveBeenCalledTimes(2);
+      err.mockRestore();
+    });
+
+    it('suspender/reactivar invalida la caché: los usuarios del negocio suspendido dejan de entrar y al reactivar vuelven a entrar', async () => {
+      // Un usuario del negocio biz_7 (el Super Admin opera desde biz_1, que sigue activo).
+      const tokenBiz7 = jwt.sign({ userId: 'user_7', businessId: 'biz_7', role: 'ADMIN' }, JWT_SECRET);
+      mock(prisma.user.findUnique).mockResolvedValue({ email: 'owner@localb.app' });
+      mock(prisma.business.count).mockResolvedValue(0);
+      mock(prisma.business.findMany).mockResolvedValue([]);
+
+      // Activo (y cacheado como activo).
+      invalidateBusinessActive('biz_7');
+      mock(prisma.business.findUnique).mockResolvedValue({ isActive: true });
+      const before = await request(app).get('/api/platform/businesses').set('Authorization', `Bearer ${tokenBiz7}`);
+      expect(before.status).toBe(200);
+
+      // El Super Admin suspende biz_7: la caché de esta instancia se refresca ya.
+      mock(prisma.business.update).mockResolvedValue({ id: 'biz_7', name: 'N', slug: 'n', isActive: false });
+      mock(prisma.user.findMany).mockResolvedValue([]);
+      mock(prisma.business.findUnique).mockResolvedValue({ isActive: false });
+      await request(app).patch('/api/platform/businesses/biz_7/active').set('Authorization', `Bearer ${token}`).send({ isActive: false });
+
+      const after = await request(app).get('/api/platform/businesses').set('Authorization', `Bearer ${tokenBiz7}`);
+      expect(after.status).toBe(403);
+      expect(after.body.error).toMatch(/suspended/i);
+
+      // Reactivar: vuelve a permitir (también al instante en esta instancia).
+      mock(prisma.business.update).mockResolvedValue({ id: 'biz_7', name: 'N', slug: 'n', isActive: true });
+      mock(prisma.business.findUnique).mockResolvedValue({ isActive: true });
+      await request(app).patch('/api/platform/businesses/biz_7/active').set('Authorization', `Bearer ${token}`).send({ isActive: true });
+      const again = await request(app).get('/api/platform/businesses').set('Authorization', `Bearer ${tokenBiz7}`);
+      expect(again.status).toBe(200);
+      invalidateBusinessActive('biz_7');
     });
 
     it('no permite renombrar el negocio: ignora un name en el body (solo escribe isActive)', async () => {

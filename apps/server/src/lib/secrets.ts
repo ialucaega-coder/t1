@@ -14,6 +14,14 @@
  * falsificable.
  */
 
+/**
+ * Algoritmo con el que se firman y verifican los JWT de sesión. Se pinnea tanto al
+ * firmar como al verificar: sin `algorithms` explícito, jsonwebtoken acepta los
+ * algoritmos HMAC y RSA que quepan con el tipo de clave, y un cambio de librería o
+ * de clave podría abrir un ataque de confusión de algoritmo.
+ */
+export const JWT_ALGORITHM = 'HS256' as const;
+
 /** Valores que nunca deben aceptarse como secreto real. */
 const INSECURE_SECRETS = new Set(['', 'dev-secret', 'your-secret-here', 'changeme']);
 

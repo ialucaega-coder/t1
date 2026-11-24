@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { getAuthSecret } from '../lib/secrets';
+import { getAuthSecret, JWT_ALGORITHM } from '../lib/secrets';
 import { isSessionRevoked } from '../services/auth/revocation';
+import { isBusinessActive } from '../services/auth/businessStatus';
 
 export interface AuthPayload {
   userId: string;
@@ -29,11 +30,16 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   try {
     const token = header.slice(7);
-    const payload = jwt.verify(token, getAuthSecret()) as AuthPayload & { iat?: number };
+    const payload = jwt.verify(token, getAuthSecret(), { algorithms: [JWT_ALGORITHM] }) as AuthPayload & { iat?: number };
     // Revocación pasiva: un token emitido antes del corte del usuario (logout,
     // cambio de contraseña, baja) se rechaza aunque siga sin expirar.
     if (await isSessionRevoked(payload.businessId, payload.userId, payload.iat)) {
       res.status(401).json({ error: 'Session expired' });
+      return;
+    }
+    // Negocio suspendido por la plataforma: sus usuarios no operan (caché de 30 s).
+    if (!(await isBusinessActive(payload.businessId))) {
+      res.status(403).json({ error: 'Account suspended' });
       return;
     }
     req.auth = payload;

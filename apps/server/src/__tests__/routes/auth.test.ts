@@ -126,7 +126,7 @@ describe('routes/auth', () => {
         role: 'ADMIN',
         business: { id: 'biz_1', name: 'Negocio', slug: 'negocio' },
       });
-      (prisma.user.update as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      (prisma.user.update as ReturnType<typeof vi.fn>).mockResolvedValue({ failedLogins: 1 });
 
       const res = await request(app).post('/api/auth/login').send({
         email: 'test@example.com',
@@ -137,12 +137,12 @@ describe('routes/auth', () => {
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'user_1' },
-          data: expect.objectContaining({ failedLogins: 1 }),
+          data: { failedLogins: { increment: 1 } },
         })
       );
     });
 
-    it('bloquea la cuenta (423) tras 5 intentos fallidos', async () => {
+    it('bloquea la cuenta tras 5 intentos fallidos (decide con el valor devuelto por el incremento)', async () => {
       const passwordHash = await bcrypt.hash('correcta123', 12);
       (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: 'user_1',
@@ -156,7 +156,7 @@ describe('routes/auth', () => {
         role: 'ADMIN',
         business: { id: 'biz_1', name: 'Negocio', slug: 'negocio' },
       });
-      (prisma.user.update as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      (prisma.user.update as ReturnType<typeof vi.fn>).mockResolvedValue({ failedLogins: 5 });
 
       const res = await request(app).post('/api/auth/login').send({
         email: 'test@example.com',
@@ -165,13 +165,14 @@ describe('routes/auth', () => {
 
       expect(res.status).toBe(401);
       expect(prisma.user.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ failedLogins: 5, lockedUntil: expect.any(Date) }),
-        })
+        expect.objectContaining({ data: { failedLogins: { increment: 1 } } })
+      );
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { lockedUntil: expect.any(Date) } })
       );
     });
 
-    it('devuelve 423 cuando la cuenta ya esta bloqueada', async () => {
+    it('una cuenta ya bloqueada responde igual que credenciales inválidas (401), sin delatar el bloqueo', async () => {
       (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: 'user_1',
         email: 'test@example.com',
@@ -190,8 +191,9 @@ describe('routes/auth', () => {
         password: 'lo-que-sea',
       });
 
-      expect(res.status).toBe(423);
-      expect(res.body.error).toMatch(/locked/i);
+      expect(res.status).toBe(401);
+      expect(res.body.error).toMatch(/invalid credentials/i);
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it('devuelve un token y resetea failedLogins con credenciales correctas', async () => {

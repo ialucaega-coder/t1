@@ -72,6 +72,16 @@ export async function assertPhoneNumbersFree(
   const digits = Array.from(new Set(numbers.map(phoneDigits).filter(Boolean))).sort();
   if (digits.length === 0) return;
 
+  // Números de la PLATAFORMA (el WhatsApp/Twilio global): ningún negocio puede
+  // registrarlos como suyos, o le robaría el tráfico entrante al resto. Se leen del
+  // entorno; sin variable seteada no rechaza nada. (El negocio de DEFAULT_VOICE_BUSINESS_ID
+  // ya queda protegido por la consulta de abajo: sus números son de OTRO negocio para
+  // cualquier tercero que intente registrarlos.)
+  const reserved = [process.env.TWILIO_PHONE_NUMBER].map((n) => phoneDigits((n ?? '').replace(/^whatsapp:/i, ''))).filter(Boolean);
+  if (digits.some((d) => reserved.includes(d))) {
+    throw new AppError(409, 'Ese número está reservado por la plataforma y no se puede usar.');
+  }
+
   for (const d of digits) {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'biznum:' + d}, 0))`;
   }
