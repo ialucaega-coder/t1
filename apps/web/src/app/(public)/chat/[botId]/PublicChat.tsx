@@ -6,7 +6,11 @@ import { Send, Bot, User, Loader2, MessageCircle, ImagePlus, X } from 'lucide-re
 const MAX_IMAGES = 4;
 const isValidImageUrl = (url: string) => /^https?:\/\//i.test(url.trim());
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api').replace(/\/api\/?$/, '');
+// Mismo origen que el resto del panel: NEXT_PUBLIC_API_URL es la variable que se configura en producción
+// (NEXT_PUBLIC_API_BASE queda como override opcional). Sin ninguna, el server local de desarrollo.
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api')
+  .replace(/\/+$/, '')
+  .replace(/\/api$/, '');
 
 // Polling de respuestas humanas: cada ~4 s mientras el chat esté abierto y visible.
 export const POLL_INTERVAL_MS = 4000;

@@ -297,7 +297,9 @@ export default function ArenaPage() {
                   <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-brand-400 text-white rounded-br-md' : msg.isError ? 'bg-red-500/10 text-red-300 border border-red-500/30 rounded-bl-md' : 'bg-surface-100 text-slate-200 border border-slate-700/50 rounded-bl-md'}`}>
                     <p className="text-sm leading-relaxed">{msg.text}</p>
                     <div className={`flex items-center gap-2 mt-1 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                      <span className={`text-[10px] ${msg.role === 'user' ? 'text-brand-200' : 'text-slate-500'}`}>{msg.timestamp}</span>
+                      {/* La hora del mensaje inicial se calcula al renderizar: server y navegador pueden diferir (minuto o zona
+                          horaria), lo que en producción dispara el error de hidratación #418. */}
+                      <span suppressHydrationWarning className={`text-[10px] ${msg.role === 'user' ? 'text-brand-200' : 'text-slate-500'}`}>{msg.timestamp}</span>
                       {msg.responseTime && <span className="text-[10px] text-slate-500 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />{msg.responseTime}ms</span>}
                     </div>
                   </div>
