@@ -82,6 +82,13 @@ vi.mock('../../services/mrgo/memory', async (importOriginal) => {
   };
 });
 
+// --- Mock del giro: sin esto loadIndustry consulta Prisma de verdad (en CI no hay DATABASE_URL
+// y en local le pegaba a la base real). buildIndustryPrompt REAL. ---
+vi.mock('../../services/mrgo/industry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/industry')>();
+  return { ...actual, loadIndustry: vi.fn(async () => ({ giroId: '' })) };
+});
+
 // --- Mock de la oficina (pausas): sin pausas por defecto ---
 vi.mock('../../services/mrgo/office', () => ({
   loadOffice: vi.fn(async () => ({ paused: [], positions: {} })),
