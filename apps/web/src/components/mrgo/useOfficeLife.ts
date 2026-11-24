@@ -409,7 +409,6 @@ export function useOfficeLife(input: OfficeLifeInput): Record<string, AgentLife>
     // `lives` se lee dentro de closures que se re-crean con cada arranque del
     // efecto, pero startWander también lee de prev vía setLives, por lo que no
     // dependemos de `lives` para evitar reinicios constantes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEnabled, keysSignature]);
 
   // ---- Garantía: el objeto devuelto SIEMPRE incluye una entrada por clave ----

@@ -60,10 +60,6 @@ export function PosStats() {
   const [stats, setStats] = useState<DailyStats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadStats();
-  }, []);
-
   async function loadStats() {
     setLoading(true);
     try {
@@ -115,6 +111,10 @@ export function PosStats() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    loadStats();
+  }, []);
 
   if (loading) {
     return (

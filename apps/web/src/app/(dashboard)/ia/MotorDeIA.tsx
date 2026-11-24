@@ -225,7 +225,7 @@ function ApiKeysModal({
         </div>
         <p className="text-xs text-slate-400 mb-4">
           Cargá tu propia API key por proveedor. Se guarda cifrada y nunca se muestra de vuelta.
-          Para borrarla usá "Quitar key".
+          Para borrarla usá &quot;Quitar key&quot;.
         </p>
 
         <div className="space-y-3">

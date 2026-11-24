@@ -96,6 +96,8 @@ export class HttpClient {
       if (!isAuthAttempt) {
         this.setToken(null);
         if (typeof window !== 'undefined') {
+          // Redirección completa a propósito: descarta todo el estado en memoria de la sesión vencida.
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination
           window.location.href = '/login';
         }
         throw new Error('Unauthorized');

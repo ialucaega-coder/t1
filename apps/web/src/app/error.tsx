@@ -15,6 +15,8 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
         </p>
         <div className="flex gap-3 justify-center">
           <button onClick={reset} className="btn-primary text-sm">Reintentar</button>
+          {/* Navegación completa a propósito: reinicia el estado del árbol que falló. */}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a href="/" className="btn-secondary text-sm">Ir al inicio</a>
         </div>
       </div>

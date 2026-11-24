@@ -92,6 +92,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await authApi.logout();
     setUser(null);
     setBusiness(null);
+    // Redirección completa a propósito: al cerrar sesión se descarta todo el estado en memoria.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = '/login';
   };
 

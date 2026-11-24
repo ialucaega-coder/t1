@@ -20,7 +20,6 @@ const MAX_SHORT = 80;
 /** Quita caracteres de control, colapsa espacios y recorta con "…". */
 export function sanitizeText(value: unknown, max = MAX_SHORT): string {
   if (typeof value !== 'string' && typeof value !== 'number') return '';
-  // eslint-disable-next-line no-control-regex
   const clean = String(value).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }

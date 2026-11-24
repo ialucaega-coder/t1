@@ -37,6 +37,7 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
   window.location.href = '';
   // Limpia la cookie espejo entre tests.
   document.cookie = 'auth_token=; Path=/; Max-Age=0';

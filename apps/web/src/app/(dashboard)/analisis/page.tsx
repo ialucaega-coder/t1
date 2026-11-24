@@ -74,20 +74,25 @@ function SatisfactionRing({ data, avgScore }: { data: { stars: number; count: nu
   if (total === 0) return <p className="text-xs text-slate-500">Sin conversaciones en el período para estimar.</p>;
   const r = 60;
   const circumference = 2 * Math.PI * r;
-  let offset = 0;
+  // Offset acumulado de cada segmento (sin reasignar variables durante el render).
+  const offsets: number[] = [];
+  let acumulado = 0;
+  for (const d of data) {
+    offsets.push(acumulado);
+    acumulado += (d.count / total) * circumference;
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-6">
       <svg viewBox="0 0 160 160" className="w-36 h-36">
-        {data.map((d) => {
+        {data.map((d, i) => {
           const pct = d.count / total;
           const dashLen = pct * circumference;
-          const segment = (
+          const offset = offsets[i];
+          return (
             <circle key={d.stars} cx={80} cy={80} r={r} fill="none" stroke={d.color} strokeWidth={18}
               strokeDasharray={`${dashLen} ${circumference - dashLen}`} strokeDashoffset={-offset} transform="rotate(-90 80 80)" />
           );
-          offset += dashLen;
-          return segment;
         })}
         <text x={80} y={76} textAnchor="middle" fill="white" className="text-2xl font-bold">{avgScore}</text>
         <text x={80} y={94} textAnchor="middle" fill="#94A3B8" className="text-[10px]">estimado</text>

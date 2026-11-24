@@ -78,6 +78,7 @@ export default function DashboardPage() {
   const { bots, isLoading: botsLoading, error: botsError, refetch: refetchBots, createBot, updateBot, deleteBot } = useBots();
   const { business } = useAuth();
   const { toast } = useToast();
+  const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   useSocket(business?.id ?? null);
   useSocketEvent('booking:created', () => {
     refetchStats();
@@ -86,7 +87,6 @@ export default function DashboardPage() {
   useSocketEvent('conversation:new-message', () => {
     statsApi.getDashboard().then(setDashboard).catch(() => {});
   });
-  const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newBotName, setNewBotName] = useState('');
   const [newBotChannel, setNewBotChannel] = useState<'TELEGRAM' | 'WHATSAPP' | 'WEBCHAT' | 'INSTAGRAM'>('WHATSAPP');

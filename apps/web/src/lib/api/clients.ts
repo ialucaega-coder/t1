@@ -100,6 +100,8 @@ export async function exportCsv(): Promise<void> {
 
   if (res.status === 401) {
     httpClient.setToken(null);
+    // Redirección completa a propósito (sesión vencida): descarta el estado en memoria.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     if (typeof window !== 'undefined') window.location.href = '/login';
     throw new Error('Tu sesión venció. Volvé a iniciar sesión.');
   }
