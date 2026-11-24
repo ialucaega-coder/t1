@@ -55,8 +55,9 @@ Variables del servicio (idealmente en Secret Manager):
   `META_VERIFY_TOKEN`, `META_APP_SECRET`. Telegram: cada negocio carga su bot.
 - Email: `RESEND_API_KEY`, `EMAIL_FROM` (mails y campañas por email). Errores: `SENTRY_DSN`.
 - Links públicos: `API_PUBLIC_URL` (dominio público del API, con HTTPS: lo necesita
-  MercadoPago para avisar los pagos y Telegram para el webhook) y `FRONTEND_URL`
-  (links de invitación de equipo).
+  MercadoPago para avisar los pagos y Telegram para el webhook; también el pixel y las
+  redirecciones del tracking de aperturas/clics de campañas por email: sin ella los emails
+  salen sin medición) y `FRONTEND_URL` (links de invitación de equipo).
 - Colas y jobs: `IDEMPOTENCY_TTL_DAYS` (default 30; purga de claves viejas),
   `QUEUES_DISABLED=true` (fuerza modo inline aun con Redis), `RUN_WORKERS=false` y
   `RUN_SCHEDULER=false` (dejan una instancia sin workers / sin cron; ver sección 4).
