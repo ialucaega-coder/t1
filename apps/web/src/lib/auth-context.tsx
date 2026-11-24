@@ -79,6 +79,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateProfile = async (data: { name?: string; currentPassword?: string; newPassword?: string }) => {
     const res = await authApi.updateProfile(data);
+    // Cambio de contraseña: el token actual quedó revocado y el server manda uno nuevo.
+    if (res.token) httpClient.setToken(res.token);
     setUser(res.user);
     setBusiness(res.business);
   };

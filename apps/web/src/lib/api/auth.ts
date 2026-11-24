@@ -32,8 +32,16 @@ export function getMe() {
   return httpClient.get<{ user: User; business: Business }>('/auth/me');
 }
 
+// Respuesta de PATCH /auth/me. Si se cambió la contraseña el server revoca la sesión actual y
+// devuelve un `token` NUEVO: hay que guardarlo, o el usuario queda deslogueado en el siguiente request.
+export interface UpdateProfileResponse {
+  user: User;
+  business: Business;
+  token?: string;
+}
+
 export function updateProfile(data: { name?: string; currentPassword?: string; newPassword?: string }) {
-  return httpClient.patch<{ user: User; business: Business }>('/auth/me', data);
+  return httpClient.patch<UpdateProfileResponse>('/auth/me', data);
 }
 
 export async function logout() {
