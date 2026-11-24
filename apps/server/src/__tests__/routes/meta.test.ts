@@ -31,6 +31,18 @@ vi.mock('../../services/channels/inboundRetry', async () => {
   return { ...actual, INBOUND_RETRY: { attempts: 3, backoffMs: 1 } };
 });
 
+// requireCapability real consulta plan/overrides en la base: se reemplaza por un doble
+// que deja pasar, salvo que el request mande `x-deny-capability: <capacidad>`.
+vi.mock('../../middleware/capability', () => ({
+  requireCapability: (capability: string) => (req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    if (req.headers['x-deny-capability'] === capability) {
+      res.status(403).json({ error: 'Esta herramienta no está disponible en tu plan o tu rol.', capability });
+      return;
+    }
+    next();
+  },
+}));
+
 vi.mock('../../services/meta/client', () => ({
   isConfigured: vi.fn(() => true),
   validateSignature: vi.fn(() => true),
@@ -77,6 +89,8 @@ function buildApp() {
 describe('routes/meta', () => {
   const app = buildApp();
   const adminToken = jwt.sign({ userId: 'u1', businessId: 'biz_1', role: 'ADMIN' }, JWT_SECRET);
+  const proToken = jwt.sign({ userId: 'u2', businessId: 'biz_1', role: 'PROFESSIONAL' }, JWT_SECRET);
+  const clientToken = jwt.sign({ userId: 'u3', businessId: 'biz_1', role: 'CLIENT' }, JWT_SECRET);
   const OLD_ENV = { ...process.env };
 
   beforeEach(() => {
@@ -276,6 +290,45 @@ describe('routes/meta', () => {
       await new Promise((r) => setTimeout(r, 20));
       expect(mock(transcribeAudioFromUrl)).toHaveBeenCalledWith('https://cdn/voz.mp4');
       expect(mock(processMessage)).toHaveBeenCalledWith('biz_1', 'quiero un turno el martes', 'INSTAGRAM', expect.anything());
+    });
+  });
+
+  describe('permisos de connect / disconnect / status', () => {
+    const body = { platform: 'instagram', pageAccessToken: 'tok', igId: 'IG_1' };
+
+    it.each([['PROFESSIONAL'], ['CLIENT']])('un %s NO puede conectar Instagram/Messenger (403): solo ADMIN', async (role) => {
+      const token = role === 'PROFESSIONAL' ? proToken : clientToken;
+      const res = await request(app).post('/api/meta/connect').set('Authorization', `Bearer ${token}`).send(body);
+
+      expect(res.status).toBe(403);
+      expect(prisma.connection.create).not.toHaveBeenCalled();
+      expect(prisma.connection.update).not.toHaveBeenCalled();
+    });
+
+    it.each([['PROFESSIONAL'], ['CLIENT']])('un %s NO puede desconectar (403)', async (role) => {
+      const token = role === 'PROFESSIONAL' ? proToken : clientToken;
+      const res = await request(app).delete('/api/meta/disconnect?platform=instagram').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+      expect(prisma.connection.update).not.toHaveBeenCalled();
+    });
+
+    it('un CLIENT no puede ver el estado (403)', async () => {
+      const res = await request(app).get('/api/meta/status').set('Authorization', `Bearer ${clientToken}`);
+      expect(res.status).toBe(403);
+      expect(prisma.connection.findMany).not.toHaveBeenCalled();
+    });
+
+    it('el estado exige la capacidad "channels"', async () => {
+      const res = await request(app).get('/api/meta/status').set('Authorization', `Bearer ${proToken}`).set('x-deny-capability', 'channels');
+      expect(res.status).toBe(403);
+      expect(prisma.connection.findMany).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL con la capacidad sí ve el estado', async () => {
+      mock(prisma.connection.findMany).mockResolvedValue([]);
+      const res = await request(app).get('/api/meta/status').set('Authorization', `Bearer ${proToken}`);
+      expect(res.status).toBe(200);
     });
   });
 

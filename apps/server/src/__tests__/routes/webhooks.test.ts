@@ -19,11 +19,19 @@ vi.mock('../../lib/prisma', () => ({
   },
 }));
 vi.mock('../../middleware/auth', () => ({
+  requireRole:
+    (...roles: string[]) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      if (!roles.includes(req.auth?.role ?? '')) {
+        res.status(403).json({ error: 'Insufficient permissions' });
+        return;
+      }
+      next();
+    },
   requireAuth: (req: Request, _res: Response, next: NextFunction) => {
-    req.auth = { userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' };
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role: (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN' };
     next();
   },
-  requireRole: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 vi.mock('../../lib/ssrf', () => ({
   assertSafePublicUrl: vi.fn(async (u: string) => new URL(u)),
@@ -55,6 +63,35 @@ describe('routes/webhooks', () => {
     mock(assertSafePublicUrl).mockImplementation(async (u: string) => new URL(u));
     // fetch global para POST /:id/test
     (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi.fn(async () => ({ ok: true, status: 200 }));
+  });
+
+  describe('permisos: los webhooks salientes (URL + secreto) son solo de ADMIN', () => {
+    const calls: [string, string, object?][] = [
+      ['get', '/api/webhooks'],
+      ['get', '/api/webhooks/events'],
+      ['post', '/api/webhooks', validPayload],
+      ['patch', '/api/webhooks/w1', { name: 'x' }],
+      ['delete', '/api/webhooks/w1'],
+      ['post', '/api/webhooks/w1/test'],
+    ];
+
+    it.each(calls)('%s %s: un PROFESSIONAL recibe 403 y no se toca la base ni se hace fetch', async (method, path, body) => {
+      const req = (request(app) as unknown as Record<string, (p: string) => request.Test>)[method](path).set('x-test-role', 'PROFESSIONAL');
+      const res = await (body ? req.send(body) : req);
+
+      expect(res.status).toBe(403);
+      expect(prisma.connection.findMany).not.toHaveBeenCalled();
+      expect(prisma.connection.create).not.toHaveBeenCalled();
+      expect(prisma.connection.delete).not.toHaveBeenCalled();
+      expect((globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch).not.toHaveBeenCalled();
+    });
+
+    it.each(calls)('%s %s: un CLIENT recibe 403', async (method, path, body) => {
+      const req = (request(app) as unknown as Record<string, (p: string) => request.Test>)[method](path).set('x-test-role', 'CLIENT');
+      const res = await (body ? req.send(body) : req);
+
+      expect(res.status).toBe(403);
+    });
   });
 
   describe('GET /', () => {

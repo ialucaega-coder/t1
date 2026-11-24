@@ -16,6 +16,7 @@ vi.mock('../../lib/prisma', () => ({
 }));
 
 import { prisma } from '../../lib/prisma';
+import { initSocket } from '../../lib/socket';
 import { cache } from '../../lib/cache';
 import { isSessionRevoked, revokeUserSessions, pruneExpired, jwtLifetimeMs } from '../../services/auth/revocation';
 
@@ -140,5 +141,34 @@ describe('services/auth/revocation — poda y vida del JWT', () => {
       if (prev === undefined) delete process.env.JWT_EXPIRES_IN;
       else process.env.JWT_EXPIRES_IN = prev;
     }
+  });
+});
+
+
+describe('services/auth/revocation — corta los sockets del usuario', () => {
+  beforeEach(() => {
+    mock(prisma.connection.findFirst).mockResolvedValue({ id: 'c1' });
+    mock(prisma.connection.findUnique).mockResolvedValue({ config: { validFrom: {} } });
+    mock(prisma.connection.update).mockResolvedValue({});
+  });
+
+  it('al revocar las sesiones desconecta los sockets de ESE usuario (room user:negocio:usuario)', async () => {
+    const disconnectSockets = vi.fn();
+    const inFn = vi.fn(() => ({ disconnectSockets }));
+    initSocket({ in: inFn } as never);
+
+    await revokeUserSessions('biz_1', 'u9');
+
+    expect(inFn).toHaveBeenCalledWith('user:biz_1:u9');
+    expect(disconnectSockets).toHaveBeenCalledWith(true);
+  });
+
+  it('si la revocación falla en la base NO corta los sockets (no se revocó nada)', async () => {
+    const inFn = vi.fn(() => ({ disconnectSockets: vi.fn() }));
+    initSocket({ in: inFn } as never);
+    mock(prisma.$transaction).mockRejectedValueOnce(new Error('db caída'));
+
+    await expect(revokeUserSessions('biz_1', 'u9')).rejects.toThrow('db caída');
+    expect(inFn).not.toHaveBeenCalled();
   });
 });

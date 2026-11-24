@@ -23,6 +23,7 @@
 import { prisma } from '../../lib/prisma';
 import { cache, cacheKey } from '../../lib/cache';
 import { lockSingleton } from '../../lib/singletonLock';
+import { disconnectUserSockets } from '../../lib/socketRooms';
 
 const REVOCATION_TYPE = 'SESSION_REVOCATION';
 const REVOCATION_NAME = 'Revocación de sesiones';
@@ -174,4 +175,10 @@ export async function revokeUserSessions(
     // Refresca la caché de esta instancia para que el corte aplique ya mismo.
     cache.set(cacheKeyFor(businessId), map, CACHE_TTL_MS);
   });
+
+  // Los sockets abiertos del usuario también se cortan (si no, un empleado dado de
+  // baja seguiría recibiendo eventos en vivo hasta cerrar la pestaña). Al reconectar,
+  // el handshake revalida la sesión: con el cutoff de un cambio de contraseña, la
+  // sesión actual (emitida después) sigue valiendo y vuelve sola.
+  disconnectUserSockets(businessId, userId);
 }

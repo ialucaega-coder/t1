@@ -74,10 +74,83 @@ describe('verifyTokenOwnership — fail-closed en producción', () => {
     expect(await verifyTokenOwnership('cualquier-token', 'IG_1')).toBe(false);
   });
 
-  it('sin META_APP_SECRET fuera de producción se permite (ergonomía de dev)', async () => {
+  it('sin META_APP_SECRET falla cerrado también fuera de producción (ya no depende de NODE_ENV)', async () => {
     delete process.env.META_APP_SECRET;
+    delete process.env.ALLOW_UNVERIFIED_META_CONNECT;
     process.env.NODE_ENV = 'development';
+    expect(await verifyTokenOwnership('cualquier-token', 'IG_1')).toBe(false);
+  });
+
+  it('sin META_APP_SECRET solo se permite con ALLOW_UNVERIFIED_META_CONNECT=1 explícito', async () => {
+    delete process.env.META_APP_SECRET;
+    process.env.ALLOW_UNVERIFIED_META_CONNECT = '1';
     expect(await verifyTokenOwnership('cualquier-token', 'IG_1')).toBe(true);
+  });
+
+  it.each(['true', '0', 'yes', ''])('ALLOW_UNVERIFIED_META_CONNECT="%s" NO habilita el bypass (solo "1")', async (value) => {
+    delete process.env.META_APP_SECRET;
+    process.env.ALLOW_UNVERIFIED_META_CONNECT = value;
+    expect(await verifyTokenOwnership('cualquier-token', 'IG_1')).toBe(false);
+  });
+
+  it('el flag NO se usa si hay META_APP_SECRET: se verifica igual contra Graph', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    process.env.ALLOW_UNVERIFIED_META_CONNECT = '1';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'OTRA' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok', 'IG_1')).toBe(false);
+  });
+
+  it('consulta la identidad del PROPIO token (/me), no el id declarado', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'PAGE_1' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await verifyTokenOwnership('tok', 'PAGE_1');
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/me?');
+    expect(url).toContain('access_token=tok');
+    expect(url).not.toContain('/PAGE_1');
+  });
+
+  it('un token CUALQUIERA que puede leer el id público de una página ajena ya NO pasa (antes pasaba con GET /{id})', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    // /me devuelve la página del atacante, aunque el id declarado sea el de la víctima.
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'PAGINA_ATACANTE' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok_atacante', 'PAGINA_VICTIMA')).toBe(false);
+  });
+
+  it('Instagram: acepta el igId si es la cuenta vinculada a la página dueña del token', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'PAGE_1', instagram_business_account: { id: 'IG_1' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok', 'IG_1')).toBe(true);
+  });
+
+  it('Instagram: rechaza un igId que NO es la cuenta vinculada a la página del token', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'PAGE_1', instagram_business_account: { id: 'IG_PROPIA' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await verifyTokenOwnership('tok', 'IG_DE_OTRO')).toBe(false);
+  });
+
+  it('una respuesta sin cuerpo JSON falla cerrado', async () => {
+    process.env.META_APP_SECRET = 'secret123';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => { throw new Error('x'); } }));
+
+    expect(await verifyTokenOwnership('tok', 'IG_1')).toBe(false);
   });
 
   it('con secret configurado, valida contra Graph que el token controla la identidad', async () => {

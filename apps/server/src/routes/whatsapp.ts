@@ -18,6 +18,7 @@ import {
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
 import { parseWhatsAppReferral } from '../services/whatsapp/attribution';
 import { requireAuth, requireStaff } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
 import { defineQueue, enqueue } from '../lib/queue';
 import { runInbound, INBOUND_RETRY } from '../services/channels/inboundRetry';
 
@@ -133,7 +134,7 @@ defineQueue<WhatsAppInboundJob>(WA_INBOUND_QUEUE, processWhatsAppInbound, { conc
 // resolverían. Mismo patrón que el router de voz.
 router.use(express.urlencoded({ extended: false }));
 
-router.get('/status', requireAuth, (_req: Request, res: Response) => {
+router.get('/status', requireAuth, requireStaff, requireCapability('channels'), (_req: Request, res: Response) => {
   res.json({ configured: isConfigured() });
 });
 
@@ -223,6 +224,9 @@ router.post(
   '/send',
   requireAuth,
   requireStaff,
+  // Mandar WhatsApp a cualquier número desde el número del negocio: solo quien tiene
+  // el módulo de Canales (el que usa el panel en Conexiones), no cualquier staff.
+  requireCapability('channels'),
   validate(sendMessageSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const { to, message } = req.body;

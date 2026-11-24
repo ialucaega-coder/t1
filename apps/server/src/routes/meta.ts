@@ -19,7 +19,8 @@ import {
   type MetaIncomingMessage,
 } from '../services/meta/client';
 import { transcribeAudioFromUrl } from '../services/ai/transcription';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
 import { defineQueue, enqueue } from '../lib/queue';
 import { runInbound, INBOUND_RETRY } from '../services/channels/inboundRetry';
 import { lockSingleton } from '../lib/singletonLock';
@@ -209,6 +210,8 @@ const connectSchema = z.object({
 router.post(
   '/connect',
   requireAuth,
+  // Conectar/desconectar canales cambia a dónde van los mensajes del negocio: solo ADMIN.
+  requireRole('ADMIN'),
   validate(connectSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const businessId = req.auth!.businessId;
@@ -293,6 +296,7 @@ router.post(
 router.delete(
   '/disconnect',
   requireAuth,
+  requireRole('ADMIN'),
   asyncHandler(async (req: Request, res: Response) => {
     const businessId = req.auth!.businessId;
     const platform = req.query.platform;
@@ -320,6 +324,8 @@ router.delete(
 router.get(
   '/status',
   requireAuth,
+  requireStaff,
+  requireCapability('channels'),
   asyncHandler(async (req: Request, res: Response) => {
     const businessId = req.auth!.businessId;
 

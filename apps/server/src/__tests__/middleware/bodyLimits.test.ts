@@ -12,6 +12,8 @@ import {
   jsonBodyParser,
   publicBodySizeGuard,
   PUBLIC_BODY_LIMIT_BYTES,
+  WEBHOOK_BODY_LIMIT_BYTES,
+  isWebhookBodyPath,
 } from '../../middleware/bodyLimits';
 
 function buildApp() {
@@ -25,6 +27,8 @@ function buildApp() {
   app.post('/api/public/chat', echo);
   app.post('/api/auth/login', echo);
   app.post('/api/meta/webhook', echo);
+  app.post('/api/whatsapp/webhook', echo);
+  app.post('/api/telegram/webhook/biz_1', echo);
   app.post('/api/products', echo);
   app.use(errorHandler);
   return app;
@@ -92,5 +96,40 @@ describe('middleware/bodyLimits', () => {
       .send('{"text": ');
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Solicitud inválida');
+  });
+
+  describe('webhooks de Meta y WhatsApp: 1 MB (antes 5 MB parseados antes de verificar la firma)', () => {
+    it('el límite es de 1 MB', () => {
+      expect(WEBHOOK_BODY_LIMIT_BYTES).toBe(1024 * 1024);
+    });
+
+    it('isWebhookBodyPath: solo los webhooks de Meta y WhatsApp (con límite de segmento)', () => {
+      expect(isWebhookBodyPath('/api/meta/webhook')).toBe(true);
+      expect(isWebhookBodyPath('/api/whatsapp/webhook')).toBe(true);
+      expect(isWebhookBodyPath('/api/meta/webhookx')).toBe(false);
+      expect(isWebhookBodyPath('/api/meta/connect')).toBe(false);
+      expect(isWebhookBodyPath('/api/telegram/webhook/biz_1')).toBe(false);
+    });
+
+    it('un evento normal (< 1 MB) pasa y conserva el rawBody para la firma', async () => {
+      const res = await request(app).post('/api/meta/webhook').send(bigBody(500));
+      expect(res.status).toBe(200);
+      expect(res.body.raw).toBe(true);
+    });
+
+    it('rechaza con 413 un cuerpo de 2 MB en el webhook de Meta', async () => {
+      const res = await request(app).post('/api/meta/webhook').send(bigBody(2048));
+      expect(res.status).toBe(413);
+    });
+
+    it('rechaza con 413 un cuerpo de 2 MB en el webhook de WhatsApp', async () => {
+      const res = await request(app).post('/api/whatsapp/webhook').send(bigBody(2048));
+      expect(res.status).toBe(413);
+    });
+
+    it('el resto de la API conserva 5 MB y el webhook de Telegram no se tocó', async () => {
+      expect((await request(app).post('/api/products').send(bigBody(2048))).status).toBe(200);
+      expect((await request(app).post('/api/telegram/webhook/biz_1').send(bigBody(2048))).status).toBe(200);
+    });
   });
 });

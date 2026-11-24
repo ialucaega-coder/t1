@@ -6,9 +6,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 
 vi.mock('../../lib/prisma', () => ({
-  prisma: { conversation: { findFirst: vi.fn() }, message: { findFirst: vi.fn() } },
+  prisma: { conversation: { findFirst: vi.fn() }, message: { findFirst: vi.fn() }, business: { findUnique: vi.fn() } },
+}));
+// requireCapability real consulta plan/overrides en la base: se reemplaza por un doble
+// que deja pasar, salvo que el request mande `x-deny-capability: <capacidad>`.
+vi.mock('../../middleware/capability', () => ({
+  requireCapability: (capability: string) => (req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    if (req.headers['x-deny-capability'] === capability) {
+      res.status(403).json({ error: 'Esta herramienta no está disponible en tu plan o tu rol.', capability });
+      return;
+    }
+    next();
+  },
 }));
 vi.mock('../../services/chatbot', () => ({
   processMessage: vi.fn(),
@@ -266,6 +278,63 @@ describe('routes/whatsapp — webhook', () => {
 
       expect(mock(processMessage)).toHaveBeenCalledTimes(1);
       expect(mock(sendMessage)).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+
+describe('routes/whatsapp — permisos de status y envío manual', () => {
+  const app = buildApp();
+  const SECRET = process.env.NEXTAUTH_SECRET || 'test-secret';
+  const tok = (role: 'ADMIN' | 'PROFESSIONAL' | 'CLIENT') => `Bearer ${jwt.sign({ userId: `u_${role}`, businessId: 'biz_1', role }, SECRET)}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock(prisma.business.findUnique).mockResolvedValue({ whatsappNumber: '+14155550100' });
+    mock(sendMessage).mockReset().mockResolvedValue('SM1');
+  });
+
+  describe('GET /api/whatsapp/status', () => {
+    it('401 sin token', async () => {
+      expect((await request(app).get('/api/whatsapp/status')).status).toBe(401);
+    });
+
+    it('un CLIENT no puede ver el estado (403)', async () => {
+      expect((await request(app).get('/api/whatsapp/status').set('Authorization', tok('CLIENT'))).status).toBe(403);
+    });
+
+    it('exige la capacidad "channels"', async () => {
+      const res = await request(app).get('/api/whatsapp/status').set('Authorization', tok('PROFESSIONAL')).set('x-deny-capability', 'channels');
+      expect(res.status).toBe(403);
+    });
+
+    it('un staff con la capacidad lo ve', async () => {
+      const res = await request(app).get('/api/whatsapp/status').set('Authorization', tok('PROFESSIONAL'));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ configured: true });
+    });
+  });
+
+  describe('POST /api/whatsapp/send', () => {
+    const body = { to: '+5491122223333', message: 'hola' };
+
+    it('un CLIENT no puede mandar WhatsApp desde el número del negocio (403)', async () => {
+      const res = await request(app).post('/api/whatsapp/send').set('Authorization', tok('CLIENT')).send(body);
+      expect(res.status).toBe(403);
+      expect(mock(sendMessage)).not.toHaveBeenCalled();
+    });
+
+    it('un staff SIN la capacidad de mensajería/canales no puede enviar (403)', async () => {
+      const res = await request(app).post('/api/whatsapp/send').set('Authorization', tok('PROFESSIONAL')).set('x-deny-capability', 'channels').send(body);
+      expect(res.status).toBe(403);
+      expect(res.body.capability).toBe('channels');
+      expect(mock(sendMessage)).not.toHaveBeenCalled();
+    });
+
+    it('un staff con la capacidad envía desde el número del negocio', async () => {
+      const res = await request(app).post('/api/whatsapp/send').set('Authorization', tok('PROFESSIONAL')).send(body);
+      expect(res.status).toBe(200);
+      expect(mock(sendMessage)).toHaveBeenCalledWith('+5491122223333', 'hola', '+14155550100');
     });
   });
 });

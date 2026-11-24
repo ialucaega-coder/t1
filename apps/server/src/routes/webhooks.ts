@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireRole } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { z } from 'zod';
@@ -39,6 +39,7 @@ const updateWebhookSchema = z.object({
 router.get(
   '/',
   requireAuth,
+  requireRole('ADMIN'), // webhooks salientes: URL + secreto del negocio
   asyncHandler(async (_req, res) => {
     const webhooks = await prisma.connection.findMany({
       where: { businessId: _req.auth!.businessId, type: 'webhook' },
@@ -63,6 +64,7 @@ router.get(
 router.get(
   '/events',
   requireAuth,
+  requireRole('ADMIN'), // webhooks salientes: URL + secreto del negocio
   asyncHandler(async (_req, res) => {
     res.json(WEBHOOK_EVENTS);
   })
@@ -71,6 +73,7 @@ router.get(
 router.post(
   '/',
   requireAuth,
+  requireRole('ADMIN'), // webhooks salientes: URL + secreto del negocio
   validate(createWebhookSchema),
   asyncHandler(async (req, res) => {
     const { name, url, events, secret } = req.body;
@@ -100,6 +103,7 @@ router.post(
 router.patch(
   '/:id',
   requireAuth,
+  requireRole('ADMIN'), // webhooks salientes: URL + secreto del negocio
   validate(updateWebhookSchema),
   asyncHandler(async (req, res) => {
     const id = String(req.params.id);
@@ -143,6 +147,7 @@ router.patch(
 router.delete(
   '/:id',
   requireAuth,
+  requireRole('ADMIN'), // webhooks salientes: URL + secreto del negocio
   asyncHandler(async (req, res) => {
     const id = String(req.params.id);
     const existing = await prisma.connection.findFirst({
@@ -158,6 +163,7 @@ router.delete(
 router.post(
   '/:id/test',
   requireAuth,
+  requireRole('ADMIN'), // webhooks salientes: URL + secreto del negocio
   asyncHandler(async (req, res) => {
     const id = String(req.params.id);
     const webhook = await prisma.connection.findFirst({

@@ -248,26 +248,32 @@ export async function sendMessage(pageAccessToken: string, recipientId: string, 
  * reclamar el pageId/igId público de OTRO negocio con un token cualquiera y
  * secuestrar sus conversaciones (hijack cross-tenant).
  *
- * Consulta `GET /{expectedId}?fields=id` con el token: si el token tiene acceso
- * a ese nodo, Graph devuelve el mismo id; si no, devuelve error. Ante fallo de
- * red devuelve false (fail-closed).
+ * Consulta `GET /me?fields=id,instagram_business_account{id}` con el token: `/me` es
+ * la identidad del PROPIO token (la página; o la cuenta de IG si el token es de
+ * Instagram), así que no depende de qué nodos puede LEER. Antes se hacía
+ * `GET /{expectedId}?fields=id`, pero cualquier token válido puede leer el id público
+ * de una página ajena y pasaba el chequeo. Se acepta si el id del token es el
+ * declarado (Messenger / token de IG) o si la cuenta de Instagram vinculada a esa
+ * página es la declarada (conexión de Instagram con el token de su página). Ante fallo
+ * de red devuelve false (fail-closed).
  *
- * Si no hay App configurada (`META_APP_SECRET`) no se puede verificar la
- * propiedad del token: en desarrollo se permite (para no bloquear entornos sin
- * credenciales), pero en PRODUCCIÓN se falla cerrado. Permitirlo en producción
- * habilitaría el hijack cross-tenant que esta función existe para evitar (mismo
- * criterio fail-closed que `validateSignature`).
+ * Sin App configurada (`META_APP_SECRET`) la integración no puede operar y no se
+ * verifica la propiedad: se falla cerrado SALVO que se active explícitamente
+ * `ALLOW_UNVERIFIED_META_CONNECT=1` (solo para entornos de desarrollo sin credenciales
+ * de Meta). Ya no depende de NODE_ENV: un despliegue con NODE_ENV mal seteado no
+ * habilita por accidente el hijack cross-tenant que esta función existe para evitar.
  */
 export async function verifyTokenOwnership(pageAccessToken: string, expectedId: string): Promise<boolean> {
-  if (!process.env.META_APP_SECRET) return process.env.NODE_ENV !== 'production';
+  if (!process.env.META_APP_SECRET) return process.env.ALLOW_UNVERIFIED_META_CONNECT === '1';
   if (!pageAccessToken || !expectedId) return false;
 
   try {
-    const url = `${GRAPH_BASE}/${encodeURIComponent(expectedId)}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`;
+    const url = `${GRAPH_BASE}/me?fields=${encodeURIComponent('id,instagram_business_account{id}')}&access_token=${encodeURIComponent(pageAccessToken)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) });
     if (!res.ok) return false;
-    const data = (await res.json().catch(() => null)) as { id?: string } | null;
-    return data?.id === expectedId;
+    const data = (await res.json().catch(() => null)) as { id?: string; instagram_business_account?: { id?: string } } | null;
+    if (!data) return false;
+    return data.id === expectedId || data.instagram_business_account?.id === expectedId;
   } catch {
     return false;
   }

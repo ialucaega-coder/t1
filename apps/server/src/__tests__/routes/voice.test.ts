@@ -116,6 +116,25 @@ describe('routes/voice', () => {
       const res = await request(app).get('/api/voice/config');
       expect(res.status).toBe(401);
     });
+
+    it('un CLIENT no puede leer la config de voz (403)', async () => {
+      const res = await request(app).get('/api/voice/config').set('Authorization', `Bearer ${clientToken}`);
+      expect(res.status).toBe(403);
+      expect(loadVoiceSettings).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL (staff) sí puede leerla', async () => {
+      const res = await request(app).get('/api/voice/config').set('Authorization', `Bearer ${signToken('PROFESSIONAL')}`);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('GET /api/voice/status (permisos)', () => {
+    it('un CLIENT no ve el diagnóstico de Twilio (403)', async () => {
+      const res = await request(app).get('/api/voice/status').set('Authorization', `Bearer ${clientToken}`);
+      expect(res.status).toBe(403);
+      expect(loadVoiceSettings).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/voice/status', () => {

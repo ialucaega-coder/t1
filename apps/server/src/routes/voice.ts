@@ -35,7 +35,7 @@ import {
   interpolate,
   type VoiceSettings,
 } from '../services/voice/config';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
 
 /** Valores que Twilio manda en From cuando el llamante oculta o no tiene número (dígitos). */
 const TWILIO_ANONYMOUS_NUMBERS = new Set(['266696687', '86282452253', '464', '7378742833', '2442', '3466', '559']);
@@ -105,7 +105,7 @@ function gatherSpeech(
 // ─── Rutas autenticadas del panel ──────────────────────────────────────────
 
 /** GET /api/voice/status — diagnóstico de configuración de Twilio. */
-router.get('/status', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+router.get('/status', requireAuth, requireStaff, asyncHandler(async (req: Request, res: Response) => {
   const cfg = await loadVoiceSettings(req.auth!.businessId);
   res.json({
     configured: isVoiceConfigured(),
@@ -119,7 +119,7 @@ router.get('/status', requireAuth, asyncHandler(async (req: Request, res: Respon
 }));
 
 /** GET /api/voice/config — config de voz del negocio. */
-router.get('/config', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+router.get('/config', requireAuth, requireStaff, asyncHandler(async (req: Request, res: Response) => {
   const cfg = await loadVoiceSettings(req.auth!.businessId);
   res.json(cfg);
 }));

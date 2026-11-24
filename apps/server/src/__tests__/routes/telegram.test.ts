@@ -22,6 +22,18 @@ vi.mock('../../lib/prisma', () => ({
   },
 }));
 
+// requireCapability real consulta plan/overrides en la base: se reemplaza por un doble
+// que deja pasar, salvo que el request mande `x-deny-capability: <capacidad>`.
+vi.mock('../../middleware/capability', () => ({
+  requireCapability: (capability: string) => (req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    if (req.headers['x-deny-capability'] === capability) {
+      res.status(403).json({ error: 'Esta herramienta no está disponible en tu plan o tu rol.', capability });
+      return;
+    }
+    next();
+  },
+}));
+
 vi.mock('../../services/telegram/bot', () => ({
   createBot: vi.fn(),
   stopBot: vi.fn(),
@@ -54,6 +66,8 @@ const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown a
 describe('routes/telegram', () => {
   const app = buildApp();
   const adminToken = signToken({ userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' });
+  const proToken = signToken({ userId: 'user_2', businessId: 'biz_1', role: 'PROFESSIONAL' });
+  const clientToken = signToken({ userId: 'user_3', businessId: 'biz_1', role: 'CLIENT' });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -160,6 +174,45 @@ describe('routes/telegram', () => {
 
       expect(res.status).toBe(403);
       expect(handleUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('permisos de connect / disconnect / status', () => {
+    it.each(['PROFESSIONAL', 'CLIENT'])('un %s NO puede conectar el bot (403): solo ADMIN', async (role) => {
+      const token = role === 'PROFESSIONAL' ? proToken : clientToken;
+      const res = await request(app).post('/api/telegram/connect').set('Authorization', `Bearer ${token}`).send({ botToken: '123:ABCdef' });
+
+      expect(res.status).toBe(403);
+      expect(createBot).not.toHaveBeenCalled();
+      expect(prisma.connection.create).not.toHaveBeenCalled();
+    });
+
+    it.each(['PROFESSIONAL', 'CLIENT'])('un %s NO puede desconectar el bot (403)', async (role) => {
+      const token = role === 'PROFESSIONAL' ? proToken : clientToken;
+      const res = await request(app).delete('/api/telegram/disconnect').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+      expect(stopBot).not.toHaveBeenCalled();
+      expect(prisma.connection.update).not.toHaveBeenCalled();
+    });
+
+    it('un CLIENT no puede ver el estado (403)', async () => {
+      const res = await request(app).get('/api/telegram/status').set('Authorization', `Bearer ${clientToken}`);
+      expect(res.status).toBe(403);
+      expect(prisma.connection.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('el estado exige la capacidad "channels": sin ella, 403', async () => {
+      const res = await request(app).get('/api/telegram/status').set('Authorization', `Bearer ${proToken}`).set('x-deny-capability', 'channels');
+      expect(res.status).toBe(403);
+      expect(res.body.capability).toBe('channels');
+      expect(prisma.connection.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL con la capacidad sí ve el estado', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue(null);
+      const res = await request(app).get('/api/telegram/status').set('Authorization', `Bearer ${proToken}`);
+      expect(res.status).toBe(200);
     });
   });
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { encrypt, safeDecrypt } from '../lib/crypto';
@@ -152,6 +153,8 @@ router.post(
 router.post(
   '/connect',
   requireAuth,
+  // Conectar/desconectar el bot cambia a dónde van los mensajes del negocio: solo ADMIN.
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const { botToken } = req.body;
     const businessId = req.auth!.businessId;
@@ -245,6 +248,7 @@ router.post(
 router.delete(
   '/disconnect',
   requireAuth,
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
@@ -284,6 +288,8 @@ router.delete(
 router.get(
   '/status',
   requireAuth,
+  requireStaff,
+  requireCapability('channels'),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 

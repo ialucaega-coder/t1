@@ -8,10 +8,10 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Redis } from 'ioredis';
-import jwt from 'jsonwebtoken';
 import { initSocket } from './lib/socket';
+import { setupSocketAuth } from './lib/socketAuth';
 import { getRedis, closeRedis, waitForRedisReady, isRedisEnabled } from './lib/redis';
-import { assertSecretsConfigured, getAuthSecret } from './lib/secrets';
+import { assertSecretsConfigured } from './lib/secrets';
 import { requireAuth, requireStaff } from './middleware/auth';
 import { requirePlatformAdmin } from './middleware/platformAdmin';
 import { requireCapability } from './middleware/capability';
@@ -321,37 +321,11 @@ app.use('/api', notFoundHandler);
 Sentry.setupExpressErrorHandler(app);
 app.use(errorHandler);
 
-// Autenticación del handshake de Socket.IO: sin esto cualquiera podía emitir
-// `join-business` con un businessId arbitrario (público vía /book/:slug) y
-// recibir en vivo los eventos de otro negocio (reservas con PII, mensajes de
-// chat). Ahora exigimos el JWT en handshake.auth.token y derivamos el negocio
-// del token, ignorando cualquier businessId que mande el cliente.
-io.use((socket, next) => {
-  try {
-    const token = (socket.handshake.auth?.token || socket.handshake.headers?.['x-auth-token']) as string | undefined;
-    if (!token) return next(new Error('unauthorized'));
-    const payload = jwt.verify(token, getAuthSecret()) as { businessId?: string };
-    if (!payload?.businessId) return next(new Error('unauthorized'));
-    socket.data.businessId = payload.businessId;
-    next();
-  } catch {
-    next(new Error('unauthorized'));
-  }
-});
-
-io.on('connection', (socket) => {
-  const businessId = socket.data.businessId as string;
-  // El socket ya está autenticado: lo unimos SOLO a la room de SU negocio.
-  socket.join(`business:${businessId}`);
-
-  // Compatibilidad: si el cliente emite 'join-business', ignoramos el argumento
-  // y usamos siempre el negocio del token (no se puede saltar a otro tenant).
-  socket.on('join-business', () => {
-    socket.join(`business:${businessId}`);
-  });
-
-  socket.on('disconnect', () => {});
-});
+// Autenticación del handshake de Socket.IO (lib/socketAuth.ts): sin esto cualquiera
+// podía emitir `join-business` con un businessId arbitrario (público vía /book/:slug)
+// y recibir en vivo los eventos de otro negocio. El handshake exige JWT, rol de staff
+// y sesión no revocada, y deriva el negocio del token (ignora lo que mande el cliente).
+setupSocketAuth(io);
 
 const PORT = process.env.PORT || 4000;
 
