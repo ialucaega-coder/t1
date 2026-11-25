@@ -1,0 +1,415 @@
+/**
+ * Pruebas de integracion para las rutas de Telegram (`src/routes/telegram.ts`):
+ * webhook publico, connect, disconnect y status.
+ *
+ * Se mockean Prisma y la capa de servicio `services/telegram/bot` (que envuelve
+ * a grammy): estas pruebas no hablan con Telegram ni con una DB real.
+ * El middleware de auth es el real, y se firman JWT con NEXTAUTH_SECRET para
+ * probar 401.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import jwt from 'jsonwebtoken';
+
+vi.mock('../../lib/prisma', () => ({
+  prisma: {
+    connection: {
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
+  },
+}));
+
+// requireCapability real consulta plan/overrides en la base: se reemplaza por un doble
+// que deja pasar, salvo que el request mande `x-deny-capability: <capacidad>`.
+vi.mock('../../middleware/capability', () => ({
+  requireCapability: (capability: string) => (req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    if (req.headers['x-deny-capability'] === capability) {
+      res.status(403).json({ error: 'Esta herramienta no está disponible en tu plan o tu rol.', capability });
+      return;
+    }
+    next();
+  },
+}));
+
+vi.mock('../../services/telegram/bot', () => ({
+  createBot: vi.fn(),
+  stopBot: vi.fn(),
+  setWebhook: vi.fn(),
+  handleUpdate: vi.fn(),
+  getBotInfo: vi.fn(),
+}));
+
+import { prisma } from '../../lib/prisma';
+import { createBot, stopBot, setWebhook, handleUpdate, getBotInfo } from '../../services/telegram/bot';
+import { telegramRouter } from '../../routes/telegram';
+import { errorHandler } from '../../middleware/errorHandler';
+
+const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'test-secret';
+
+function signToken(payload: { userId: string; businessId: string; role: 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' }) {
+  return jwt.sign(payload, JWT_SECRET);
+}
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/telegram', telegramRouter);
+  app.use(errorHandler);
+  return app;
+}
+
+const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+describe('routes/telegram', () => {
+  const app = buildApp();
+  const adminToken = signToken({ userId: 'user_1', businessId: 'biz_1', role: 'ADMIN' });
+  const proToken = signToken({ userId: 'user_2', businessId: 'biz_1', role: 'PROFESSIONAL' });
+  const clientToken = signToken({ userId: 'user_3', businessId: 'biz_1', role: 'CLIENT' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('POST /api/telegram/webhook/:businessId', () => {
+    it('responde 200 y no procesa si no existe conexion activa', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .query({ token: 'cualquier' })
+        .send({ update_id: 1 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(handleUpdate).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 403 si el token del webhook no coincide con el almacenado', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1',
+        businessId: 'biz_1',
+        type: 'TELEGRAM',
+        isActive: true,
+        config: { botToken: '123:ABCdef' },
+      });
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .query({ token: 'token-erroneo' })
+        .send({ update_id: 1 });
+
+      expect(res.status).toBe(403);
+      expect(handleUpdate).not.toHaveBeenCalled();
+    });
+
+    it('procesa el update y responde 200 cuando el token coincide', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1',
+        businessId: 'biz_1',
+        type: 'TELEGRAM',
+        isActive: true,
+        config: { botToken: '123:ABCdef' },
+      });
+      mock(handleUpdate).mockResolvedValue(undefined);
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .query({ token: '123:ABCdef' })
+        .send({ update_id: 42 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      // Se le pasa el token del bot para que una instancia sin el bot en memoria lo arme.
+      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 42 }), '123:ABCdef');
+    });
+
+    it('responde 200 aunque handleUpdate falle (no reintenta Telegram)', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1',
+        businessId: 'biz_1',
+        type: 'TELEGRAM',
+        isActive: true,
+        config: { botToken: '123:ABCdef' },
+      });
+      mock(handleUpdate).mockRejectedValue(new Error('boom'));
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .query({ token: '123:ABCdef' })
+        .send({ update_id: 7 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+    });
+
+    it('autentica por secret_token en header (esquema nuevo, sin token en URL)', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1', businessId: 'biz_1', type: 'TELEGRAM', isActive: true,
+        config: { webhookSecret: 'sek_123', botTokenEnc: 'enc' },
+      });
+      mock(handleUpdate).mockResolvedValue(undefined);
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .set('x-telegram-bot-api-secret-token', 'sek_123')
+        .send({ update_id: 5 });
+
+      expect(res.status).toBe(200);
+      expect(handleUpdate).toHaveBeenCalledWith('biz_1', expect.objectContaining({ update_id: 5 }), 'enc');
+    });
+
+    it('rechaza 403 si el secret_token del header no coincide', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1', businessId: 'biz_1', type: 'TELEGRAM', isActive: true,
+        config: { webhookSecret: 'sek_123' },
+      });
+
+      const res = await request(app)
+        .post('/api/telegram/webhook/biz_1')
+        .set('x-telegram-bot-api-secret-token', 'mal')
+        .send({ update_id: 5 });
+
+      expect(res.status).toBe(403);
+      expect(handleUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('permisos de connect / disconnect / status', () => {
+    it.each(['PROFESSIONAL', 'CLIENT'])('un %s NO puede conectar el bot (403): solo ADMIN', async (role) => {
+      const token = role === 'PROFESSIONAL' ? proToken : clientToken;
+      const res = await request(app).post('/api/telegram/connect').set('Authorization', `Bearer ${token}`).send({ botToken: '123:ABCdef' });
+
+      expect(res.status).toBe(403);
+      expect(createBot).not.toHaveBeenCalled();
+      expect(prisma.connection.create).not.toHaveBeenCalled();
+    });
+
+    it.each(['PROFESSIONAL', 'CLIENT'])('un %s NO puede desconectar el bot (403)', async (role) => {
+      const token = role === 'PROFESSIONAL' ? proToken : clientToken;
+      const res = await request(app).delete('/api/telegram/disconnect').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+      expect(stopBot).not.toHaveBeenCalled();
+      expect(prisma.connection.update).not.toHaveBeenCalled();
+    });
+
+    it('un CLIENT no puede ver el estado (403)', async () => {
+      const res = await request(app).get('/api/telegram/status').set('Authorization', `Bearer ${clientToken}`);
+      expect(res.status).toBe(403);
+      expect(prisma.connection.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('el estado exige la capacidad "channels": sin ella, 403', async () => {
+      const res = await request(app).get('/api/telegram/status').set('Authorization', `Bearer ${proToken}`).set('x-deny-capability', 'channels');
+      expect(res.status).toBe(403);
+      expect(res.body.capability).toBe('channels');
+      expect(prisma.connection.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('un PROFESSIONAL con la capacidad sí ve el estado', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue(null);
+      const res = await request(app).get('/api/telegram/status').set('Authorization', `Bearer ${proToken}`);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('POST /api/telegram/connect', () => {
+    it('devuelve 401 sin token de autenticacion', async () => {
+      const res = await request(app).post('/api/telegram/connect').send({ botToken: '123:ABCdef' });
+
+      expect(res.status).toBe(401);
+      expect(createBot).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si no se envia botToken', async () => {
+      const res = await request(app)
+        .post('/api/telegram/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(createBot).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si el formato del token es invalido', async () => {
+      const res = await request(app)
+        .post('/api/telegram/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ botToken: 'token-sin-formato' });
+
+      expect(res.status).toBe(400);
+      expect(createBot).not.toHaveBeenCalled();
+    });
+
+    it('conecta el bot y crea la conexion cuando no existe', async () => {
+      mock(createBot).mockResolvedValue({ botInfo: { username: 'localb_bot', first_name: 'Local B' } });
+      mock(setWebhook).mockResolvedValue(undefined);
+      mock(prisma.connection.findFirst).mockResolvedValue(null);
+      mock(prisma.connection.create).mockResolvedValue({ id: 'conn_new' });
+
+      const res = await request(app)
+        .post('/api/telegram/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ botToken: '123456789:ABCdefGHIjkl' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        success: true,
+        bot: { username: 'localb_bot', name: 'Local B' },
+      });
+      expect(res.body.webhookUrl).toContain('/api/telegram/webhook/biz_1');
+      expect(res.body.webhookUrl).not.toContain('token='); // el token ya no va en la URL
+      expect(createBot).toHaveBeenCalledWith('123456789:ABCdefGHIjkl', 'biz_1');
+      // El webhook se configura con secret_token; config guarda el token CIFRADO.
+      expect(setWebhook).toHaveBeenCalledWith('biz_1', expect.not.stringContaining('token='), expect.any(String));
+      const createdConfig = mock(prisma.connection.create).mock.calls[0][0].data.config;
+      expect(createdConfig.botToken).toBeUndefined();
+      expect(typeof createdConfig.botTokenEnc).toBe('string');
+      expect(typeof createdConfig.webhookSecret).toBe('string');
+      expect(prisma.connection.update).not.toHaveBeenCalled();
+    });
+
+    it('actualiza la conexion existente en vez de crear una nueva', async () => {
+      mock(createBot).mockResolvedValue({ botInfo: { username: 'localb_bot', first_name: 'Local B' } });
+      mock(setWebhook).mockResolvedValue(undefined);
+      mock(prisma.connection.findFirst).mockResolvedValue({ id: 'conn_1', businessId: 'biz_1' });
+      mock(prisma.connection.update).mockResolvedValue({ id: 'conn_1' });
+
+      const res = await request(app)
+        .post('/api/telegram/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ botToken: '123456789:ABCdefGHIjkl' });
+
+      expect(res.status).toBe(200);
+      expect(prisma.connection.update).toHaveBeenCalled();
+      expect(prisma.connection.create).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si el token es rechazado por Telegram (createBot lanza)', async () => {
+      mock(createBot).mockRejectedValue(new Error('unauthorized'));
+
+      const res = await request(app)
+        .post('/api/telegram/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ botToken: '123456789:ABCdefGHIjkl' });
+
+      expect(res.status).toBe(400);
+      expect(setWebhook).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 500 y detiene el bot si falla la configuracion del webhook', async () => {
+      mock(createBot).mockResolvedValue({ botInfo: { username: 'localb_bot', first_name: 'Local B' } });
+      mock(setWebhook).mockRejectedValue(new Error('webhook no accesible'));
+      mock(stopBot).mockResolvedValue(undefined);
+
+      const res = await request(app)
+        .post('/api/telegram/connect')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ botToken: '123456789:ABCdefGHIjkl' });
+
+      expect(res.status).toBe(500);
+      expect(stopBot).toHaveBeenCalledWith('biz_1');
+    });
+  });
+
+  describe('DELETE /api/telegram/disconnect', () => {
+    it('devuelve 401 sin token', async () => {
+      const res = await request(app).delete('/api/telegram/disconnect');
+      expect(res.status).toBe(401);
+    });
+
+    it('pasa el token a stopBot para borrar el webhook aunque el bot viva en otra instancia', async () => {
+      mock(stopBot).mockResolvedValue(undefined);
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1', businessId: 'biz_1', config: { botToken: '123:ABCdef' },
+      });
+      mock(prisma.connection.update).mockResolvedValue({ id: 'conn_1', isActive: false });
+
+      await request(app)
+        .delete('/api/telegram/disconnect')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(stopBot).toHaveBeenCalledWith('biz_1', '123:ABCdef');
+    });
+
+    it('detiene el bot y desactiva la conexion existente', async () => {
+      mock(stopBot).mockResolvedValue(undefined);
+      mock(prisma.connection.findFirst).mockResolvedValue({ id: 'conn_1', businessId: 'biz_1' });
+      mock(prisma.connection.update).mockResolvedValue({ id: 'conn_1', isActive: false });
+
+      const res = await request(app)
+        .delete('/api/telegram/disconnect')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ success: true });
+      expect(stopBot).toHaveBeenCalledWith('biz_1', undefined);
+      expect(prisma.connection.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'conn_1' }, data: { isActive: false, config: {} } })
+      );
+    });
+
+    it('responde ok aunque no haya conexion en la DB', async () => {
+      mock(stopBot).mockResolvedValue(undefined);
+      mock(prisma.connection.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .delete('/api/telegram/disconnect')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(prisma.connection.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/telegram/status', () => {
+    it('devuelve 401 sin token', async () => {
+      const res = await request(app).get('/api/telegram/status');
+      expect(res.status).toBe(401);
+    });
+
+    it('devuelve connected:false si no hay conexion', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue(null);
+
+      const res = await request(app)
+        .get('/api/telegram/status')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ connected: false, bot: null });
+    });
+
+    it('devuelve connected:false si la conexion esta inactiva', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({ id: 'conn_1', isActive: false, config: {} });
+
+      const res = await request(app)
+        .get('/api/telegram/status')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.connected).toBe(false);
+    });
+
+    it('devuelve datos del bot cuando la conexion esta activa', async () => {
+      mock(prisma.connection.findFirst).mockResolvedValue({
+        id: 'conn_1',
+        isActive: true,
+        config: { botUsername: 'localb_bot', botName: 'Local B', connectedAt: '2026-01-01T00:00:00.000Z' },
+      });
+      mock(getBotInfo).mockReturnValue(null);
+
+      const res = await request(app)
+        .get('/api/telegram/status')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        connected: true,
+        bot: { username: 'localb_bot', name: 'Local B', connectedAt: '2026-01-01T00:00:00.000Z' },
+      });
+    });
+  });
+});

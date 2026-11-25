@@ -4,9 +4,9 @@ export interface Order {
   id: string;
   status: string;
   totalPrice: number;
-  notes?: string;
+  notes?: string | null;
   createdAt: string;
-  client: { id: string; name: string };
+  client: { id: string; name: string; phone?: string };
   items: { id: string; quantity: number; price: number; product: { name: string } }[];
 }
 

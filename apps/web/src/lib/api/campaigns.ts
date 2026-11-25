@@ -7,8 +7,9 @@ export interface Campaign {
   channel: string;
   status: string;
   sentCount: number;
-  openRate: number;
-  clickRate: number;
+  /** % de destinatarios que abrieron / hicieron clic (solo email; 0 = sin datos todavía). */
+  openRate?: number;
+  clickRate?: number;
   scheduledAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -31,10 +32,12 @@ export function getRecipients(channel?: string) {
   return httpClient.get<{ total: number; recipients: Recipient[] }>(`/campaigns/recipients${params}`);
 }
 
+/** `scheduledAt` va en ISO UTC (con "Z") y tiene que ser futuro; sin él nace como borrador. */
 export function create(data: Pick<Campaign, 'name' | 'description' | 'channel'> & { scheduledAt?: string }) {
   return httpClient.post<Campaign>('/campaigns', data);
 }
 
+/** `scheduledAt: null` desprograma (vuelve a borrador). El server rechaza editar una 'sent'/'sending'. */
 export function update(id: string, data: Partial<Pick<Campaign, 'name' | 'description' | 'status' | 'channel' | 'scheduledAt'>>) {
   return httpClient.patch<Campaign>(`/campaigns/${id}`, data);
 }

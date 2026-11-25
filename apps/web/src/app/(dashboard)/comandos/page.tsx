@@ -8,6 +8,8 @@ import { CommandRow } from '@/components/commands/CommandRow';
 import { CommandGroup } from '@/components/commands/CommandGroup';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { normalizeText } from '@/lib/text';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 export default function ComandosPage() {
   const { commands, isLoading, error, refetch } = useCommands();
@@ -17,8 +19,13 @@ export default function ComandosPage() {
   const copyToClipboard = (cmd: string) => copy(cmd, cmd);
 
   const allCommands = commands.flatMap(c => c.items.map(i => ({ ...i, category: c.category })));
-  const filtered = search
-    ? allCommands.filter(c => c.name.includes(search) || c.desc.toLowerCase().includes(search.toLowerCase()))
+
+  // Contador vivo del header: cantidad real de comandos disponibles.
+  usePageCounter(isLoading ? null : fmtCounter(allCommands.length, 'COMANDO', 'COMANDOS'));
+  // Búsqueda sin distinguir mayúsculas ni acentos ("Reserva" encuentra "/nueva-reserva").
+  const needle = normalizeText(search);
+  const filtered = needle
+    ? allCommands.filter(c => normalizeText(c.name).includes(needle) || normalizeText(c.desc).includes(needle))
     : null;
 
   return (

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { skillsApi } from '@/lib/api/index';
 import type { Skill } from '@/constants/skills';
 import { SKILLS } from '@/constants/skills';
+import { normalizeText } from '@/lib/text';
 
 export interface UseSkillsResult {
   skills: Skill[];
@@ -30,7 +31,10 @@ export function useSkills(): UseSkillsResult {
           // La API devuelve iconName como string; mapeamos al componente
           // Lucide correspondiente usando el catálogo local de SKILLS.
           const mapped: Skill[] = data.map((s) => {
-            const match = SKILLS.find((sk) => sk.name === s.name);
+            // Comparación sin tildes: el seed del server guarda "Catalogo & Pedidos" y
+            // "Atencion por voz"; el catálogo local, "Catálogo & Pedidos" y "Atención por voz".
+            const wanted = normalizeText(s.name);
+            const match = SKILLS.find((sk) => normalizeText(sk.name) === wanted);
             return {
               name: s.name,
               subtitle: s.subtitle,
@@ -44,8 +48,10 @@ export function useSkills(): UseSkillsResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar habilidades');
-          // Fallback a datos mock cuando la API no está disponible.
-          setSkills(SKILLS);
+          // Sin datos falsos: si la API falla, mostramos el error (ErrorAlert con
+          // reintento) y una lista vacía, en vez de simular habilidades que no son
+          // reales. El catálogo SKILLS se usa solo para mapear íconos por nombre.
+          setSkills([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

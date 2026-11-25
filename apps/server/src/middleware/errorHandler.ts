@@ -35,8 +35,9 @@ export function asyncHandler(
 function handlePrismaError(err: Prisma.PrismaClientKnownRequestError, res: Response) {
   switch (err.code) {
     case 'P2002': {
-      const target = Array.isArray(err.meta?.target) ? (err.meta?.target as string[]).join(', ') : 'campo';
-      res.status(409).json({ error: `Ya existe un registro con ese ${target}` });
+      // Sin nombrar el campo: "ya existe un registro con ese email" confirma a un
+      // anónimo qué emails/valores existen (enumeración).
+      res.status(409).json({ error: 'Ya existe un registro con esos datos' });
       return;
     }
     case 'P2025':
@@ -48,6 +49,20 @@ function handlePrismaError(err: Prisma.PrismaClientKnownRequestError, res: Respo
     case 'P2014':
       res.status(400).json({ error: 'La operación viola una relación requerida entre registros' });
       return;
+    case 'P2021': // la tabla no existe en la DB
+    case 'P2022': {
+      // La columna no existe en la DB: el cliente Prisma espera un
+      // campo que la base real no tiene → desfase schema↔DB por una migración
+      // sin aplicar (ej.: falta `prisma migrate deploy`). Es un problema de
+      // despliegue, no del request, así que 500 con mensaje claro en vez de
+      // enmascararlo como un 400 genérico. Se reporta a Sentry para alertarlo.
+      console.error('Prisma schema/DB drift:', err.code, err.meta);
+      Sentry.captureException(err);
+      res.status(500).json({
+        error: 'La base de datos no está actualizada (falta aplicar una migración). Contactá al administrador.',
+      });
+      return;
+    }
     default:
       res.status(400).json({ error: 'Error al procesar la solicitud en la base de datos' });
       return;
@@ -66,7 +81,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   if (err instanceof ZodError) {
     res.status(400).json({
       error: 'Validation failed',
-      details: err.errors.map((e) => ({ field: e.path.join('.'), message: e.message })),
+      details: err.issues.map((e) => ({ field: e.path.join('.'), message: e.message })),
     });
     return;
   }
@@ -83,6 +98,23 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
 
   if (err instanceof AppError) {
     res.status(err.statusCode).json({ error: err.message, details: err.details });
+    return;
+  }
+
+  // Errores del body-parser (cuerpo demasiado grande, JSON mal formado, charset/encoding no
+  // soportado): son culpa del cliente, no del server. Antes caían como 500 + Sentry.
+  const bodyErr = err as { status?: unknown; type?: unknown } | null;
+  if (
+    err instanceof Error &&
+    typeof bodyErr?.type === 'string' &&
+    /^(entity|encoding|charset|request)\./.test(bodyErr.type) &&
+    typeof bodyErr.status === 'number' &&
+    bodyErr.status >= 400 &&
+    bodyErr.status < 500
+  ) {
+    res.status(bodyErr.status).json({
+      error: bodyErr.status === 413 ? 'Payload demasiado grande' : 'Solicitud inválida',
+    });
     return;
   }
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { httpClient } from '@/lib/api/http-client';
+import { todayArgentinaKey, argentinaHour } from '@/lib/date-range';
 import {
   DollarSign, ShoppingCart, TrendingUp, Users,
   Banknote, CreditCard, ArrowRightLeft, QrCode,
@@ -35,20 +36,36 @@ const METHOD_CONFIG: Record<string, { label: string; icon: typeof Banknote; colo
   QR: { label: 'QR', icon: QrCode, color: 'text-amber-400', bar: 'bg-amber-400' },
 };
 
+/** Tamaño de página que acepta el server (máx. 100) y tope de páginas por seguridad (3000 movimientos). */
+const PAGE_SIZE = 100;
+const MAX_PAGES = 30;
+
+/**
+ * Trae TODOS los movimientos del día paginando. Antes se pedía pageSize=500, que el
+ * server rechaza (máx. 100) con un 400: el panel quedaba siempre vacío.
+ */
+async function loadDayTransactions(day: string): Promise<TransactionRecord[]> {
+  const all: TransactionRecord[] = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const res = await httpClient.get<{ data: TransactionRecord[]; totalPages?: number }>(
+      `/transactions?from=${day}&to=${day}&page=${page}&pageSize=${PAGE_SIZE}`
+    );
+    all.push(...(res.data || []));
+    if (page >= (res.totalPages ?? 1)) break;
+  }
+  return all;
+}
+
 export function PosStats() {
   const [stats, setStats] = useState<DailyStats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadStats();
-  }, []);
-
   async function loadStats() {
     setLoading(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const res = await httpClient.get<{ data: TransactionRecord[] }>(`/transactions?from=${today}&pageSize=500`);
-      const txs: TransactionRecord[] = res.data || [];
+      // Día de hoy en hora argentina (no UTC): de 21:00 a 24:00 AR el UTC ya es "mañana".
+      const today = todayArgentinaKey();
+      const txs = await loadDayTransactions(today);
 
       const byMethod: Record<string, { count: number; total: number }> = {};
       const hourBuckets: Record<number, { sales: number; count: number }> = {};
@@ -61,7 +78,8 @@ export function PosStats() {
         byMethod[method].count++;
         byMethod[method].total += amt;
 
-        const hour = new Date(t.createdAt).getHours();
+        // Hora argentina (no la del navegador): las barras por hora son del negocio.
+        const hour = argentinaHour(t.createdAt);
         if (!hourBuckets[hour]) hourBuckets[hour] = { sales: 0, count: 0 };
         hourBuckets[hour].sales += amt;
         hourBuckets[hour].count++;
@@ -93,6 +111,10 @@ export function PosStats() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    loadStats();
+  }, []);
 
   if (loading) {
     return (

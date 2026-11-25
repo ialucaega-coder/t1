@@ -12,22 +12,30 @@ import {
   Loader2,
   MessageCircle,
   Users,
-  BarChart3,
-  MousePointerClick,
+  CalendarX,
+  Ban,
 } from 'lucide-react';
 import { useCampaigns } from '@/hooks/use-campaigns';
+import { useSocket, useSocketEvent } from '@/hooks/use-socket';
+import { useAuth } from '@/lib/auth-context';
 import * as campaignsApi from '@/lib/api/campaigns';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { useToast } from '@/components/common/Toast';
-
-const STATUS_LABELS: Record<string, { label: string; class: string }> = {
-  draft: { label: 'Borrador', class: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
-  scheduled: { label: 'Programada', class: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
-  sent: { label: 'Enviada', class: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
-  cancelled: { label: 'Cancelada', class: 'bg-red-500/10 text-red-400 border-red-500/20' },
-};
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import {
+  campaignFailedMessage,
+  campaignProgressPercent,
+  type CampaignFailedEvent,
+  type CampaignProgress,
+  type CampaignProgressEvent,
+  type CampaignSentEvent,
+  describeCampaignStatus,
+  formatArgentina,
+  isoToArgentinaInput,
+  validateScheduleInput,
+} from '@/components/campaigns/schedule';
 
 const CHANNEL_LABELS: Record<string, string> = {
   whatsapp: 'WhatsApp',
@@ -46,8 +54,46 @@ interface CampaignForm {
 const emptyForm: CampaignForm = { name: '', description: '', channel: 'whatsapp', scheduledAt: '' };
 
 export default function CampanasPage() {
-  const { campaigns, isLoading, error, refetch, createCampaign, updateCampaign, deleteCampaign, sendCampaign } =
+  const { campaigns, isLoading, error, refetch, refreshSilently, createCampaign, updateCampaign, deleteCampaign, sendCampaign } =
     useCampaigns();
+  const { business } = useAuth();
+  // El server emite 'campaign:sent' al sala del negocio cuando una campaña termina de enviarse
+  // (con colas el envío sigue en segundo plano). Refrescamos la lista, sin polling.
+  useSocket(business?.id ?? null);
+  useSocketEvent<CampaignSentEvent>('campaign:sent', (event) => {
+    clearProgress(event?.campaign?.id);
+    refreshSilently();
+  });
+  // 'campaign:progress' llega cada 25 destinatarios o 60 s mientras se envía: barra de avance
+  // en vivo. Es solo informativa (el estado confiable es `status`); se descarta al terminar.
+  const [progress, setProgress] = useState<Record<string, CampaignProgress>>({});
+  function clearProgress(id?: string) {
+    if (!id) return;
+    setProgress((prev) => {
+      if (!(id in prev)) return prev;
+      const { [id]: _omit, ...rest } = prev;
+      return rest;
+    });
+  }
+  useSocketEvent<CampaignProgressEvent>('campaign:progress', (event) => {
+    const id = event?.campaignId;
+    const p = event?.progress;
+    if (!id || !p || typeof p.total !== 'number' || typeof p.procesados !== 'number') return;
+    setProgress((prev) => ({ ...prev, [id]: p }));
+  });
+  // 'campaign:failed' trae el motivo: lo guardamos para explicar la tarjeta mientras no se
+  // recargue la página (después se infiere, ver describeCampaignStatus).
+  const [failReasons, setFailReasons] = useState<Record<string, string>>({});
+  useSocketEvent<CampaignFailedEvent>('campaign:failed', (event) => {
+    const id = event?.campaign?.id;
+    clearProgress(id);
+    if (id && event?.reason) setFailReasons((prev) => ({ ...prev, [id]: String(event.reason) }));
+    toast({
+      type: 'error',
+      message: campaignFailedMessage(event?.campaign?.name ?? 'sin nombre', event?.reason, event?.envio),
+    });
+    refreshSilently();
+  });
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CampaignForm>(emptyForm);
@@ -56,6 +102,14 @@ export default function CampanasPage() {
   const [sending, setSending] = useState<string | null>(null);
   const [recipientCount, setRecipientCount] = useState<number | null>(null);
   const [loadingRecipients, setLoadingRecipients] = useState(false);
+  const [pendingSend, setPendingSend] = useState<{ id: string; name: string; channel: string } | null>(null);
+  const [pendingSendCount, setPendingSendCount] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [unscheduling, setUnscheduling] = useState<string | null>(null);
+  const [pendingCancel, setPendingCancel] = useState<{ id: string; name: string } | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [editingStatus, setEditingStatus] = useState<string | null>(null);
   const { toast } = useToast();
 
   async function fetchRecipientCount(channel: string) {
@@ -73,6 +127,8 @@ export default function CampanasPage() {
   function openCreate() {
     setForm(emptyForm);
     setEditingId(null);
+    setEditingStatus(null);
+    setScheduleError(null);
     setShowModal(true);
     fetchRecipientCount(emptyForm.channel);
   }
@@ -82,9 +138,13 @@ export default function CampanasPage() {
       name: c.name,
       description: c.description || '',
       channel: c.channel,
-      scheduledAt: c.scheduledAt ? c.scheduledAt.slice(0, 16) : '',
+      // Solo se precarga la fecha de una campaña programada (en hora argentina).
+      // En una fallida/borrador la fecha vieja ya pasó y no se puede reutilizar.
+      scheduledAt: c.status === 'scheduled' && c.scheduledAt ? isoToArgentinaInput(c.scheduledAt) : '',
     });
     setEditingId(c.id);
+    setEditingStatus(c.status);
+    setScheduleError(null);
     setShowModal(true);
     fetchRecipientCount(c.channel);
   }
@@ -96,6 +156,22 @@ export default function CampanasPage() {
 
   async function handleSave() {
     if (!form.name.trim()) return;
+
+    // Fecha de programación: se valida en el front (no pasada) y se manda como ISO UTC.
+    // Campo vacío al editar una campaña programada = desprogramar (null).
+    let scheduledAt: string | null | undefined;
+    if (form.scheduledAt) {
+      const checked = validateScheduleInput(form.scheduledAt);
+      if ('error' in checked) {
+        setScheduleError(checked.error);
+        return;
+      }
+      scheduledAt = checked.iso;
+    } else if (editingId && editingStatus === 'scheduled') {
+      scheduledAt = null;
+    }
+    setScheduleError(null);
+
     setSaving(true);
     try {
       if (editingId) {
@@ -103,7 +179,7 @@ export default function CampanasPage() {
           name: form.name,
           description: form.description || null,
           channel: form.channel,
-          scheduledAt: form.scheduledAt || undefined,
+          ...(scheduledAt !== undefined ? { scheduledAt } : {}),
         });
         toast({ type: 'success', message: 'Campaña actualizada correctamente' });
       } else {
@@ -111,16 +187,44 @@ export default function CampanasPage() {
           name: form.name,
           description: form.description || null,
           channel: form.channel,
-          scheduledAt: form.scheduledAt || undefined,
+          ...(typeof scheduledAt === 'string' ? { scheduledAt } : {}),
         });
-        toast({ type: 'success', message: 'Campaña creada correctamente' });
+        toast({
+          type: 'success',
+          message: scheduledAt ? 'Campaña programada correctamente' : 'Campaña creada correctamente',
+        });
       }
       setShowModal(false);
     } catch (err) {
       console.error('Error saving campaign:', err);
-      toast({ type: 'error', message: 'Error al guardar campaña' });
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al guardar campaña' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleCancel(id: string) {
+    setCancelling(true);
+    try {
+      await updateCampaign(id, { status: 'cancelled' });
+      toast({ type: 'success', message: 'Campaña cancelada: no se va a enviar' });
+      setPendingCancel(null);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo cancelar la campaña' });
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function handleUnschedule(id: string) {
+    setUnscheduling(id);
+    try {
+      await updateCampaign(id, { scheduledAt: null });
+      toast({ type: 'success', message: 'Campaña desprogramada: volvió a borrador' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo desprogramar la campaña' });
+    } finally {
+      setUnscheduling(null);
     }
   }
 
@@ -129,22 +233,43 @@ export default function CampanasPage() {
     try {
       await deleteCampaign(id);
       toast({ type: 'success', message: 'Campaña eliminada correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al eliminar campaña' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al eliminar campaña' });
     } finally {
       setDeleting(null);
+      setPendingDelete(null);
     }
+  }
+
+  // El envío masivo es irreversible: primero se pide confirmación, mostrando
+  // la cantidad de destinatarios si se pudo calcular.
+  function askSend(c: { id: string; name: string; channel: string }) {
+    setPendingSend({ id: c.id, name: c.name, channel: c.channel });
+    setPendingSendCount(null);
+    campaignsApi
+      .getRecipients(c.channel)
+      .then((data) => setPendingSendCount(data.total))
+      .catch(() => setPendingSendCount(null));
   }
 
   async function handleSend(id: string) {
     setSending(id);
     try {
-      await sendCampaign(id);
-      toast({ type: 'success', message: 'Campaña enviada correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al enviar campaña' });
+      const result = await sendCampaign(id);
+      // Con colas el server responde `sending`: el envío sigue en proceso y recién
+      // el evento 'campaign:sent' lo da por terminado. No decimos "enviada" antes de tiempo.
+      toast({
+        type: 'success',
+        message:
+          result?.status === 'sending'
+            ? 'Campaña en proceso de envío: te avisamos cuando termine'
+            : 'Campaña enviada correctamente',
+      });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'Error al enviar campaña' });
     } finally {
       setSending(null);
+      setPendingSend(null);
     }
   }
 
@@ -172,7 +297,8 @@ export default function CampanasPage() {
 
       {error && <ErrorAlert message={error} onRetry={refetch} />}
 
-      {campaigns.length === 0 ? (
+      {/* Si el listado falló, solo el error: "No hay campañas" sería falso (no sabemos si hay). */}
+      {error ? null : campaigns.length === 0 ? (
         <EmptyState
           icon={Megaphone}
           title="No hay campañas"
@@ -182,7 +308,9 @@ export default function CampanasPage() {
       ) : (
         <div className="grid gap-4">
           {campaigns.map((c) => {
-            const statusInfo = STATUS_LABELS[c.status] || STATUS_LABELS.draft;
+            const statusInfo = describeCampaignStatus({ ...c, failReason: failReasons[c.id] });
+            // 'cancelled', 'sent' y 'sending' no se pueden enviar a mano (el server las rechaza).
+            const canSend = c.status === 'draft' || c.status === 'scheduled' || c.status === 'failed';
             return (
               <div
                 key={c.id}
@@ -192,7 +320,7 @@ export default function CampanasPage() {
                   <div className="flex items-center gap-3 mb-1">
                     <h3 className="font-semibold text-white truncate">{c.name}</h3>
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${statusInfo.class}`}
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${statusInfo.className}`}
                     >
                       {statusInfo.label}
                     </span>
@@ -200,21 +328,18 @@ export default function CampanasPage() {
                   {c.description && (
                     <p className="text-sm text-slate-400 mb-2 line-clamp-2">{c.description}</p>
                   )}
+                  {statusInfo.description && (
+                    <p className="text-xs text-slate-300 mb-2">{statusInfo.description}</p>
+                  )}
                   <div className="flex items-center gap-4 text-xs text-slate-500">
                     <span className="flex items-center gap-1">
                       <MessageCircle className="h-3.5 w-3.5" />
                       {CHANNEL_LABELS[c.channel] || c.channel}
                     </span>
-                    {c.scheduledAt && (
+                    {c.scheduledAt && c.status === 'draft' && (
                       <span className="flex items-center gap-1">
                         <Clock className="h-3.5 w-3.5" />
-                        {new Date(c.scheduledAt).toLocaleString('es-AR', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        Hora programada: {formatArgentina(c.scheduledAt)} (hora de Argentina)
                       </span>
                     )}
                     <span>
@@ -222,28 +347,57 @@ export default function CampanasPage() {
                       {new Date(c.createdAt).toLocaleDateString('es-AR')}
                     </span>
                   </div>
+                  {/*
+                    Aperturas y clics: solo campañas de email, y solo si ya hay datos (0 = todavía sin
+                    registros o campaña anterior al tracking: no se muestra un "0 %" falso).
+                  */}
+                  {c.status === 'sent' && c.channel === 'email' && ((c.openRate ?? 0) > 0 || (c.clickRate ?? 0) > 0) && (
+                    <p className="mt-2 text-xs text-slate-400" data-testid={`metricas-${c.id}`}>
+                      {(c.openRate ?? 0) > 0 && (
+                        <span title="Aproximado: algunos clientes de correo precargan o bloquean las imágenes">
+                          Aperturas (aprox.): {c.openRate}%
+                        </span>
+                      )}
+                      {(c.openRate ?? 0) > 0 && (c.clickRate ?? 0) > 0 && ' · '}
+                      {(c.clickRate ?? 0) > 0 && <span>Clics: {c.clickRate}%</span>}
+                    </p>
+                  )}
+                  {c.status === 'sending' && progress[c.id] && (
+                    <div className="mt-3" data-testid={`progreso-${c.id}`}>
+                      <div
+                        role="progressbar"
+                        aria-label={`Avance del envío de ${c.name}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={campaignProgressPercent(progress[c.id])}
+                        className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-slate-700"
+                      >
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all"
+                          style={{ width: `${campaignProgressPercent(progress[c.id])}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {progress[c.id].procesados} de {progress[c.id].total} procesados ·{' '}
+                        {progress[c.id].enviados} enviados
+                        {progress[c.id].fallidos > 0 ? ` · ${progress[c.id].fallidos} con error` : ''}
+                      </p>
+                    </div>
+                  )}
                   {c.status === 'sent' && (
                     <div className="flex items-center gap-4 mt-2 text-xs">
                       <span className="flex items-center gap-1 text-emerald-400">
                         <Users className="h-3.5 w-3.5" />
                         {c.sentCount} enviados
                       </span>
-                      <span className="flex items-center gap-1 text-blue-400">
-                        <BarChart3 className="h-3.5 w-3.5" />
-                        {(c.openRate * 100).toFixed(0)}% apertura
-                      </span>
-                      <span className="flex items-center gap-1 text-purple-400">
-                        <MousePointerClick className="h-3.5 w-3.5" />
-                        {(c.clickRate * 100).toFixed(0)}% clicks
-                      </span>
                     </div>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {c.status === 'draft' && (
+                  {canSend && (
                     <>
                       <button
-                        onClick={() => handleSend(c.id)}
+                        onClick={() => askSend(c)}
                         disabled={sending === c.id}
                         className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
                       >
@@ -252,10 +406,34 @@ export default function CampanasPage() {
                         ) : (
                           <Send className="h-3.5 w-3.5" />
                         )}
-                        Enviar
+                        {c.status === 'failed' ? 'Reintentar envío' : 'Enviar ahora'}
                       </button>
+                      {c.status === 'scheduled' && (
+                        <button
+                          onClick={() => handleUnschedule(c.id)}
+                          disabled={unscheduling === c.id}
+                          className="flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 transition-colors disabled:opacity-50"
+                        >
+                          {unscheduling === c.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <CalendarX className="h-3.5 w-3.5" />
+                          )}
+                          Desprogramar
+                        </button>
+                      )}
+                      {c.status === 'scheduled' && (
+                        <button
+                          onClick={() => setPendingCancel({ id: c.id, name: c.name })}
+                          className="flex items-center gap-1.5 rounded-lg border border-red-500/30 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-500/10 transition-colors"
+                        >
+                          <Ban className="h-3.5 w-3.5" />
+                          Cancelar
+                        </button>
+                      )}
                       <button
                         onClick={() => openEdit(c)}
+                        aria-label="Editar campaña"
                         className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
                       >
                         <Edit3 className="h-4 w-4" />
@@ -263,7 +441,8 @@ export default function CampanasPage() {
                     </>
                   )}
                   <button
-                    onClick={() => handleDelete(c.id)}
+                    onClick={() => setPendingDelete({ id: c.id, name: c.name })}
+                    aria-label="Eliminar campaña"
                     disabled={deleting === c.id}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                   >
@@ -334,17 +513,34 @@ export default function CampanasPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">
-                    Programar envío
+                  <label htmlFor="campaign-schedule" className="block text-sm font-medium text-slate-300 mb-1">
+                    Programar envío (hora de Argentina)
                   </label>
                   <input
+                    id="campaign-schedule"
                     type="datetime-local"
                     value={form.scheduledAt}
-                    onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })}
+                    min={isoToArgentinaInput(new Date())}
+                    onChange={(e) => {
+                      setForm({ ...form, scheduledAt: e.target.value });
+                      setScheduleError(null);
+                    }}
+                    aria-invalid={scheduleError ? true : undefined}
+                    aria-describedby="campaign-schedule-help"
                     className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
                   />
                 </div>
               </div>
+              <p id="campaign-schedule-help" className="text-xs text-slate-500 -mt-2">
+                Elegí una fecha y hora futuras, en hora de Argentina (GMT-3). Si la dejás vacía, la campaña queda
+                como borrador y la enviás a mano con &quot;Enviar ahora&quot;.
+                {editingStatus === 'scheduled' && ' Si la vaciás, se desprograma y vuelve a borrador.'}
+              </p>
+              {scheduleError && (
+                <p role="alert" className="text-xs text-red-400 -mt-2">
+                  {scheduleError}
+                </p>
+              )}
 
               {/* Audience preview */}
               <div className="rounded-lg border border-slate-600 bg-slate-700/50 px-4 py-3">
@@ -395,6 +591,48 @@ export default function CampanasPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingSend !== null}
+        onClose={() => setPendingSend(null)}
+        onConfirm={() => pendingSend && handleSend(pendingSend.id)}
+        title="¿Enviar campaña?"
+        message={
+          pendingSend
+            ? `Vas a enviar "${pendingSend.name}" por ${CHANNEL_LABELS[pendingSend.channel] || pendingSend.channel}` +
+              (pendingSendCount !== null
+                ? ` a ${pendingSendCount} ${pendingSendCount === 1 ? 'cliente' : 'clientes'}.`
+                : ' a todos los clientes con datos de contacto para ese canal.') +
+              ' El envío no se puede deshacer.'
+            : ''
+        }
+        confirmLabel="Enviar ahora"
+        variant="warning"
+        loading={pendingSend !== null && sending === pendingSend.id}
+      />
+
+      <ConfirmDialog
+        isOpen={pendingCancel !== null}
+        onClose={() => setPendingCancel(null)}
+        onConfirm={() => pendingCancel && handleCancel(pendingCancel.id)}
+        title="¿Cancelar la campaña?"
+        message={`La campaña "${pendingCancel?.name ?? ''}" no se va a enviar a la hora programada ni después. Una campaña cancelada no se puede enviar. Si solo querés cambiar la hora, usá "Desprogramar" o editala.`}
+        confirmLabel="Sí, cancelar campaña"
+        cancelLabel="Volver"
+        variant="danger"
+        loading={cancelling}
+      />
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => pendingDelete && handleDelete(pendingDelete.id)}
+        title="¿Eliminar campaña?"
+        message={`Vas a eliminar la campaña "${pendingDelete?.name ?? ''}". Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={pendingDelete !== null && deleting === pendingDelete.id}
+      />
     </div>
   );
 }

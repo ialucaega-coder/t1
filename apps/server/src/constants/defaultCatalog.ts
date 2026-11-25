@@ -153,6 +153,20 @@ export const DEFAULT_SKILLS = [
 
 export const DEFAULT_SUPERPOWERS = [
   {
+    name: 'Voz de marca',
+    subtitle: 'TU BOT HABLA COMO TU NEGOCIO.',
+    description: 'Refuerza el tono, el público y las reglas de tu Voz de Marca en todos los canales. Configurala en la sección Voz de Marca.',
+    iconName: 'Sparkles',
+    isActive: true,
+  },
+  {
+    name: 'Multi-idioma',
+    subtitle: 'RESPONDE EN EL IDIOMA DEL CLIENTE.',
+    description: 'Detecta el idioma de cada mensaje y responde en ese mismo idioma, adaptando expresiones y formalidad.',
+    iconName: 'Languages',
+    isActive: true,
+  },
+  {
     name: 'Blindaje anti-invento',
     subtitle: 'NO DEJA QUE EL BOT INVENTE.',
     description: 'Si el bot no sabe, dice que no sabe. Cero respuestas inventadas que pueden costar un cliente.',
@@ -195,6 +209,13 @@ export const DEFAULT_SUPERPOWERS = [
     isActive: true,
   },
   {
+    name: 'Turbo respuesta',
+    subtitle: 'RESPUESTAS CORTAS Y AL GRANO.',
+    description: 'El bot responde en 2-3 oraciones, directo a lo que el cliente necesita, sin relleno.',
+    iconName: 'Gauge',
+    isActive: false,
+  },
+  {
     name: 'Modo seguro',
     subtitle: 'FILTRA CONTENIDO INAPROPIADO.',
     description: 'Detecta y bloquea mensajes ofensivos, spam o intentos de manipular al bot.',
@@ -207,5 +228,61 @@ export const DEFAULT_SUPERPOWERS = [
     description: 'Lee conversaciones y resume intencion, satisfaccion y objeciones.',
     iconName: 'Brain',
     isActive: true,
+  },
+  {
+    name: 'Alerta de emergencia',
+    subtitle: 'AVISA CUANDO ES URGENTE.',
+    description: 'Detecta situaciones urgentes (queja grave, cliente VIP, pedido grande o amenaza de irse) y notifica al instante al dueno.',
+    iconName: 'Siren',
+    isActive: false,
+  },
+  {
+    name: 'Seguimiento post-venta',
+    subtitle: 'NO PIERDAS AL CLIENTE DESPUES.',
+    description: 'Arma mensajes de seguimiento para los turnos completados y te avisa para agradecer e invitar a la proxima cita.',
+    iconName: 'Sword',
+    isActive: false,
+  },
+  {
+    name: 'Auto-mejora',
+    subtitle: 'EL BOT SE CORRIGE SOLO.',
+    description: 'Detecta los huecos de conocimiento del bot (derivaciones y respuestas sin datos) y sugiere que agregar al Prompt/FAQ.',
+    iconName: 'Zap',
+    isActive: false,
+  },
+  {
+    name: 'Encuestas de satisfaccion',
+    subtitle: 'MIDE LA ATENCION EN CADA CHARLA.',
+    description: 'Al resolver una consulta, el bot pide una calificacion del 1 al 5 para medir la satisfaccion del cliente.',
+    iconName: 'Star',
+    isActive: false,
+  },
+  {
+    name: 'Pide resenas Google',
+    subtitle: 'MAS RESENAS, MEJOR REPUTACION.',
+    description: 'Cuando el cliente queda conforme, el bot lo invita amablemente a dejar una resena en Google.',
+    iconName: 'ThumbsUp',
+    isActive: false,
+  },
+  {
+    name: 'Recupera no-shows',
+    subtitle: 'RECUPERA A LOS QUE NO VINIERON.',
+    description: 'Detecta turnos marcados como no-show y arma un mensaje para reprogramarlos automaticamente.',
+    iconName: 'CalendarClock',
+    isActive: false,
+  },
+  {
+    name: 'Galería',
+    subtitle: 'FOTOS, VIDEOS Y AUDIOS REALES.',
+    description: 'Carga material real por URL para que el bot lo comparta en el chat y se vea en el panel.',
+    iconName: 'Images',
+    isActive: false,
+  },
+  {
+    name: 'Oído y vista',
+    subtitle: 'ENTIENDE LAS FOTOS QUE LE MANDAN.',
+    description: 'El bot analiza las imagenes que el cliente adjunta y transcribe sus notas de voz (Whisper), respondiendo sobre lo que ve y escucha.',
+    iconName: 'Eye',
+    isActive: false,
   },
 ] as const;

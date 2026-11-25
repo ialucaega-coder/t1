@@ -9,7 +9,7 @@
   var baseUrl = scriptTag ? scriptTag.src.replace(/\/widget\.js.*$/, '') : '';
 
   if (!botId) {
-    console.warn('[LocalB Widget] Missing data-bot-id attribute');
+    console.warn('[Mr. Go Assistance Widget] Missing data-bot-id attribute');
     return;
   }
 

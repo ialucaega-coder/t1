@@ -22,11 +22,10 @@ export function useCart() {
   };
 
   const updateQty = (name: string, delta: number) => {
-    setCart(prev => prev.map(i => {
-      if (i.name !== name) return i;
-      const newQty = i.qty + delta;
-      return newQty <= 0 ? i : { ...i, qty: newQty };
-    }).filter(i => i.qty > 0));
+    // Al bajar la cantidad a 0 (o menos) el ítem se elimina del carrito.
+    setCart(prev => prev
+      .map(i => (i.name === name ? { ...i, qty: i.qty + delta } : i))
+      .filter(i => i.qty > 0));
   };
 
   const clearCart = () => setCart([]);

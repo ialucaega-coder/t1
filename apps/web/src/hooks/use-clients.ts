@@ -2,10 +2,20 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import * as clientsApi from '@/lib/api/clients';
-import type { Client, ClientDetail } from '@/types';
+import type { ClientFunnel } from '@/lib/api/clients';
+import type { Client, ClientDetail, ClientTag } from '@/types';
 
-export function useClients(params?: { search?: string; page?: number }) {
+/** Embudo vacío por defecto (mientras carga o ante error). */
+const EMPTY_FUNNEL: ClientFunnel = {
+  counts: { NEW: 0, HOT: 0, PAYMENT: 0, CUSTOMER: 0 },
+  total: 0,
+  stages: ['NEW', 'HOT', 'PAYMENT', 'CUSTOMER'],
+};
+
+export function useClients(params?: { search?: string; tagId?: string; page?: number }) {
   const [clients, setClients] = useState<Client[]>([]);
+  const [tagCatalog, setTagCatalog] = useState<ClientTag[]>([]);
+  const [funnel, setFunnel] = useState<ClientFunnel>(EMPTY_FUNNEL);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,12 +31,14 @@ export function useClients(params?: { search?: string; page?: number }) {
       try {
         const res = await clientsApi.getClients({
           search: params?.search,
+          tagId: params?.tagId,
           page: params?.page,
         });
         if (!cancelled) {
           setClients(res.data);
           setTotal(res.total);
           setTotalPages(res.totalPages);
+          setTagCatalog(res.tagCatalog ?? []);
         }
       } catch (err) {
         if (!cancelled) {
@@ -40,11 +52,25 @@ export function useClients(params?: { search?: string; page?: number }) {
 
     load();
     return () => { cancelled = true; };
-  }, [params?.search, params?.page, reloadToken]);
+  }, [params?.search, params?.tagId, params?.page, reloadToken]);
+
+  // El embudo cuenta sobre TODO el negocio (no depende de búsqueda/filtro/página),
+  // así que se pide aparte y solo al montar o refrescar — no en cada tecla. Si
+  // falla, no rompe el listado: cae a vacío.
+  useEffect(() => {
+    let cancelled = false;
+    clientsApi
+      .getClientFunnel()
+      .catch(() => EMPTY_FUNNEL)
+      .then((f) => {
+        if (!cancelled) setFunnel(f);
+      });
+    return () => { cancelled = true; };
+  }, [reloadToken]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  return { clients, total, totalPages, isLoading, error, refetch };
+  return { clients, tagCatalog, funnel, total, totalPages, isLoading, error, refetch };
 }
 
 export function useClientDetail(id: string | null) {

@@ -1,5 +1,5 @@
 // ─── Email Templates ────────────────────────────────────────────────
-// Plantillas HTML para emails transaccionales de Local B.
+// Plantillas HTML para emails transaccionales de Mr. Go Assistance.
 // Diseñadas con inline CSS para máxima compatibilidad con clientes de correo.
 
 const BRAND_COLOR = '#38BDF8';
@@ -26,7 +26,7 @@ function baseLayout(content: string, preheader: string = ''): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Local B</title>
+  <title>Mr. Go Assistance</title>
 </head>
 <body style="margin:0;padding:0;background-color:${LIGHT_BG};font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;">${preheader}</div>` : ''}
@@ -52,7 +52,7 @@ function baseLayout(content: string, preheader: string = ''): string {
           <tr>
             <td style="padding:24px 32px;background-color:${LIGHT_BG};text-align:center;border-top:1px solid #E2E8F0;">
               <p style="margin:0 0 8px;font-size:13px;color:${MUTED_COLOR};">
-                Este email fue enviado por Local B.
+                Este email fue enviado por Mr. Go Assistance.
               </p>
               <p style="margin:0;font-size:12px;color:${MUTED_COLOR};">
                 Si no esperabas este mensaje, podés ignorarlo.
@@ -125,7 +125,7 @@ export function bookingConfirmationTemplate(data: BookingEmailData): string {
     <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(data.clientName)}</strong>, tu reserva ha sido confirmada con éxito.</p>
     ${detailTable(rows)}
     <p style="margin:16px 0 0;font-size:14px;color:${MUTED_COLOR};">
-      Si necesitás modificar o cancelar tu reserva, ingresá a tu cuenta en Local B.
+      Si necesitás modificar o cancelar tu reserva, ingresá a tu cuenta en Mr. Go Assistance.
     </p>`;
 
   return baseLayout(content, `Tu reserva de ${data.serviceName} fue confirmada`);
@@ -181,7 +181,7 @@ export function orderStatusTemplate(data: OrderEmailData): string {
 
 export function welcomeTemplate(userName: string, businessName: string): string {
   const content = `
-    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">¡Bienvenido/a a Local B!</h2>
+    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">¡Bienvenido/a a Mr. Go Assistance!</h2>
     <p style="margin:0 0 16px;">Hola <strong>${escapeHtml(userName)}</strong>, tu cuenta fue creada exitosamente${businessName ? ` en <strong>${escapeHtml(businessName)}</strong>` : ''}.</p>
     <p style="margin:0 0 24px;">Ahora podés:</p>
     <ul style="margin:0 0 24px;padding-left:20px;color:${TEXT_COLOR};">
@@ -199,7 +199,7 @@ export function welcomeTemplate(userName: string, businessName: string): string 
       </tr>
     </table>`;
 
-  return baseLayout(content, `Bienvenido/a a ${businessName || 'Local B'}`);
+  return baseLayout(content, `Bienvenido/a a ${businessName || 'Mr. Go Assistance'}`);
 }
 
 export function invoiceTemplate(data: InvoiceEmailData): string {
@@ -229,4 +229,51 @@ export function genericNotificationTemplate(title: string, htmlContent: string):
     <div style="margin:0;">${htmlContent}</div>`;
 
   return baseLayout(content, title);
+}
+
+export interface TeamInviteEmailData {
+  businessName: string;
+  /** Rol legible (ej. "Administrador"). */
+  roleLabel: string;
+  /** Link de aceptación (contiene el token en el fragmento). */
+  acceptUrl: string;
+  /** Fecha legible de vencimiento (ej. "22 de noviembre de 2026"). */
+  expiresLabel: string;
+}
+
+/**
+ * Nombre de negocio apto para mostrar en un mail: sin caracteres de control ni de
+ * formato (saltos de línea, bidi), espacios colapsados y máx. 80 caracteres. Defensa en
+ * profundidad: el registro ya lo limita, pero el nombre se puede editar por otras vías.
+ */
+export function safeDisplayName(value: string, max = 80): string {
+  const cleaned = value
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned;
+}
+
+export function teamInviteTemplate(rawData: TeamInviteEmailData): string {
+  const data = { ...rawData, businessName: safeDisplayName(rawData.businessName) || 'un equipo' };
+  const content = `
+    <h2 style="margin:0 0 16px;font-size:22px;color:${DARK_BG};">Te invitaron a un equipo</h2>
+    <p style="margin:0 0 16px;">Te invitaron a unirte a <strong>${escapeHtml(data.businessName)}</strong> en Mr. Go Assistance con el rol de <strong>${escapeHtml(data.roleLabel)}</strong>.</p>
+    <table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px auto;">
+      <tr>
+        <td style="background-color:${BRAND_COLOR};border-radius:8px;text-align:center;">
+          <a href="${escapeHtml(data.acceptUrl)}" style="display:inline-block;padding:12px 32px;color:#FFFFFF;font-size:16px;font-weight:600;text-decoration:none;">
+            Aceptar invitación
+          </a>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0 0 8px;font-size:14px;color:${MUTED_COLOR};">
+      El link se puede usar una sola vez y vence el ${escapeHtml(data.expiresLabel)}. Elegís tu contraseña al aceptar.
+    </p>
+    <p style="margin:0;font-size:14px;color:${MUTED_COLOR};">
+      Si no esperabas esta invitación, ignorá este mail: sin aceptarla no se crea ninguna cuenta.
+    </p>`;
+
+  return baseLayout(content, `Te invitaron a ${escapeHtml(data.businessName)} en Mr. Go Assistance`);
 }

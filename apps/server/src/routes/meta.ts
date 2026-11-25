@@ -1,0 +1,359 @@
+import { Router, type Request, type Response } from 'express';
+import crypto from 'crypto';
+import { z } from 'zod';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
+import { validate } from '../middleware/validate';
+import { prisma } from '../lib/prisma';
+import { encrypt } from '../lib/crypto';
+import { processMessage, getActiveSuperpowers, type ChatChannel } from '../services/chatbot';
+import {
+  isConfigured,
+  validateSignature,
+  parseMetaEvents,
+  resolveBusinessByRecipient,
+  sendMessage,
+  connectionTypeFor,
+  verifyTokenOwnership,
+  isRecipientClaimedByAnother,
+  type MetaPlatform,
+  type MetaIncomingMessage,
+} from '../services/meta/client';
+import { transcribeAudioFromUrl } from '../services/ai/transcription';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
+import { defineQueue, enqueue } from '../lib/queue';
+import { runInbound, INBOUND_RETRY } from '../services/channels/inboundRetry';
+import { lockSingleton } from '../lib/singletonLock';
+
+// ────────────────────────────────────────────────────────────────
+// Rutas de Meta (Instagram Direct + Facebook Messenger).
+//
+// GET  /api/meta/webhook       — verificación del webhook (Meta lo llama una vez)
+// POST /api/meta/webhook       — eventos entrantes (mensajes de clientes)
+// POST /api/meta/connect       — conectar una página / cuenta de IG (autenticado)
+// DELETE /api/meta/disconnect  — desconectar (autenticado)
+// GET  /api/meta/status        — estado de conexiones (autenticado)
+// ────────────────────────────────────────────────────────────────
+
+const router = Router();
+
+/** Comparación de tokens en tiempo constante (evita fugas por timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+/** Mapea la plataforma interna al canal del chatbot. */
+function chatChannelFor(platform: MetaPlatform): ChatChannel {
+  return platform === 'instagram' ? 'INSTAGRAM' : 'MESSENGER';
+}
+
+/**
+ * GET /api/meta/webhook
+ * Verificación del webhook: Meta manda hub.mode=subscribe + hub.verify_token y
+ * espera que devolvamos el hub.challenge en texto plano si el token coincide.
+ */
+router.get('/webhook', (req: Request, res: Response) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  const expected = process.env.META_VERIFY_TOKEN;
+  if (mode === 'subscribe' && expected && typeof token === 'string' && safeEqual(token, expected)) {
+    res.status(200).send(String(challenge ?? ''));
+    return;
+  }
+  res.sendStatus(403);
+});
+
+/** Cola de mensajes entrantes de Instagram/Messenger. */
+const META_INBOUND_QUEUE = 'meta-inbound';
+
+/**
+ * Procesa UN mensaje entrante de Meta: resuelve el negocio, adjuntos, conversación,
+ * respuesta del bot y envío por la Send API.
+ *
+ * Reintentos (ver services/channels/inboundRetry.ts): un fallo ANTES de guardar
+ * nada (resolver el negocio, leer la conversación, procesar sin persistir) se
+ * relanza y la cola reintenta con backoff; un fallo con mensajes ya guardados, o al
+ * ENVIAR la respuesta, solo se loguea (reintentar duplicaría). El dedupe por `mid`
+ * evita procesar dos veces el mismo mensaje.
+ */
+async function processMetaInbound(msg: MetaIncomingMessage): Promise<void> {
+  const target = await resolveBusinessByRecipient(msg.platform, msg.recipientId);
+  if (!target) return;
+
+  const { businessId, botId, pageAccessToken } = target;
+
+  await runInbound('Error procesando mensaje de Meta', { businessId, contact: msg.senderId, externalId: msg.mid }, async (phase) => {
+    // "Oído y vista": consultamos el superpoder una sola vez si hay adjuntos.
+    const hasAttachments = msg.images.length > 0 || msg.audios.length > 0;
+    const oidoYVista = hasAttachments
+      ? (await getActiveSuperpowers(businessId)).has('Oído y vista')
+      : false;
+
+    // Visión: las URLs de imagen de Meta son públicas y temporales, así que
+    // Anthropic puede descargarlas por URL directa (a diferencia de Twilio).
+    // Solo las pasamos si el superpoder está activo.
+    const images = oidoYVista ? msg.images : [];
+
+    // Audio: transcribimos notas de voz con Whisper (URLs públicas, sin auth).
+    // Requiere "Oído y vista" y OPENAI_API_KEY (si falta, degrada a placeholder).
+    let transcript = '';
+    if (msg.audios.length && oidoYVista) {
+      for (const audio of msg.audios) {
+        const t = await transcribeAudioFromUrl(audio.url);
+        if (t) { transcript = t; break; }
+      }
+    }
+
+    const existing = await prisma.conversation.findFirst({
+      where: {
+        businessId,
+        botId,
+        contactPhone: msg.senderId,
+        status: { in: ['OPEN', 'HANDOFF'] }, // una derivada a humano sigue siendo la misma charla
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    // El placeholder se calcula sobre los adjuntos ORIGINALES (antes del gate),
+    // para que un mensaje de solo-adjunto siempre reciba respuesta aunque el
+    // superpoder esté apagado (consistente con el canal de WhatsApp).
+    const placeholder = msg.images.length
+      ? '(imagen adjunta)'
+      : msg.audios.length
+      ? '(nota de voz)'
+      : '';
+    const body = transcript || msg.text || placeholder;
+    if (!body) return;
+
+    const result = await processMessage(businessId, body, chatChannelFor(msg.platform), {
+      conversationId: existing?.id,
+      botId,
+      // Guardamos el id de Meta del usuario en contactPhone para poder
+      // reabrir la misma conversación y responderle.
+      contactPhone: msg.senderId,
+      ...(images.length ? { images } : {}),
+      ...(msg.mid ? { externalId: msg.mid } : {}),
+    });
+
+    // A partir de acá la respuesta ya está guardada: un fallo del envío NO se reintenta.
+    phase.processed();
+
+    // Un humano tomó la conversación: el mensaje ya se guardó, el bot no contesta.
+    if (result.botPaused) return;
+    await sendMessage(pageAccessToken, msg.senderId, result.text);
+  });
+}
+
+defineQueue<MetaIncomingMessage>(META_INBOUND_QUEUE, processMetaInbound, { concurrency: 10 });
+
+/**
+ * POST /api/meta/webhook
+ * Recibe los eventos de mensajería. Responde 200 siempre (Meta reintenta si no).
+ * En producción valida la firma X-Hub-Signature-256 contra el cuerpo crudo.
+ */
+router.post(
+  '/webhook',
+  asyncHandler(async (req: Request, res: Response) => {
+    // Firma segura por defecto: validamos siempre salvo opt-in explícito para
+    // desarrollo local (SKIP_WEBHOOK_SIGNATURE_VALIDATION=true). No dependemos de
+    // que NODE_ENV esté seteado a 'production' en cada despliegue.
+    if (process.env.SKIP_WEBHOOK_SIGNATURE_VALIDATION !== 'true') {
+      const signature = req.headers['x-hub-signature-256'];
+      const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+      if (!validateSignature(rawBody, signature)) {
+        res.sendStatus(403);
+        return;
+      }
+    }
+
+    // Respondemos 200 cuanto antes y procesamos; si algo falla, se loguea.
+    res.status(200).send('EVENT_RECEIVED');
+
+    try {
+      const messages = parseMetaEvents(req.body || {});
+      for (const msg of messages) {
+        // Cada mensaje va a una COLA: dedupe por `mid` (Meta reintenta el webhook) y
+        // un deploy a mitad de camino no pierde lo que estaba en vuelo. Sin Redis
+        // se ejecuta inline, igual que antes. El Page Access Token NO viaja en el
+        // job: el handler lo vuelve a resolver desde la DB.
+        await enqueue<MetaIncomingMessage>(META_INBOUND_QUEUE, msg, {
+          ...(msg.mid ? { jobId: `meta_${msg.mid}` } : {}),
+          ...INBOUND_RETRY,
+        });
+      }
+    } catch (error) {
+      console.error('Meta webhook error:', error);
+    }
+  }),
+);
+
+const connectSchema = z.object({
+  platform: z.enum(['instagram', 'messenger']),
+  pageAccessToken: z.string().min(1),
+  pageId: z.string().min(1).optional(),
+  igId: z.string().min(1).optional(),
+  pageName: z.string().max(120).optional(),
+}).refine((d) => Boolean(d.pageId || d.igId), {
+  message: 'Se requiere pageId (Messenger) o igId (Instagram)',
+});
+
+/**
+ * POST /api/meta/connect
+ * Conecta una página de Facebook (Messenger) o cuenta de Instagram al negocio.
+ * Crea/actualiza la Connection y asegura un Bot activo para el canal.
+ */
+router.post(
+  '/connect',
+  requireAuth,
+  // Conectar/desconectar canales cambia a dónde van los mensajes del negocio: solo ADMIN.
+  requireRole('ADMIN'),
+  validate(connectSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const businessId = req.auth!.businessId;
+    const { platform, pageAccessToken, pageId, igId, pageName } = req.body as z.infer<typeof connectSchema>;
+
+    const type = connectionTypeFor(platform as MetaPlatform);
+    const botChannel = platform === 'instagram' ? 'INSTAGRAM' : 'WEBCHAT';
+    const label = platform === 'instagram' ? 'Instagram' : 'Messenger';
+    const identityId = (igId ?? pageId) as string;
+
+    // Anti-hijack cross-tenant: el token debe controlar realmente la identidad
+    // declarada, y ningún otro negocio puede tenerla ya reclamada.
+    const owns = await verifyTokenOwnership(pageAccessToken, identityId);
+    if (!owns) {
+      throw new AppError(400, 'El token no controla la página/cuenta indicada. Verificá el Page Access Token y el ID.');
+    }
+    const claimed = await isRecipientClaimedByAnother(platform as MetaPlatform, identityId, businessId);
+    if (claimed) {
+      throw new AppError(409, 'Esa página/cuenta ya está conectada a otro negocio.');
+    }
+
+    // Aseguramos un bot activo para este canal (reutiliza el existente si lo hay).
+    let bot = await prisma.bot.findFirst({
+      where: { businessId, channel: botChannel as never, name: `${label} bot` },
+    });
+    if (!bot) {
+      bot = await prisma.bot.create({
+        data: {
+          name: `${label} bot`,
+          channel: botChannel as never,
+          status: 'ACTIVE',
+          businessId,
+        },
+      });
+    } else if (bot.status !== 'ACTIVE') {
+      bot = await prisma.bot.update({ where: { id: bot.id }, data: { status: 'ACTIVE' } });
+    }
+
+    const config = {
+      // El Page Access Token (permite publicar/responder como la página de
+      // FB/IG del negocio) se guarda CIFRADO en reposo. Se descifra al usarlo
+      // en services/meta/client.ts (resolveBusinessByRecipient).
+      pageAccessToken: encrypt(pageAccessToken),
+      ...(pageId ? { pageId } : {}),
+      ...(igId ? { igId } : {}),
+      pageName: pageName || label,
+      botId: bot.id,
+      connectedAt: new Date().toISOString(),
+    };
+
+    // Con lock por (negocio, type): dos "conectar" simultáneos no duplican la fila.
+    await prisma.$transaction(async (tx) => {
+      await lockSingleton(tx, businessId, type);
+      const existing = await tx.connection.findFirst({ where: { businessId, type }, orderBy: { id: 'asc' } });
+      if (existing) {
+        await tx.connection.update({
+          where: { id: existing.id },
+          data: { config, isActive: true, name: `${label} — ${pageName || (igId ?? pageId)}` },
+        });
+      } else {
+        await tx.connection.create({
+          data: {
+            name: `${label} — ${pageName || (igId ?? pageId)}`,
+            type,
+            icon: platform === 'instagram' ? 'Instagram' : 'MessageCircle',
+            config,
+            isActive: true,
+            businessId,
+          },
+        });
+      }
+    });
+
+    res.json({ success: true, platform, botId: bot.id });
+  }),
+);
+
+/**
+ * DELETE /api/meta/disconnect?platform=instagram|messenger
+ * Desactiva la conexión de la plataforma indicada.
+ */
+router.delete(
+  '/disconnect',
+  requireAuth,
+  requireRole('ADMIN'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const businessId = req.auth!.businessId;
+    const platform = req.query.platform;
+    if (platform !== 'instagram' && platform !== 'messenger') {
+      throw new AppError(400, 'Parámetro platform inválido (instagram | messenger)');
+    }
+    const type = connectionTypeFor(platform);
+
+    const connection = await prisma.connection.findFirst({ where: { businessId, type }, orderBy: { id: 'asc' } });
+    if (connection) {
+      await prisma.connection.update({
+        where: { id: connection.id },
+        data: { isActive: false, config: {} },
+      });
+    }
+
+    res.json({ success: true, message: `${platform} desconectado` });
+  }),
+);
+
+/**
+ * GET /api/meta/status
+ * Estado de las conexiones de Instagram y Messenger del negocio.
+ */
+router.get(
+  '/status',
+  requireAuth,
+  requireStaff,
+  requireCapability('channels'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const businessId = req.auth!.businessId;
+
+    const connections = await prisma.connection.findMany({
+      where: { businessId, type: { in: ['INSTAGRAM', 'MESSENGER'] } },
+      select: { type: true, isActive: true, config: true, name: true },
+    });
+
+    const byType = (t: string) => connections.find((c) => c.type === t);
+    const describe = (t: string) => {
+      const conn = byType(t);
+      if (!conn || !conn.isActive) return { connected: false };
+      const cfg = (conn.config as Record<string, unknown> | null) || {};
+      return {
+        connected: true,
+        name: conn.name,
+        pageId: cfg.pageId ?? null,
+        igId: cfg.igId ?? null,
+        connectedAt: cfg.connectedAt ?? null,
+      };
+    };
+
+    res.json({
+      configured: isConfigured(),
+      instagram: describe('INSTAGRAM'),
+      messenger: describe('MESSENGER'),
+    });
+  }),
+);
+
+export { router as metaRouter };

@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { z } from 'zod';
+import { patchSchema } from '../validators/patch';
 import { validate } from '../middleware/validate';
 
 const router = Router();
@@ -15,7 +16,7 @@ const createTemplateSchema = z.object({
   type: z.enum(['whatsapp', 'business']),
 });
 
-const updateTemplateSchema = createTemplateSchema.partial().omit({ type: true });
+const updateTemplateSchema = patchSchema(createTemplateSchema).omit({ type: true });
 
 router.get(
   '/',

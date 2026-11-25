@@ -1,7 +1,7 @@
 'use client';
 
 import { Modal } from '@/components/ui/Modal';
-import { User, Clock, Scissors, CalendarDays } from 'lucide-react';
+import { User, Clock, Scissors, Pencil, Trash2 } from 'lucide-react';
 import {
   type Booking,
   BOOKING_STATUS_COLORS as statusColors,
@@ -14,15 +14,28 @@ interface BookingDetailModalProps {
   onClose: () => void;
   booking: Booking | null;
   onUpdateStatus: (id: string, status: string) => Promise<void>;
+  /** Abre la edición / reprogramación de la reserva. */
+  onEdit?: (id: string) => void;
+  /** Pide confirmar la cancelación (la página muestra el ConfirmDialog). Sin esto cancela directo. */
+  onRequestCancel?: (id: string) => void;
+  /** Pide confirmar la eliminación definitiva (solo se ofrece si se pasa, p. ej. para ADMIN). */
+  onRequestDelete?: (id: string) => void;
 }
 
-export function BookingDetailModal({ isOpen, onClose, booking, onUpdateStatus }: BookingDetailModalProps) {
+export function BookingDetailModal({ isOpen, onClose, booking, onUpdateStatus, onEdit, onRequestCancel, onRequestDelete }: BookingDetailModalProps) {
   if (!booking) return null;
 
   const handleAction = async (status: string) => {
+    if (status === 'CANCELLED' && onRequestCancel) {
+      onRequestCancel(booking.id);
+      onClose();
+      return;
+    }
     await onUpdateStatus(booking.id, status);
     onClose();
   };
+
+  const isFinal = booking.status === 'CANCELLED' || booking.status === 'COMPLETED' || booking.status === 'NO_SHOW';
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Detalle de reserva" size="sm">
@@ -74,9 +87,19 @@ export function BookingDetailModal({ isOpen, onClose, booking, onUpdateStatus }:
               Completar
             </button>
           )}
+          {onEdit && !isFinal && (
+            <button onClick={() => { onEdit(booking.id); onClose(); }} className="btn-secondary text-xs flex-1 flex items-center justify-center gap-1">
+              <Pencil className="h-3 w-3" /> Editar / reprogramar
+            </button>
+          )}
           {booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' && (
             <button onClick={() => handleAction('CANCELLED')} className="btn-secondary text-xs text-red-400 flex-1">
               Cancelar
+            </button>
+          )}
+          {onRequestDelete && (
+            <button onClick={() => { onRequestDelete(booking.id); onClose(); }} className="btn-secondary text-xs text-red-400 flex-1 flex items-center justify-center gap-1">
+              <Trash2 className="h-3 w-3" /> Eliminar
             </button>
           )}
         </div>

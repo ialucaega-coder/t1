@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { statsApi } from '@/lib/api/index';
 import type { StatsOverview, TopService, WeeklyData } from '@/types';
+import { DEFAULT_RANGE, rangeParams, type RangeSelection } from '@/lib/date-range';
 
 export interface UseStatsResult {
   overview: StatsOverview | null;
@@ -13,7 +14,8 @@ export interface UseStatsResult {
   refetch: () => void;
 }
 
-export function useStats(): UseStatsResult {
+/** @param range rango elegido; sin él el server usa su ventana histórica (mes / 7 días). Cambiarlo recarga los datos. */
+export function useStats(range: RangeSelection = DEFAULT_RANGE): UseStatsResult {
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [weeklyData, setWeeklyData] = useState<WeeklyData[]>([]);
   const [topServices, setTopServices] = useState<TopService[]>([]);
@@ -28,10 +30,11 @@ export function useStats(): UseStatsResult {
       setIsLoading(true);
       setError(null);
       try {
+        const params = rangeParams(range);
         const [ov, weekly, top] = await Promise.all([
-          statsApi.getOverview(),
-          statsApi.getWeeklyStats(),
-          statsApi.getTopServices(),
+          statsApi.getOverview(params),
+          statsApi.getWeeklyStats(params),
+          statsApi.getTopServices(params),
         ]);
         if (!cancelled) {
           setOverview(ov);
@@ -51,7 +54,7 @@ export function useStats(): UseStatsResult {
     return () => {
       cancelled = true;
     };
-  }, [reloadToken]);
+  }, [reloadToken, range]);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 

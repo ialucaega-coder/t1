@@ -2,7 +2,7 @@
 #
 # scripts/setup.sh
 #
-# Script de configuracion inicial para el monorepo "Local B".
+# Script de configuracion inicial para el monorepo "Mr. Go Assistance".
 # Verifica prerequisitos, instala dependencias, prepara los archivos .env
 # y genera el cliente de Prisma. Pensado para correr una sola vez al
 # clonar el repositorio (o luego de cambios grandes en dependencias).
@@ -32,7 +32,7 @@ cd "$ROOT_DIR"
 
 echo ""
 echo "=========================================="
-echo "  Local B — Setup del entorno de desarrollo"
+echo "  Mr. Go Assistance — Setup del entorno de desarrollo"
 echo "=========================================="
 echo ""
 

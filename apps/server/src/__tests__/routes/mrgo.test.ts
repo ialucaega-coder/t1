@@ -1,0 +1,463 @@
+/**
+ * Pruebas de integración para las rutas de Mr Go (`src/routes/mrgo.ts`) y para
+ * el orquestador (`src/services/mrgo/orchestrator.ts`).
+ *
+ * Rutas: GET /agents (resueltos + catálogos), PUT /agents (saneo), POST
+ * /orchestrate (devuelve la decisión), scope por businessId y 401 sin token.
+ * Se mockean los servicios de persistencia (prisma, por detrás) y el motor de
+ * IA para no llamar a un LLM real.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import type { Request, Response, NextFunction } from 'express';
+
+// --- Mock del servicio de agentes (persistencia) ---
+vi.mock('../../services/mrgo/agents', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/agents')>();
+  return {
+    ...actual, // reusamos catálogos y saneadores reales
+    loadAgents: vi.fn(async () => [
+      { key: 'ceo', activo: true },
+      { key: 'ventas', activo: true },
+      { key: 'soporte', activo: false },
+    ]),
+    saveAgents: vi.fn(async (_biz: string, agents: unknown) => {
+      const { sanitizeAgents } = actual;
+      return sanitizeAgents(agents);
+    }),
+  };
+});
+
+// --- Mock del orquestador (para no ejercitar el LLM en la ruta) ---
+vi.mock('../../services/mrgo/orchestrator', () => ({
+  orchestrate: vi.fn(async () => ({
+    nextAgent: 'ventas',
+    emotion: 'entusiasmo',
+    reasoning: 'El mensaje pide una cotización',
+    tool: 'generar_link_pago',
+    toolParams: { monto: 1000 },
+  })),
+}));
+
+// --- Mock de auth: sin header Authorization → 401; con header → auth puesto ---
+vi.mock('../../middleware/auth', () => ({
+  requireAuth: (req: Request, res: Response, next: NextFunction) => {
+    if (!req.headers.authorization) {
+      res.status(401).json({ error: 'No token provided' });
+      return;
+    }
+    const role = (req.headers['x-test-role'] as 'ADMIN' | 'PROFESSIONAL' | 'CLIENT' | undefined) ?? 'ADMIN';
+    req.auth = { userId: 'user_1', businessId: 'biz_1', role };
+    next();
+  },
+  requireStaff: (req: Request, res: Response, next: NextFunction) => {
+    if (!['ADMIN', 'PROFESSIONAL'].includes(req.auth?.role ?? '')) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    next();
+  },
+  requireRole:
+    (...roles: string[]) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      if (!roles.includes(req.auth?.role ?? '')) {
+        res.status(403).json({ error: 'Insufficient permissions' });
+        return;
+      }
+      next();
+    },
+}));
+
+// --- Mock de memoria: loadMemory/saveMemory stub; buildMemoryPrompt REAL ---
+vi.mock('../../services/mrgo/memory', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/memory')>();
+  return {
+    ...actual,
+    loadMemory: vi.fn(async () => ({ profile: '', facts: [] })),
+    saveMemory: vi.fn(async (_biz: string, input: { profile?: string; facts?: string[] }) => ({
+      profile: input.profile ?? '',
+      facts: input.facts ?? [],
+    })),
+  };
+});
+
+// --- Mock del giro: sin esto loadIndustry consulta Prisma de verdad (en CI no hay DATABASE_URL
+// y en local le pegaba a la base real). buildIndustryPrompt REAL. ---
+vi.mock('../../services/mrgo/industry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/mrgo/industry')>();
+  return { ...actual, loadIndustry: vi.fn(async () => ({ giroId: '' })) };
+});
+
+// --- Mock de la oficina (pausas): sin pausas por defecto ---
+vi.mock('../../services/mrgo/office', () => ({
+  loadOffice: vi.fn(async () => ({ paused: [], positions: {} })),
+  saveOffice: vi.fn(),
+}));
+
+import { loadAgents, saveAgents } from '../../services/mrgo/agents';
+import { loadOffice } from '../../services/mrgo/office';
+import { orchestrate } from '../../services/mrgo/orchestrator';
+import { loadMemory, saveMemory } from '../../services/mrgo/memory';
+import { mrgoRouter } from '../../routes/mrgo';
+import { errorHandler } from '../../middleware/errorHandler';
+
+const AUTH = ['Authorization', 'Bearer token'] as const;
+const mock = <T extends (...args: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/mrgo', mrgoRouter);
+  app.use(errorHandler);
+  return app;
+}
+
+describe('routes/mrgo', () => {
+  const app = buildApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('GET /api/mrgo/agents', () => {
+    it('devuelve agentes resueltos + catálogos de roles y tools (scope por businessId)', async () => {
+      const res = await request(app).get('/api/mrgo/agents').set(...AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body.agents).toHaveLength(3);
+      expect(res.body.roles).toBeInstanceOf(Array);
+      expect(res.body.roles.length).toBeGreaterThan(0);
+      expect(res.body.tools).toBeInstanceOf(Array);
+      expect(res.body.tools.length).toBeGreaterThan(0);
+      expect(loadAgents).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app).get('/api/mrgo/agents');
+      expect(res.status).toBe(401);
+      expect(loadAgents).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PUT /api/mrgo/agents', () => {
+    it('guarda la config inyectando el businessId del auth', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .set(...AUTH)
+        .send({ agents: [{ key: 'ceo', activo: true }, { key: 'ventas', activo: false }] });
+
+      expect(res.status).toBe(200);
+      expect(saveAgents).toHaveBeenCalledWith('biz_1', expect.any(Array));
+      expect(res.body.agents).toBeInstanceOf(Array);
+    });
+
+    it('sanea descartando roles fuera del catálogo (validación Zod → 400)', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .set(...AUTH)
+        .send({ agents: [{ key: 'rol_inventado', activo: true }] });
+
+      expect(res.status).toBe(400);
+      expect(saveAgents).not.toHaveBeenCalled();
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .send({ agents: [] });
+      expect(res.status).toBe(401);
+      expect(saveAgents).not.toHaveBeenCalled();
+    });
+
+    it('conserva la personalización válida del avatar (Studio "Tu Mr Go")', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .set(...AUTH)
+        .send({
+          agents: [
+            { key: 'ceo', activo: true, nombre: 'Go', colorKey: 'LILA', emotion: 'happy', pet: 'jinx' },
+            { key: 'ventas', activo: true, colorKey: 'ORANGE', pet: 'none' },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      const ceo = res.body.agents.find((a: { key: string }) => a.key === 'ceo');
+      expect(ceo).toMatchObject({ nombre: 'Go', colorKey: 'LILA', emotion: 'happy', pet: 'jinx' });
+      const ventas = res.body.agents.find((a: { key: string }) => a.key === 'ventas');
+      expect(ventas).toMatchObject({ colorKey: 'ORANGE', pet: 'none' });
+    });
+
+    it('descarta valores de personalización fuera del catálogo', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/agents')
+        .set(...AUTH)
+        .send({
+          agents: [{ key: 'ceo', activo: true, colorKey: 'FUCSIA', emotion: 'eufórico', pet: 'dragon' }],
+        });
+
+      expect(res.status).toBe(200);
+      const ceo = res.body.agents.find((a: { key: string }) => a.key === 'ceo');
+      expect(ceo.colorKey).toBeUndefined();
+      expect(ceo.emotion).toBeUndefined();
+      expect(ceo.pet).toBeUndefined();
+    });
+  });
+
+  describe('POST /api/mrgo/orchestrate', () => {
+    it('devuelve la decisión de routing del orquestador', async () => {
+      const res = await request(app)
+        .post('/api/mrgo/orchestrate')
+        .set(...AUTH)
+        .send({ text: 'Quiero una cotización', channel: 'WHATSAPP' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.nextAgent).toBe('ventas');
+      expect(res.body.emotion).toBe('entusiasmo');
+      expect(res.body.tool).toBe('generar_link_pago');
+      // La ruta despacha el tool por el executor. Sin execute (dry_run), una
+      // acción externa como generar_link_pago se SIMULA (no efectúa).
+      expect(res.body.execution).toBeTruthy();
+      expect(res.body.execution.status).toBe('simulado');
+      expect(orchestrate).toHaveBeenCalledWith({
+        businessId: 'biz_1',
+        text: 'Quiero una cotización',
+        channel: 'WHATSAPP',
+      });
+    });
+
+    it('400 si falta el texto (validación Zod)', async () => {
+      const res = await request(app).post('/api/mrgo/orchestrate').set(...AUTH).send({});
+      expect(res.status).toBe(400);
+      expect(orchestrate).not.toHaveBeenCalled();
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app).post('/api/mrgo/orchestrate').send({ text: 'hola' });
+      expect(res.status).toBe(401);
+      expect(orchestrate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET/PUT /api/mrgo/memory', () => {
+    it('GET devuelve la memoria del negocio (scope por businessId)', async () => {
+      mock(loadMemory).mockResolvedValueOnce({ profile: 'Barbería', facts: ['promo viernes'] });
+
+      const res = await request(app).get('/api/mrgo/memory').set(...AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ profile: 'Barbería', facts: ['promo viernes'] });
+      expect(loadMemory).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('PUT guarda la memoria inyectando el businessId', async () => {
+      const res = await request(app)
+        .put('/api/mrgo/memory')
+        .set(...AUTH)
+        .send({ profile: 'Soy una barbería', facts: ['abierto de 9 a 18'] });
+
+      expect(res.status).toBe(200);
+      expect(saveMemory).toHaveBeenCalledWith('biz_1', expect.objectContaining({ profile: 'Soy una barbería' }));
+    });
+
+    it('401 sin token', async () => {
+      const res = await request(app).get('/api/mrgo/memory');
+      expect(res.status).toBe(401);
+    });
+  });
+});
+
+// --- Pruebas del orquestador contra un motor de IA mockeado ---
+vi.mock('../../services/ai/engine', () => ({
+  getAIProviderForBusiness: vi.fn(),
+}));
+
+vi.mock('../../services/ai/usage', () => ({ recordAiSpend: vi.fn(async () => undefined) }));
+vi.mock('../../services/ai/spendCap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/ai/spendCap')>();
+  return { ...actual, enforceSpendCap: vi.fn(async () => undefined) };
+});
+
+import { getAIProviderForBusiness } from '../../services/ai/engine';
+import { recordAiSpend } from '../../services/ai/usage';
+import { enforceSpendCap, SpendCapError } from '../../services/ai/spendCap';
+
+describe('services/mrgo/orchestrator', () => {
+  // Importamos la implementación REAL del orquestador (el mock de arriba solo
+  // afecta a la ruta); acá verificamos el parseo/fallback contra el motor IA.
+  let orchestrateReal: typeof import('../../services/mrgo/orchestrator').orchestrate;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const real = await vi.importActual<typeof import('../../services/mrgo/orchestrator')>(
+      '../../services/mrgo/orchestrator'
+    );
+    orchestrateReal = real.orchestrate;
+    // loadAgents está mockeado arriba: ceo + ventas activos, soporte inactivo.
+    mock(loadAgents).mockResolvedValue([
+      { key: 'ceo', activo: true },
+      { key: 'ventas', activo: true },
+      { key: 'soporte', activo: false },
+    ]);
+  });
+
+  function fakeProvider(response: string) {
+    mock(getAIProviderForBusiness).mockResolvedValue({
+      name: 'fake',
+      generateResponse: vi.fn(async () => response),
+    });
+  }
+
+  it('devuelve la decisión parseada cuando el LLM responde JSON', async () => {
+    fakeProvider('{"nextAgent":"ventas","emotion":"calma","reasoning":"pide precio","tool":"generar_link_pago","toolParams":{"monto":500}}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'cuánto sale' });
+
+    expect(dec.nextAgent).toBe('ventas');
+    expect(dec.emotion).toBe('calma');
+    expect(dec.tool).toBe('generar_link_pago');
+    expect(dec.toolParams).toEqual({ monto: 500 });
+  });
+
+  it('extrae el JSON aunque venga rodeado de texto', async () => {
+    fakeProvider('Claro, acá va:\n{"nextAgent":"ceo","emotion":"neutral","reasoning":"general"}\n¡Listo!');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ceo');
+    expect(dec.tool).toBeUndefined();
+  });
+
+  it('cae al fallback (ceo) ante un JSON inválido', async () => {
+    fakeProvider('no soy json, perdón');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ceo');
+    expect(dec.reasoning).toContain('Routing por defecto');
+  });
+
+  it('descarta un agente que no está activo y cae al fallback', async () => {
+    fakeProvider('{"nextAgent":"soporte","emotion":"x","reasoning":"y"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ceo'); // soporte está inactivo → fallback
+  });
+
+  it('descarta un tool fuera del catálogo pero conserva el agente', async () => {
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"tool_inventado"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+    expect(dec.tool).toBeUndefined();
+  });
+
+  it('descarta un tool que el agente NO tiene permitido por su rol (gating CrewAI)', async () => {
+    // Ventas NO tiene 'mover_lifecycle' (es del CRM). Se descarta el tool, se
+    // conserva el agente.
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"mover_lifecycle"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+    expect(dec.tool).toBeUndefined();
+  });
+
+  it('conserva un tool permitido para el rol del agente', async () => {
+    // Ventas SÍ puede 'generar_link_pago'.
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"generar_link_pago"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+    expect(dec.tool).toBe('generar_link_pago');
+  });
+
+  it('no despacha a un agente PAUSADO en la Oficina: lo saca del prompt y cae al fallback', async () => {
+    mock(loadOffice).mockResolvedValueOnce({ paused: ['ventas'], positions: {} });
+    const gen = vi.fn(async () => '{"nextAgent":"ventas","emotion":"x","reasoning":"y","tool":"generar_link_pago"}');
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'cuánto sale' });
+
+    expect(loadOffice).toHaveBeenCalledWith('biz_1');
+    expect(dec.nextAgent).toBe('ceo'); // el LLM eligió ventas (pausado) → no se respeta
+    expect(dec.tool).toBeUndefined();
+    const opts = (gen.mock.calls[0] as unknown[])[1] as { systemPrompt: string };
+    expect(opts.systemPrompt).not.toContain('- ventas:');
+    expect(opts.systemPrompt).toContain('- ceo:');
+  });
+
+  it('si el CEO está pausado, el fallback elige otro agente activo', async () => {
+    mock(loadOffice).mockResolvedValueOnce({ paused: ['ceo'], positions: {} });
+    fakeProvider('no soy json');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+  });
+
+  it('si falla la lectura de la Oficina, rutea igual (sin pausas)', async () => {
+    mock(loadOffice).mockRejectedValueOnce(new Error('db caída'));
+    fakeProvider('{"nextAgent":"ventas","emotion":"x","reasoning":"y"}');
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ventas');
+  });
+
+  it('registra el gasto de IA del ruteo (recordUsage -> recordAiSpend, fuente mrgo)', async () => {
+    const usage = { inputTokens: 120, outputTokens: 30, model: 'claude-sonnet-5' };
+    const gen = vi.fn(async (_p: string, ctx: { recordUsage?: (u: typeof usage) => void }) => {
+      ctx.recordUsage?.(usage);
+      return '{"nextAgent":"ceo","emotion":"neutral","reasoning":"ok"}';
+    });
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+
+    await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(recordAiSpend).toHaveBeenCalledWith('biz_1', usage, 'mrgo');
+  });
+
+  it('sin usage del proveedor no registra gasto', async () => {
+    fakeProvider('{"nextAgent":"ceo","emotion":"neutral","reasoning":"ok"}');
+    await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+    expect(recordAiSpend).not.toHaveBeenCalled();
+  });
+
+  it('con el tope de gasto alcanzado NO llama al modelo y cae al ruteo por defecto', async () => {
+    const gen = vi.fn(async () => '{}');
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+    mock(enforceSpendCap).mockRejectedValueOnce(new SpendCapError(50));
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(gen).not.toHaveBeenCalled();
+    expect(dec.nextAgent).toBe('ceo');
+    expect(dec.reasoning).toContain('tope mensual');
+  });
+
+  it('fallback si el motor de IA no está disponible', async () => {
+    mock(getAIProviderForBusiness).mockRejectedValue(new Error('sin motor'));
+
+    const dec = await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    expect(dec.nextAgent).toBe('ceo');
+    expect(dec.reasoning).toContain('motor de IA');
+  });
+
+  it('inyecta la memoria del negocio en el prompt de sistema del orquestador', async () => {
+    mock(loadMemory).mockResolvedValueOnce({ profile: 'Barbería de barrio', facts: ['promo viernes'] });
+    const gen = vi.fn(async () => '{"nextAgent":"ceo","emotion":"neutral","reasoning":"ok"}');
+    mock(getAIProviderForBusiness).mockResolvedValue({ name: 'fake', generateResponse: gen });
+
+    await orchestrateReal({ businessId: 'biz_1', text: 'hola' });
+
+    // El 2º argumento de generateResponse lleva el systemPrompt con la memoria.
+    const opts = (gen.mock.calls[0] as unknown[])[1] as { systemPrompt: string };
+    expect(opts.systemPrompt).toContain('Barbería de barrio');
+    expect(opts.systemPrompt).toContain('promo viernes');
+  });
+});

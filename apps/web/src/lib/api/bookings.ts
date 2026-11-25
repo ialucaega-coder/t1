@@ -10,6 +10,20 @@ export function createBooking(data: CreateBookingData) {
   return httpClient.post<Booking>('/bookings', data);
 }
 
+/** Campos editables de una reserva (PATCH /bookings/:id). `notes: ''` borra las notas. */
+export interface UpdateBookingData {
+  date?: string;
+  startTime?: string;
+  serviceId?: string;
+  professionalId?: string;
+  notes?: string;
+}
+
+/** Edita / reprograma una reserva: el server valida pertenencia y conflictos de agenda. */
+export function updateBooking(id: string, data: UpdateBookingData) {
+  return httpClient.patch<Booking>(`/bookings/${id}`, data);
+}
+
 export function updateBookingStatus(id: string, status: string) {
   return httpClient.patch<Booking>(`/bookings/${id}/status`, { status });
 }

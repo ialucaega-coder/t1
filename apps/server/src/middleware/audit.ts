@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { redactUrl } from './accessLog';
 
 /**
  * audit.ts
@@ -22,6 +23,16 @@ export type AuditEventType =
   | 'AUTH_REGISTER'
   | 'AUTH_LOGOUT'
   | 'AUTH_ACCOUNT_LOCKED'
+  | 'AUTH_2FA_ENABLED'
+  | 'AUTH_2FA_DISABLED'
+  | 'AUTH_2FA_RECOVERY_USED'
+  | 'AUTH_2FA_RECOVERY_REGENERATED'
+  | 'AUTH_INVITE_ACCEPTED'
+  | 'AUTH_INVITE_REJECTED'
+  | 'TEAM_INVITE_SENT'
+  | 'TEAM_INVITE_REVOKED'
+  | 'TEAM_ROLE_CHANGED'
+  | 'TEAM_MEMBER_REMOVED'
   | 'DATA_CREATE'
   | 'DATA_UPDATE'
   | 'DATA_DELETE'
@@ -86,14 +97,14 @@ export function recordAuditEvent(event: AuditEvent): void {
 export function auditAuthEvent(
   type: Extract<
     AuditEventType,
-    'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_FAILURE' | 'AUTH_REGISTER' | 'AUTH_LOGOUT' | 'AUTH_ACCOUNT_LOCKED'
+    'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_FAILURE' | 'AUTH_REGISTER' | 'AUTH_LOGOUT' | 'AUTH_ACCOUNT_LOCKED' | 'AUTH_2FA_ENABLED' | 'AUTH_2FA_DISABLED' | 'AUTH_2FA_RECOVERY_USED' | 'AUTH_2FA_RECOVERY_REGENERATED' | 'AUTH_INVITE_ACCEPTED' | 'AUTH_INVITE_REJECTED'
   >,
   req: Request,
   extra: { userId?: string; businessId?: string; metadata?: Record<string, unknown> } = {}
 ) {
   recordAuditEvent({
     type,
-    resource: req.originalUrl,
+    resource: redactUrl(req.originalUrl),
     ip: getClientIp(req),
     userId: extra.userId,
     businessId: extra.businessId,
@@ -128,7 +139,7 @@ export function auditDataMutations(req: Request, res: Response, next: NextFuncti
     if (res.statusCode >= 200 && res.statusCode < 300) {
       recordAuditEvent({
         type: auditType,
-        resource: req.originalUrl,
+        resource: redactUrl(req.originalUrl),
         userId: req.auth?.userId,
         businessId: req.auth?.businessId,
         ip: getClientIp(req),
@@ -151,7 +162,7 @@ export function auditRateLimitViolations(req: Request, res: Response, next: Next
     if (res.statusCode === 429) {
       recordAuditEvent({
         type: 'RATE_LIMIT_EXCEEDED',
-        resource: req.originalUrl,
+        resource: redactUrl(req.originalUrl),
         ip: getClientIp(req),
         metadata: { method: req.method },
       });

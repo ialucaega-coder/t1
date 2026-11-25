@@ -47,16 +47,45 @@ export function useNotifications(unreadOnly = false): UseNotificationsResult {
       }
     }
 
+    function startPolling() {
+      if (intervalRef.current) return;
+      // Polling cada 30s para mantener el badge actualizado
+      intervalRef.current = setInterval(() => {
+        if (!cancelled) load();
+      }, 30_000);
+    }
+
+    function stopPolling() {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    }
+
+    // Pausa el polling cuando la pestaña no esta visible y lo reanuda
+    // (con un fetch inmediato) al volver, para no pegar a la API en ocioso.
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'hidden') {
+        stopPolling();
+      } else {
+        if (!cancelled) load();
+        startPolling();
+      }
+    }
+
     load();
 
-    // Polling cada 30s para mantener el badge actualizado
-    intervalRef.current = setInterval(() => {
-      if (!cancelled) load();
-    }, 30_000);
+    // Solo arrancar el interval si la pestaña esta visible al montar
+    if (document.visibilityState === 'visible') {
+      startPolling();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
     };
   }, [unreadOnly, reloadToken]);
 

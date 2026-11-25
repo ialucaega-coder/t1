@@ -120,7 +120,7 @@ describe('validators/orders - createOrderSchema', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      const messages = result.error.errors.map((e) => e.message);
+      const messages = result.error.issues.map((e) => e.message);
       expect(messages.some((m) => m.includes('al menos un item'))).toBe(true);
     }
   });

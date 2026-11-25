@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { whitelabelApi } from '@/lib/api/index';
-import type { WhitelabelConfig } from '@/types/whitelabel';
+import type { WhitelabelConfig, WhitelabelUpdate } from '@/types/whitelabel';
 
 const DEFAULTS: WhitelabelConfig = {
   name: 'Mi Agencia',
@@ -11,6 +11,8 @@ const DEFAULTS: WhitelabelConfig = {
   accentColor: '#38BDF8',
   customDomain: '',
   logo: '',
+  theme: 'onyx',
+  hiddenSections: [],
 };
 
 export interface UseWhitelabelResult {
@@ -19,7 +21,8 @@ export interface UseWhitelabelResult {
   error: string | null;
   saving: boolean;
   refetch: () => void;
-  saveSettings: (data: Partial<WhitelabelConfig>) => Promise<void>;
+  /** Lanza el error real del server si falla (409 número duplicado, 400 de validación, etc.). */
+  saveSettings: (data: WhitelabelUpdate) => Promise<void>;
 }
 
 export function useWhitelabel(): UseWhitelabelResult {
@@ -45,6 +48,8 @@ export function useWhitelabel(): UseWhitelabelResult {
             accentColor: result.accentColor || result.primaryColor || DEFAULTS.accentColor,
             customDomain: result.customDomain || DEFAULTS.customDomain,
             logo: result.logo || DEFAULTS.logo,
+            theme: result.theme || DEFAULTS.theme,
+            hiddenSections: Array.isArray(result.hiddenSections) ? result.hiddenSections : DEFAULTS.hiddenSections,
           });
         }
       } catch (err) {
@@ -63,7 +68,7 @@ export function useWhitelabel(): UseWhitelabelResult {
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  const saveSettings = useCallback(async (data: Partial<WhitelabelConfig>) => {
+  const saveSettings = useCallback(async (data: WhitelabelUpdate) => {
     setSaving(true);
     try {
       await whitelabelApi.updateSettings(data);

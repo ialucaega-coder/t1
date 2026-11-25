@@ -108,25 +108,65 @@ function timingSafeEqual(a: string, b: string): boolean {
 // reemplaza a la validación de esquema (Zod), pero reduce la
 // superficie de ataque para XSS almacenado/reflejado.
 
-const SCRIPT_TAG_RE = /<script[\s\S]*?>[\s\S]*?<\/script\s*>/gi;
-const HTML_TAG_RE = /<\/?[a-z][^>]*>/gi;
 const EVENT_HANDLER_RE = /\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 const JS_PROTOCOL_RE = /javascript\s*:/gi;
 const DATA_HTML_RE = /data\s*:\s*text\/html/gi;
 
 /**
+ * Quita secuencias tipo `<...>` (etiquetas HTML, incluido <script> y atributos
+ * como onerror=) en UNA sola pasada O(n). Reemplaza a las regex anteriores
+ * `<script[\s\S]*?>...` (O(n³)) y `<\/?[a-z][^>]*>` (O(n²)), que tenían
+ * backtracking catastrófico: un body con miles de `<script` o `<a` sin cierre
+ * bloqueaba el event loop por segundos/minutos (ReDoS, DoS sin autenticación).
+ * Un `<` sin su `>` de cierre se deja literal (React lo escapa al renderizar).
+ */
+function stripTagsLinear(value: string): string {
+  let out = '';
+  let i = 0;
+  const n = value.length;
+  while (i < n) {
+    const lt = value.indexOf('<', i);
+    if (lt === -1) { out += value.slice(i); break; }
+    out += value.slice(i, lt); // texto antes del '<'
+    const next = value[lt + 1];
+    // Solo tratamos el '<' como inicio de etiqueta si lo sigue algo de etiqueta
+    // real (letra, '/', '!' o '?'). Así "x < 5 y > 3" o "<3" NO se corrompen
+    // (antes se borraba cualquier `<...>`, comiéndose texto y secretos legítimos).
+    if (!next || !/[a-zA-Z/!?]/.test(next)) {
+      out += '<';
+      i = lt + 1;
+      continue;
+    }
+    const gt = value.indexOf('>', lt + 1);
+    if (gt === -1) { out += value.slice(lt); break; } // '<' sin cierre: literal
+    i = gt + 1; // saltar la etiqueta
+  }
+  return out;
+}
+
+/**
  * Sanea una cadena de texto individual eliminando marcado peligroso.
  * Es intencionalmente conservador: no intenta ser un parser HTML
- * completo, solo elimina los vectores XSS más comunes.
+ * completo, solo elimina los vectores XSS más comunes. Todas las operaciones
+ * son de tiempo lineal (sin regex con backtracking catastrófico).
  */
 export function sanitizeString(value: string): string {
-  let out = value.replace(SCRIPT_TAG_RE, '');
+  let out = stripTagsLinear(value);
   out = out.replace(EVENT_HANDLER_RE, '');
   out = out.replace(JS_PROTOCOL_RE, '');
   out = out.replace(DATA_HTML_RE, '');
-  out = out.replace(HTML_TAG_RE, '');
   return out;
 }
+
+/**
+ * Campos que NO se sanean: son secretos o credenciales y sacarles `<...>`,
+ * `javascript:` o `on...=` los corrompe en silencio (una contraseña o API key con
+ * esos caracteres se guardaba distinta de la que escribió el usuario y después no
+ * entraba). Se comparan sin distinguir mayúsculas.
+ */
+const UNSANITIZED_KEYS = new Set(
+  ['password', 'currentPassword', 'newPassword', 'apiKey', 'secret', 'token', 'code', 'webhookSecret', 'twoFactorCode'].map((k) => k.toLowerCase()),
+);
 
 function sanitizeValue(value: unknown, depth = 0): unknown {
   if (depth > 10) return value; // evita recursión excesiva / DoS
@@ -139,7 +179,7 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
   if (value && typeof value === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = sanitizeValue(val, depth + 1);
+      result[key] = UNSANITIZED_KEYS.has(key.toLowerCase()) ? val : sanitizeValue(val, depth + 1);
     }
     return result;
   }

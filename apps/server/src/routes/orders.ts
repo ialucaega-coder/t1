@@ -1,29 +1,129 @@
 import { Router } from 'express';
-import { requireAuth } from '../middleware/auth';
+import type { Prisma } from '@prisma/client';
+import { requireAuth, requireStaff } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
-import { createOrderSchema, updateOrderStatusSchema, CreateOrderInput, UpdateOrderStatusInput } from '../validators/orders';
+import {
+  createOrderSchema,
+  updateOrderStatusSchema,
+  updateOrderNotesSchema,
+  listOrdersQuerySchema,
+  canTransitionOrder,
+  CreateOrderInput,
+  UpdateOrderStatusInput,
+  UpdateOrderNotesInput,
+} from '../validators/orders';
 import { paginationSchema, toSkipTake } from '../validators/common';
+import { MAX_MONEY } from '../validators/transactions';
+import { parsePagination, buildPaginatedResponse } from '../lib/pagination';
+import { queueNotification } from '../services/notifications';
+import {
+  IDEMP_TYPE_ORDER,
+  readIdempotencyKey,
+  idempotencyLockKey,
+  findIdempotentEntityId,
+  recordIdempotentKey,
+} from '../lib/idempotency';
 
 const router = Router();
+
+// El cliente es un User: NUNCA se incluye completo (traería passwordHash, 2FA, etc.).
+// Solo los campos no sensibles que usa el panel y las notificaciones.
+const CLIENT_SELECT = { id: true, name: true, phone: true, email: true } as const;
+const ORDER_INCLUDE = { items: { include: { product: true } }, client: { select: CLIENT_SELECT } } as const;
+
+/**
+ * Una Idempotency-Key repetida con un contenido DISTINTO no es un reintento sino
+ * una clave reutilizada por error: devolver el pedido anterior en silencio haría
+ * creer que se creó el pedido nuevo. Compara ítems (producto + cantidad), cliente
+ * y método de pago (el de la venta registrada); responde 409 si no coinciden.
+ * La nota no se compara porque puede editarse después de creado el pedido, y los
+ * precios tampoco (los fija el servidor y pueden cambiar entre intentos).
+ */
+async function assertSameOrderPayload(
+  db: Prisma.TransactionClient,
+  businessId: string,
+  userId: string,
+  prior: { id: string; clientId: string; items: { productId: string; quantity: number }[] },
+  data: CreateOrderInput,
+) {
+  const key = (items: { productId: string; quantity: number }[]) =>
+    items.map((i) => `${i.productId}:${i.quantity}`).sort().join('|');
+  let same = key(prior.items ?? []) === key(data.items) && prior.clientId === (data.clientId || userId);
+  if (same) {
+    const sale = await db.transaction.findFirst({ where: { orderId: prior.id, businessId }, select: { paymentMethod: true } });
+    if (sale && sale.paymentMethod !== data.paymentMethod) same = false;
+  }
+  if (!same) {
+    throw new AppError(409, 'Esa Idempotency-Key ya se usó con otro contenido. Generá una clave nueva para este pedido.');
+  }
+}
+
+/** Carga el pedido de una idempotency-key ya vista (o null). */
+async function loadIdempotentOrder(
+  db: Prisma.TransactionClient,
+  businessId: string,
+  key: string,
+) {
+  const orderId = await findIdempotentEntityId(db, businessId, IDEMP_TYPE_ORDER, key);
+  if (!orderId) return null;
+  return db.order.findFirst({ where: { id: orderId, businessId }, include: ORDER_INCLUDE });
+}
 
 router.get(
   '/',
   requireAuth,
+  requireStaff,
   asyncHandler(async (req, res) => {
-    const { status, page, pageSize } = req.query;
-    const pagination = paginationSchema.parse({ page, pageSize });
-    const where: Record<string, unknown> = { businessId: req.auth!.businessId };
+    const { page, pageSize } = req.query;
+    const { status, search } = listOrdersQuerySchema.parse({
+      status: req.query.status || undefined,
+      search: typeof req.query.search === 'string' && req.query.search.trim() ? req.query.search : undefined,
+    });
+    // Siempre acotado al negocio del usuario autenticado (multi-tenant).
+    const where: Prisma.OrderWhereInput = { businessId: req.auth!.businessId };
     if (status) where.status = status;
+    if (search) {
+      const or: Prisma.OrderWhereInput[] = [
+        { client: { name: { contains: search, mode: 'insensitive' } } },
+        { client: { email: { contains: search, mode: 'insensitive' } } },
+        { client: { phone: { contains: search } } },
+      ];
+      // Código de orden: "ORD-" + últimos 8 del id en mayúsculas. Aceptamos el
+      // código completo o solo el sufijo (los ids son cuid en minúscula).
+      const code = search.replace(/^ord-?/i, '').toLowerCase();
+      if (/^[a-z0-9]{3,25}$/.test(code)) or.push({ id: { endsWith: code } });
+      where.OR = or;
+    }
 
+    // Evita N+1: cliente e items (con su producto) vienen en una sola query vía include.
+    const include = {
+      client: { select: { id: true, name: true, phone: true } },
+      items: { include: { product: { select: { name: true, price: true } } } },
+    };
+
+    // Nueva paginación (?limit / ?offset): forma estándar { ...limit... }.
+    if (req.query.limit !== undefined || req.query.offset !== undefined) {
+      const pagination = parsePagination(req.query);
+      const [orders, total] = await Promise.all([
+        prisma.order.findMany({
+          where,
+          include,
+          orderBy: { createdAt: 'desc' },
+          skip: pagination.skip,
+          take: pagination.take,
+        }),
+        prisma.order.count({ where }),
+      ]);
+      return res.json(buildPaginatedResponse(orders, total, pagination));
+    }
+
+    const pagination = paginationSchema.parse({ page, pageSize });
     const [orders, total] = await Promise.all([
       prisma.order.findMany({
         where,
-        include: {
-          client: { select: { id: true, name: true, phone: true } },
-          items: { include: { product: { select: { name: true, price: true } } } },
-        },
+        include,
         orderBy: { createdAt: 'desc' },
         ...toSkipTake(pagination),
       }),
@@ -46,13 +146,46 @@ router.post(
   validate(createOrderSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateOrderInput;
+    const businessId = req.auth!.businessId;
+    const idempotencyKey = readIdempotencyKey(req.header('Idempotency-Key'));
 
+    // Unifica líneas repetidas del mismo producto (suma cantidades): sin esto, un
+    // producto cargado dos veces hacía fallar el chequeo de existencia de abajo.
+    const merged = new Map<string, number>();
+    for (const item of data.items) {
+      merged.set(item.productId, (merged.get(item.productId) ?? 0) + item.quantity);
+    }
+    data.items = [...merged].map(([productId, quantity]) => ({ productId, quantity }));
+
+    // Fast path: si ya procesamos esta clave, devolvemos el pedido existente sin
+    // crear nada (idempotencia ante doble-submit o reintento de red).
+    if (idempotencyKey) {
+      const prior = await loadIdempotentOrder(prisma, businessId, idempotencyKey);
+      if (prior) {
+        await assertSameOrderPayload(prisma, businessId, req.auth!.userId, prior, data);
+        res.status(200).json(prior);
+        return;
+      }
+    }
+
+    // Los precios SIEMPRE salen de la base (nunca del cliente) y solo se venden
+    // productos propios, activos y no borrados.
     const products = await prisma.product.findMany({
-      where: { id: { in: data.items.map((i) => i.productId) }, businessId: req.auth!.businessId },
+      where: { id: { in: data.items.map((i) => i.productId) }, businessId, isActive: true, deletedAt: null },
     });
 
     if (products.length !== data.items.length) {
       throw new AppError(400, 'One or more products not found');
+    }
+
+    // Anti cross-tenant: si viene un clientId explícito, debe pertenecer al negocio.
+    // Evita que se asocie (y luego se notifique a) un cliente de otro negocio.
+    if (data.clientId && data.clientId !== req.auth!.userId) {
+      const client = await prisma.user.findFirst({
+        where: { id: data.clientId, businessId: req.auth!.businessId },
+        select: { id: true },
+      });
+      if (!client) throw new AppError(404, 'Cliente no encontrado en este negocio');
     }
 
     const totalPrice = data.items.reduce((sum, item) => {
@@ -60,13 +193,32 @@ router.post(
       return sum + Number(product.price) * item.quantity;
     }, 0);
 
-    const order = await prisma.$transaction(async (tx) => {
+    // Las columnas de dinero son Decimal(10,2): un total mayor reventaría en la base
+    // con un error sin mensaje útil. Se corta antes con un 400 claro.
+    if (totalPrice > MAX_MONEY) {
+      throw new AppError(400, 'El total del pedido supera el máximo permitido ($99.999.999,99). Dividilo en varios pedidos.');
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Con idempotency-key: serializamos duplicados concurrentes de la MISMA
+      // clave con un advisory lock y re-chequeamos dentro de la transacción
+      // (cierra la ventana entre el fast path y el create).
+      if (idempotencyKey) {
+        const lockKey = idempotencyLockKey(IDEMP_TYPE_ORDER, businessId, idempotencyKey);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const dup = await loadIdempotentOrder(tx, businessId, idempotencyKey);
+        if (dup) {
+          await assertSameOrderPayload(tx, businessId, req.auth!.userId, dup, data);
+          return { order: dup, duplicated: true };
+        }
+      }
+
       const newOrder = await tx.order.create({
         data: {
           totalPrice,
           notes: data.notes,
           clientId: data.clientId || req.auth!.userId,
-          businessId: req.auth!.businessId,
+          businessId,
           items: {
             create: data.items.map((item) => {
               const product = products.find((p) => p.id === item.productId)!;
@@ -78,7 +230,7 @@ router.post(
             }),
           },
         },
-        include: { items: { include: { product: true } }, client: true },
+        include: ORDER_INCLUDE,
       });
 
       await tx.transaction.create({
@@ -87,35 +239,120 @@ router.post(
           type: 'SALE',
           paymentMethod: data.paymentMethod,
           reference: `ORD-${newOrder.id.slice(-8).toUpperCase()}`,
-          businessId: req.auth!.businessId,
+          businessId,
+          orderId: newOrder.id,
         },
       });
 
-      for (const item of data.items) {
-        await tx.product.update({
-          where: { id: item.productId },
+      // Se descuenta en orden estable (por productId): dos pedidos concurrentes con
+      // los mismos productos en distinto orden (A,B) y (B,A) tomaban locks de fila
+      // cruzados y Postgres abortaba uno por deadlock (40P01).
+      const itemsByProduct = [...data.items].sort((a, b) => (a.productId < b.productId ? -1 : a.productId > b.productId ? 1 : 0));
+      for (const item of itemsByProduct) {
+        // Descuento con guarda atómica contra sobreventa concurrente. Permitimos
+        // la venta si hay stock suficiente (`stock >= qty`) O si el stock es <= 0,
+        // caso que tratamos como "sin control de inventario" (negocios de
+        // servicios o que no llevan stock venden igual — preserva el comportamiento
+        // previo). Solo bloqueamos cuando hay stock parcial insuficiente
+        // (0 < stock < qty). Scopeado por negocio. Si no afecta 1 fila, 409 y
+        // rollback del pedido + transacción de venta.
+        const updated = await tx.product.updateMany({
+          where: {
+            id: item.productId,
+            businessId,
+            OR: [{ stock: { lte: 0 } }, { stock: { gte: item.quantity } }],
+          },
           data: { stock: { decrement: item.quantity } },
         });
+        if (updated.count !== 1) {
+          const p = products.find((pp) => pp.id === item.productId);
+          throw new AppError(409, `Stock insuficiente para ${p?.name ?? 'el producto'}`);
+        }
       }
 
-      return newOrder;
+      // Registra la clave para deduplicar futuros reintentos.
+      if (idempotencyKey) {
+        await recordIdempotentKey(tx, businessId, IDEMP_TYPE_ORDER, idempotencyKey, newOrder.id);
+      }
+
+      return { order: newOrder, duplicated: false };
     });
 
-    res.status(201).json(order);
+    // Solo notificamos si es un pedido nuevo (no en el replay idempotente).
+    if (!result.duplicated) {
+      void queueNotification({ event: 'order-created', id: result.order.id, businessId });
+    }
+
+    res.status(result.duplicated ? 200 : 201).json(result.order);
   })
 );
 
 router.patch(
   '/:id/status',
   requireAuth,
+  requireStaff,
   validate(updateOrderStatusSchema),
   asyncHandler(async (req, res) => {
     const { status } = req.body as UpdateOrderStatusInput;
-    const order = await prisma.order.update({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
+    const businessId = req.auth!.businessId;
+    const id = String(req.params.id);
+    const include = {
+      items: { include: { product: true } },
+      client: { select: { name: true } },
+    };
+
+    const current = await prisma.order.findFirst({ where: { id, businessId }, select: { status: true } });
+    if (!current) throw new AppError(404, 'Pedido no encontrado');
+
+    // Repetir el estado actual no cambia nada: devolvemos el pedido sin notificar de nuevo.
+    if (current.status === status) {
+      const same = await prisma.order.findFirst({ where: { id, businessId }, include });
+      return res.json(same);
+    }
+
+    if (!canTransitionOrder(current.status, status)) {
+      throw new AppError(409, `No se puede pasar un pedido de ${current.status} a ${status}`);
+    }
+
+    // Update condicional al estado leído: si otra request lo cambió en el medio,
+    // no pisamos (evita reabrir/saltar por carrera).
+    const updated = await prisma.order.updateMany({
+      where: { id, businessId, status: current.status },
       data: { status },
-      include: { items: { include: { product: true } } },
     });
+    if (updated.count !== 1) {
+      throw new AppError(409, 'El estado del pedido cambió mientras lo editabas. Recargá e intentá de nuevo.');
+    }
+
+    const order = await prisma.order.findFirstOrThrow({ where: { id, businessId }, include });
+
+    // Notifica al cliente el nuevo estado por su mejor canal, vía la cola de avisos
+    // (jobId por pedido + estado: un doble PATCH al mismo estado avisa una sola vez).
+    void queueNotification({ event: 'order-status', id: order.id, businessId, status: order.status });
+
+    res.json(order);
+  })
+);
+
+// Nota interna del pedido. Se guarda en Order.notes (el mismo campo que ya
+// existe en el modelo; no hay schema nuevo). Vacía = borrar la nota.
+router.patch(
+  '/:id/notes',
+  requireAuth,
+  requireStaff,
+  validate(updateOrderNotesSchema),
+  asyncHandler(async (req, res) => {
+    const { notes } = req.body as UpdateOrderNotesInput;
+    const businessId = req.auth!.businessId;
+    const id = String(req.params.id);
+
+    const result = await prisma.order.updateMany({
+      where: { id, businessId },
+      data: { notes: notes.trim() || null },
+    });
+    if (result.count !== 1) throw new AppError(404, 'Pedido no encontrado');
+
+    const order = await prisma.order.findFirstOrThrow({ where: { id, businessId }, include: ORDER_INCLUDE });
     res.json(order);
   })
 );

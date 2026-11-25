@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { teamApi } from '@/lib/api/index';
 import type { TeamMember } from '@/constants/team';
+import { normalizeRole } from '@/constants/team';
 import type { UpdateTeamMemberInput } from '@/lib/api/team';
 
 export interface UseTeamResult {
@@ -29,7 +30,9 @@ export function useTeam(): UseTeamResult {
       setError(null);
       try {
         const result = await teamApi.getMembers();
-        if (!cancelled) setMembers(result);
+        // Normaliza el rol (el backend lo devuelve como enum ADMIN/PROFESSIONAL/VIEWER)
+        // para que ROLE_CONFIG y los selects de la UI matcheen.
+        if (!cancelled) setMembers(result.map((m) => ({ ...m, role: normalizeRole(m.role) })));
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar miembros del equipo');

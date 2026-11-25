@@ -12,10 +12,15 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { httpClient } from '@/lib/api';
+import { createPortalSession } from '@/lib/api/billing';
+import { hasLiveSubscription, subscriptionStatusClass, subscriptionStatusLabel } from '@/lib/billing-status';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
 import { CheckoutButton } from '@/components/billing/CheckoutButton';
+import { PlanUsage } from '@/components/billing/PlanUsage';
 
 interface Plan {
   id: string;
@@ -72,13 +77,32 @@ const tierBg: Record<string, string> = {
   ENTERPRISE: 'bg-purple-500/10',
 };
 
+/**
+ * Descuento anual real: compara el precio anual contra 12 meses del mensual.
+ * Devuelve el mayor descuento entre los planes pagos, o 0 si no hay datos
+ * suficientes (en ese caso no se muestra ningún porcentaje).
+ */
+function getYearlyDiscountPercent(plans: Plan[]): number {
+  let best = 0;
+  for (const p of plans) {
+    if (p.priceMonthly > 0 && p.priceYearly > 0) {
+      const pct = Math.round((1 - p.priceYearly / (p.priceMonthly * 12)) * 100);
+      if (pct > best) best = pct;
+    }
+  }
+  return best;
+}
+
 export default function FacturacionPage() {
+  const { toast } = useToast();
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [interval, setInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [cancelling, setCancelling] = useState(false);
+  const [openingPortal, setOpeningPortal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -108,16 +132,39 @@ export default function FacturacionPage() {
     try {
       const sub = await httpClient.post<Subscription>('/billing/cancel', {});
       setSubscription(sub);
+      toast({ type: 'success', message: 'Suscripción cancelada. Seguís con acceso hasta el final del período.' });
     } catch (err) {
       console.error('Error cancelling:', err);
+      toast({
+        type: 'error',
+        message: err instanceof Error && err.message ? err.message : 'No se pudo cancelar la suscripción. Intentá de nuevo.',
+      });
     } finally {
       setCancelling(false);
+      setConfirmCancel(false);
+    }
+  }
+
+  async function handleManage() {
+    setOpeningPortal(true);
+    try {
+      const { url } = await createPortalSession();
+      window.location.href = url;
+    } catch (err) {
+      toast({
+        type: 'error',
+        message: err instanceof Error && err.message ? err.message : 'No se pudo abrir el portal de facturación.',
+      });
+      setOpeningPortal(false);
     }
   }
 
   if (loading) {
     return <LoadingSpinner label="Cargando facturación..." />;
   }
+
+  const yearlyDiscount = getYearlyDiscountPercent(plans);
+  const liveSubscription = hasLiveSubscription(subscription);
 
   return (
     <div className="max-w-5xl space-y-8">
@@ -146,19 +193,9 @@ export default function FacturacionPage() {
             </div>
             <div className="text-right">
               <span
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
-                  subscription.status === 'ACTIVE'
-                    ? 'bg-emerald-500/10 text-emerald-400'
-                    : subscription.status === 'PAST_DUE'
-                    ? 'bg-amber-500/10 text-amber-400'
-                    : 'bg-red-500/10 text-red-400'
-                }`}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${subscriptionStatusClass(subscription.status)}`}
               >
-                {subscription.status === 'ACTIVE'
-                  ? 'Activa'
-                  : subscription.status === 'PAST_DUE'
-                  ? 'Pago pendiente'
-                  : 'Cancelada'}
+                {subscriptionStatusLabel(subscription.status)}
               </span>
               {subscription.cancelAtPeriodEnd && (
                 <p className="text-xs text-amber-400 mt-2 flex items-center gap-1">
@@ -168,9 +205,19 @@ export default function FacturacionPage() {
               )}
             </div>
           </div>
+          {liveSubscription && (
+            <button
+              onClick={handleManage}
+              disabled={openingPortal}
+              className="mt-4 mr-4 btn-secondary text-sm disabled:opacity-50"
+            >
+              <CreditCard className="h-4 w-4" />
+              {openingPortal ? 'Abriendo portal...' : 'Gestionar suscripción'}
+            </button>
+          )}
           {subscription.status === 'ACTIVE' && !subscription.cancelAtPeriodEnd && (
             <button
-              onClick={handleCancel}
+              onClick={() => setConfirmCancel(true)}
               disabled={cancelling}
               className="mt-4 text-sm text-red-400 hover:text-red-300 transition-colors disabled:opacity-50"
             >
@@ -179,6 +226,9 @@ export default function FacturacionPage() {
           )}
         </div>
       )}
+
+      {/* Uso del plan (bots, contactos, mensajes) */}
+      <PlanUsage />
 
       {/* Intervalo toggle */}
       <div className="flex items-center justify-center gap-3">
@@ -201,7 +251,9 @@ export default function FacturacionPage() {
           }`}
         >
           Anual
-          <span className="ml-1.5 text-xs opacity-75">-20%</span>
+          {yearlyDiscount > 0 && (
+            <span className="ml-1.5 text-xs opacity-75">-{yearlyDiscount}%</span>
+          )}
         </button>
       </div>
 
@@ -273,11 +325,15 @@ export default function FacturacionPage() {
                 >
                   Plan actual
                 </button>
+              ) : liveSubscription ? (
+                // Con suscripción vigente el server rechaza el checkout (409): el cambio de plan
+                // se hace desde "Gestionar suscripción" (portal de facturación).
+                null
               ) : (
                 <CheckoutButton
                   planId={plan.id}
                   interval={interval}
-                  label={subscription ? 'Cambiar plan' : 'Elegir plan'}
+                  label="Elegir plan"
                   className="mt-6 w-full justify-center py-2.5"
                 />
               )}
@@ -358,6 +414,18 @@ export default function FacturacionPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmCancel}
+        onClose={() => setConfirmCancel(false)}
+        onConfirm={handleCancel}
+        title="¿Cancelar la suscripción?"
+        message="Tu plan se va a cancelar y, al terminar el período actual, perdés los beneficios del plan. ¿Querés continuar?"
+        confirmLabel="Sí, cancelar suscripción"
+        cancelLabel="Volver"
+        variant="danger"
+        loading={cancelling}
+      />
     </div>
   );
 }

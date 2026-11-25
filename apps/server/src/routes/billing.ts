@@ -10,11 +10,20 @@ import {
   cancelSubscription,
   constructWebhookEvent,
   handleWebhookEvent,
+  createPaymentLink,
 } from '../services/stripe';
+import { getBotCapacity, getContactCapacity } from '../services/billing/limits';
+import { getMessageQuota } from '../services/billing/quota';
 
 const subscribeSchema = z.object({
   planId: z.string().min(1),
   interval: z.enum(['monthly', 'yearly']).default('monthly'),
+});
+
+const paymentLinkSchema = z.object({
+  amount: z.number().positive().max(1_000_000),
+  description: z.string().trim().min(1).max(200),
+  currency: z.string().trim().length(3).optional(),
 });
 
 const router = Router();
@@ -65,6 +74,21 @@ router.get('/subscription', asyncHandler(async (req, res) => {
   res.json(subscription);
 }));
 
+/**
+ * Límites del plan consolidados: capacidad de bots, de contactos y cupo mensual
+ * de mensajes. Lo consume la UI para mostrar "X de Y usado" y advertir antes de
+ * tocar el tope (el enforcement real vive en bots.ts, clients.ts y chatbot.ts).
+ */
+router.get('/limits', asyncHandler(async (req, res) => {
+  const businessId = req.auth!.businessId;
+  const [bots, contacts, messages] = await Promise.all([
+    getBotCapacity(businessId),
+    getContactCapacity(businessId),
+    getMessageQuota(businessId),
+  ]);
+  res.json({ bots, contacts, messages });
+}));
+
 router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, res) => {
   const { planId, interval } = req.body;
   const businessId = req.auth!.businessId;
@@ -97,6 +121,20 @@ router.post('/subscribe', validate(subscribeSchema), asyncHandler(async (req, re
 
   res.json({ url: checkoutUrl });
 }));
+
+// Cobros: genera un link de pago de una sola vez para mandarle al cliente.
+router.post(
+  '/payment-link',
+  requireRole('ADMIN'),
+  validate(paymentLinkSchema),
+  asyncHandler(async (req, res) => {
+    const { amount, description, currency } = req.body as {
+      amount: number; description: string; currency?: string;
+    };
+    const url = await createPaymentLink(req.auth!.businessId, { amount, description, currency });
+    res.json({ url });
+  })
+);
 
 router.post('/portal', asyncHandler(async (req, res) => {
   const businessId = req.auth!.businessId;

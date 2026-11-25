@@ -8,23 +8,69 @@
  * configurado para el negocio.
  */
 import { prisma } from '../lib/prisma';
-import { getDefaultAIProvider } from './ai';
-import type { ConversationTurn } from './ai';
+import { Prisma } from '@prisma/client';
+import { getAIProviderForBusiness } from './ai/engine';
+import type { ConversationTurn, ImageInput, TokenUsage } from './ai';
+import { loadBrandVoice, buildBrandVoicePrompt } from './brand/config';
+import { loadFaqItems, buildFaqPrompt } from './faq/config';
+import { loadSystemPrompt } from './ai/system-prompt';
+import { getMessageQuota } from './billing/quota';
+import { dispatchEvent } from './workflows';
+import { lockSingleton } from '../lib/singletonLock';
+import type { ConversationAttribution } from './whatsapp/attribution';
+import {
+  isBotSilenced,
+  isAttentionExpired,
+  isPauseNoticeDue,
+  stampPauseNotice,
+  transitionAttention,
+} from './conversationState';
 
-async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
+/**
+ * Lee si el negocio superó el cupo de mensajes, SIN romper el flujo del bot: si
+ * la consulta del cupo falla (DB caída, etc.) degradamos fail-open (permitimos
+ * responder). Preferimos cobrar de más un mensaje puntual a dejar al bot mudo
+ * por un problema de la guarda de costo.
+ */
+async function isOverMessageQuota(businessId: string): Promise<boolean> {
+  try {
+    return (await getMessageQuota(businessId)).overQuota;
+  } catch (err) {
+    console.error('Error consultando el cupo de mensajes (fail-open):', (err as Error).message);
+    return false;
+  }
+}
+import { hasParams, resolveSuperpowerParams, type SuperpowerParams } from '../constants/superpowerParams';
+
+/**
+ * Lee UNA vez las skills activas del negocio y de ahí saca los superpoderes
+ * activos y los parámetros configurables (resueltos con defaults) de los que los
+ * tienen. Antes eran dos queries idénticas por mensaje (hot-path del chat).
+ */
+async function loadSuperpowerState(
+  businessId: string,
+): Promise<{ superpowers: Set<string>; params: Map<string, SuperpowerParams> }> {
   const skills = await prisma.skill.findMany({
     where: { businessId, isActive: true },
     select: { name: true, config: true },
   });
-  const superpowers = skills.filter((s) => {
+  const superpowers = new Set<string>();
+  const params = new Map<string, SuperpowerParams>();
+  for (const s of skills) {
     const cfg = s.config as Record<string, unknown> | null;
-    return cfg?.kind === 'superpower';
-  });
-  return new Set(superpowers.map((s) => s.name));
+    if (cfg?.kind !== 'superpower') continue;
+    superpowers.add(s.name);
+    if (hasParams(s.name)) params.set(s.name, resolveSuperpowerParams(s.name, cfg.params));
+  }
+  return { superpowers, params };
+}
+
+export async function getActiveSuperpowers(businessId: string): Promise<Set<string>> {
+  return (await loadSuperpowerState(businessId)).superpowers;
 }
 
 /** Canales por los que puede llegar un mensaje al bot. */
-export type ChatChannel = 'WEB' | 'TELEGRAM' | 'WHATSAPP' | 'VOICE';
+export type ChatChannel = 'WEB' | 'TELEGRAM' | 'WHATSAPP' | 'VOICE' | 'INSTAGRAM' | 'MESSENGER';
 
 /** Intenciones que el bot puede detectar en un mensaje del cliente. */
 export type ChatIntent = 'BOOKING' | 'CATALOG' | 'FAQ' | 'HUMAN';
@@ -43,7 +89,81 @@ export interface ChatbotResponse {
   text: string;
   intent: ChatIntent;
   actions: ChatAction[];
+  /**
+   * true cuando el bot está silenciado (un humano atiende o se espera a uno, ver
+   * services/conversationState.ts): el mensaje del cliente se guardó pero el bot
+   * NO respondió ni gastó IA/cuota. `text` es, como mucho una vez cada 10 min, un
+   * aviso de cortesía para los canales SÍNCRONOS (widget, voz, ManyChat); si no,
+   * va vacío. Los canales asíncronos (WhatsApp, Instagram, Messenger) NO envían nada.
+   */
+  botPaused?: boolean;
 }
+
+/** Aviso que ven los canales síncronos mientras un humano atiende la conversación. */
+export const BOT_PAUSED_NOTICE = 'Una persona del equipo está atendiendo tu consulta y te va a responder en breve.';
+
+/**
+ * La conversación se cerró (o desapareció) mientras se armaba la respuesta: se
+ * descarta todo. No se guarda mensaje BOT, no se avisa a nadie y los canales
+ * asíncronos no envían nada (`botPaused`, texto vacío).
+ */
+function discardedResponse(conversationId: string, intent: ChatIntent): ChatbotResponse & { conversationId: string } {
+  return { text: '', intent, actions: [], conversationId, botPaused: true };
+}
+
+/**
+ * Guarda el mensaje USER. Con `externalId` (sid/mid del canal) es idempotente: si
+ * ya existe uno con ese id en la conversación NO se vuelve a crear (`reused`).
+ */
+async function saveUserMessage(conversationId: string, text: string, externalId?: string) {
+  if (externalId) {
+    const existing = await prisma.message.findFirst({
+      where: { conversationId, role: 'USER', metadata: { path: ['externalId'], equals: externalId } },
+    });
+    if (existing) return { message: existing, reused: true };
+  }
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      role: 'USER',
+      text,
+      ...(externalId ? { metadata: { externalId } as Prisma.InputJsonObject } : {}),
+    },
+  });
+  return { message, reused: false };
+}
+
+/**
+ * Respuesta cuando el bot está silenciado (un humano atiende o se espera a uno):
+ * el mensaje del cliente ya se guardó y NO se genera nada. El aviso de cortesía
+ * (para canales síncronos) sale como máximo una vez cada PAUSE_NOTICE_INTERVAL_MS
+ * por conversación; el resto de las veces `text` va vacío.
+ */
+async function silencedResponse(
+  conversationId: string,
+  businessId: string,
+  metadata: unknown,
+  intent: ChatIntent,
+): Promise<ChatbotResponse & { conversationId: string }> {
+  // El mensaje del cliente entró aunque el bot no conteste: la conversación sube
+  // en el Inbox (`updatedAt`). Best-effort: no debe romper la respuesta.
+  try {
+    await prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
+  } catch (err) {
+    console.error('No se pudo actualizar la fecha de la conversación:', (err as Error).message);
+  }
+
+  let text = '';
+  try {
+    if (isPauseNoticeDue(metadata, Date.now()) && (await stampPauseNotice(conversationId, businessId))) {
+      text = BOT_PAUSED_NOTICE;
+    }
+  } catch (err) {
+    console.error('No se pudo registrar el aviso de pausa:', (err as Error).message);
+  }
+  return { text, intent, actions: [], conversationId, botPaused: true };
+}
+
 
 /** Input para procesar un mensaje, incluye historial opcional de la charla. */
 export interface ProcessMessageOptions {
@@ -53,6 +173,38 @@ export interface ProcessMessageOptions {
   botId?: string;
   contactName?: string;
   contactPhone?: string;
+  /**
+   * Identificador del suscriptor en el canal externo (ej: subscriber_id de
+   * ManyChat). Si viene y no hay conversationId, reusamos la conversación
+   * OPEN más reciente de ese suscriptor para mantener el historial, y lo
+   * guardamos en metadata al crearla. No requiere cambios de schema.
+   */
+  subscriberId?: string;
+  /**
+   * Texto extra que se agrega al final del prompt de sistema. Lo usan canales
+   * específicos (ej: voz) para inyectar instrucciones propias (personalidad/tono)
+   * sin duplicar la lógica de buildSystemPrompt.
+   */
+  systemPromptExtra?: string;
+  /**
+   * Imágenes adjuntas al mensaje (superpoder "Oído y vista" — visión).
+   * Solo se envían al proveedor de IA si el superpoder está activo para el
+   * negocio; en caso contrario se ignoran.
+   */
+  images?: ImageInput[];
+  /**
+   * Atribución Click-to-WhatsApp (de qué anuncio vino la conversación). Sólo lo
+   * pasa el webhook de WhatsApp cuando el body trae campos Referral*. Se guarda
+   * en metadata.attribution al CREAR la conversación (origen de la charla).
+   */
+  attribution?: ConversationAttribution;
+  /**
+   * Id del mensaje entrante en el canal (MessageSid de Twilio, `mid` de Meta). Se
+   * guarda en `Message.metadata.externalId` del mensaje USER para que un reintento
+   * del job NO lo guarde dos veces y pueda continuar donde falló. Sin id (canales
+   * que no lo tienen) el comportamiento es el de siempre.
+   */
+  externalId?: string;
 }
 
 /**
@@ -69,9 +221,23 @@ function detectIntent(message: string): ChatIntent {
 
   const bookingKeywords = ['turno', 'cita', 'reserva', 'agendar', 'reservar', 'disponibilidad', 'horario libre'];
   const catalogKeywords = ['precio', 'catálogo', 'catalogo', 'servicios', 'productos', 'menú', 'menu', 'cuánto cuesta', 'cuanto cuesta'];
-  const humanKeywords = ['humano', 'persona', 'hablar con alguien', 'operador', 'no entiendo', 'ayuda urgente'];
+  const humanKeywords = ['humano', 'hablar con alguien', 'operador', 'no entiendo', 'ayuda urgente'];
+  // "persona" suelta NO alcanza ("turno para 2 personas", "somos 3 personas"): hace
+  // falta una frase que pida atención de alguien del equipo.
+  const humanPhrases = [
+    /\b(hablar|comunicar\w*|contactar\w*|pasa\w*|derivar\w*)\b[^.?!]{0,25}\b(con|a)\s+(una|un|alguna|otra)?\s*persona\b/,
+    /\b(quiero|necesito|prefiero|pido)\b[^.?!]{0,20}\b(una|alguna)\s+persona\b/,
+    /\bpersona\s+(real|de verdad|de carne y hueso)\b/,
+    /\batend(er|iera|ido|ida)\b[^.?!]{0,15}\buna\s+persona\b/,
+    /\buna\s+persona\s+(que me|me)\s+(atienda|responda|ayude)\b/,
+  ];
 
-  if (humanKeywords.some((kw) => normalized.includes(kw))) return 'HUMAN';
+  if (
+    humanKeywords.some((kw) => normalized.includes(kw)) ||
+    humanPhrases.some((re) => re.test(normalized))
+  ) {
+    return 'HUMAN';
+  }
   if (bookingKeywords.some((kw) => normalized.includes(kw))) return 'BOOKING';
   if (catalogKeywords.some((kw) => normalized.includes(kw))) return 'CATALOG';
   return 'FAQ';
@@ -83,16 +249,48 @@ function detectIntent(message: string): ChatIntent {
  * prompt personalizado guardado (BusinessSettings, futuro), se debería
  * usar ese en vez de este genérico.
  */
-async function buildSystemPrompt(businessId: string): Promise<string> {
-  const business = await prisma.business.findUnique({ where: { id: businessId } });
+async function buildSystemPrompt(
+  businessId: string,
+  superpowers: Set<string>,
+  params: Map<string, SuperpowerParams>,
+): Promise<string> {
+  // Las 4 lecturas son independientes: en paralelo la latencia es la de la más
+  // lenta y no la suma (antes eran 4 round-trips secuenciales a la DB).
+  const [business, brandVoice, faqItems, customPrompt] = await Promise.all([
+    prisma.business.findUnique({ where: { id: businessId }, select: { name: true, websiteUrl: true } }),
+    loadBrandVoice(businessId),
+    loadFaqItems(businessId),
+    loadSystemPrompt(businessId),
+  ]);
   const businessName = business?.name || 'el negocio';
-
-  const superpowers = await getActiveSuperpowers(businessId);
 
   const lines = [
     `Sos el asistente virtual de "${businessName}". Respondé de forma breve, cálida y profesional.`,
     'Tu trabajo es ayudar a los clientes a: reservar turnos, consultar el catálogo de servicios/productos, responder preguntas frecuentes, o derivarlos a un humano si lo piden.',
   ];
+
+  // --- Voz de Marca (identidad global del negocio, aplica a TODOS los canales) ---
+  // Se inyecta siempre que esté configurada. El superpoder "Voz de marca"
+  // simplemente refuerza que el bot la priorice por encima de otros estilos.
+  const brandPrompt = buildBrandVoicePrompt(brandVoice, superpowers.has('Voz de marca'));
+  if (brandPrompt) {
+    lines.push(brandPrompt);
+  }
+
+  // --- Base de conocimiento / FAQ (respuestas a preguntas frecuentes del negocio) ---
+  // Lista estructurada P→R que el dueño gestiona (ver services/faq). Se inyecta
+  // como fuente de verdad para las consultas más comunes; si está vacía no suma nada.
+  const faqPrompt = buildFaqPrompt(faqItems);
+  if (faqPrompt) {
+    lines.push(faqPrompt);
+  }
+
+  // --- Prompt de sistema personalizado del negocio ---
+  // Se inyecta ANTES de las reglas de seguridad (anti-invento / modo seguro)
+  // que vienen más abajo, para que esas reglas mantengan prioridad.
+  if (customPrompt.trim()) {
+    lines.push('INSTRUCCIONES PERSONALIZADAS DEL NEGOCIO (seguilas salvo que contradigan las reglas de seguridad):\n' + customPrompt.trim());
+  }
 
   if (superpowers.has('Blindaje anti-invento')) {
     lines.push(
@@ -108,7 +306,72 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     );
   }
 
-  lines.push('Detectá el idioma del mensaje del cliente y respondé en ese mismo idioma.');
+  // --- Cazador de ventas: cierre proactivo (intensidad configurable) ---
+  if (superpowers.has('Cazador de ventas')) {
+    const intensidad = params.get('Cazador de ventas')?.intensidad ?? 'media';
+    const cierrePorIntensidad: Record<string, string> = {
+      suave: 'Limitate a sugerir con suavidad el siguiente paso (agendar o comprar) y dejá que el cliente decida; nunca presiones.',
+      media: 'Ofrecé proactivamente el siguiente paso concreto (agendar un turno o cerrar la compra) con una pregunta clara. No seas insistente ni agresivo: un solo empujón cálido por respuesta.',
+      directa: 'Proponé cerrar la operación ahora mismo con una llamada a la acción clara y directa (por ejemplo, ofrecé el horario o el link de pago en el momento). Sé proactivo sin ser grosero.',
+    };
+    lines.push(`CAZADOR DE VENTAS: ${cierrePorIntensidad[String(intensidad)] ?? cierrePorIntensidad.media}`);
+  }
+
+  // --- Encuestas de satisfacción (escala configurable) ---
+  if (superpowers.has('Encuestas de satisfaccion')) {
+    const escalaMax = String(params.get('Encuestas de satisfaccion')?.escalaMax ?? '5');
+    lines.push(
+      `ENCUESTAS DE SATISFACCION: Cuando resolviste la consulta del cliente o antes de despedirte, pedile amablemente que califique la atención del 1 al ${escalaMax} (1 = muy mala, ${escalaMax} = excelente). Agradecé la respuesta sin importar el puntaje.`,
+    );
+  }
+
+  // --- Pide reseñas en Google (enlace configurable, con fallback al sitio) ---
+  if (superpowers.has('Pide resenas Google')) {
+    const enlaceResenas = String(params.get('Pide resenas Google')?.enlaceResenas ?? '').trim();
+    const enlace = enlaceResenas || business?.websiteUrl || '';
+    const reviewHint = enlace ? ` Compartí este enlace para dejar la reseña: ${enlace}.` : '';
+    lines.push(
+      `PIDE RESEÑAS GOOGLE: Si el cliente quedó conforme o te agradece, invitalo con calidez a dejar una reseña en Google para ayudar al negocio.${reviewHint} Hacelo una sola vez y sin insistir.`,
+    );
+  }
+
+  // --- Multi-idioma (mejora de la línea genérica de idioma) ---
+  if (superpowers.has('Multi-idioma')) {
+    lines.push(
+      'MULTI-IDIOMA: Detectá automáticamente el idioma de cada mensaje del cliente y respondé SIEMPRE en ese mismo idioma, adaptando expresiones y formalidad a esa cultura. Si el cliente cambia de idioma a mitad de la charla, seguilo.',
+    );
+  } else {
+    lines.push('Detectá el idioma del mensaje del cliente y respondé en ese mismo idioma.');
+  }
+
+  // --- Turbo respuesta: respuestas cortas y directas (largo configurable) ---
+  if (superpowers.has('Turbo respuesta')) {
+    const maxOraciones = Number(params.get('Turbo respuesta')?.maxOraciones ?? 3);
+    lines.push(
+      `TURBO RESPUESTA: Priorizá respuestas cortas y directas, de ${maxOraciones} ${maxOraciones === 1 ? 'oración' : 'oraciones'} como máximo, sin rodeos ni saludos largos. Andá directo a lo que el cliente necesita. Si hace falta explicar varios pasos, usá una lista breve. Evitá texto de relleno y repeticiones.`,
+    );
+  }
+
+  // --- Cobros por WhatsApp: guía el cierre del cobro sin pedir datos sensibles ---
+  if (superpowers.has('Cobros por WhatsApp')) {
+    lines.push(
+      'COBROS POR WHATSAPP: Cuando el cliente confirme que quiere pagar, resolvelo por el chat: resumí el detalle de la compra y el monto total, confirmá el medio de pago y avisale que le vas a enviar un link de pago para completar la operación sin salir de la conversación. NUNCA pidas datos de tarjeta, CVV ni claves por el chat.',
+    );
+  }
+
+  // --- Seguimiento post-venta: cierre fidelizando tras una compra/reserva ---
+  if (superpowers.has('Seguimiento post-venta')) {
+    lines.push(
+      'SEGUIMIENTO POST-VENTA: Cuando una compra o reserva quede confirmada, cerrá la conversación fidelizando: confirmá que quedó todo claro, invitá a dejar una reseña si la experiencia fue buena y sugerí agendar la próxima visita o un producto complementario. Hacelo de forma natural y sin presionar.',
+    );
+  }
+
+  // --- Alerta de emergencia: prioriza y deriva situaciones urgentes o sensibles ---
+  if (superpowers.has('Alerta de emergencia')) {
+    lines.push(
+      'ALERTA DE EMERGENCIA: Si detectás una situación urgente o sensible (una queja grave, un cliente muy molesto, un pedido de gran volumen o un cliente VIP), tratala como prioridad absoluta: respondé con empatía, evitá respuestas automáticas frías y ofrecé derivar de inmediato a una persona del equipo. No minimices el problema.',
+    );
+  }
 
   return lines.join('\n');
 }
@@ -197,42 +460,115 @@ export async function processMessage(
 
   const conversation = await getOrCreateConversation(businessId, channel, options);
 
-  const userMessage = await prisma.message.create({
-    data: { conversationId: conversation.id, role: 'USER', text: clientMessage },
+  const { message: userMessage, reused } = await saveUserMessage(conversation.id, clientMessage, options.externalId);
+
+  // Reintento de un job que ya había guardado el mensaje: si el bot además ya
+  // respondió, se devuelve esa respuesta (no se vuelve a generar ni se duplica);
+  // si no, se continúa desde acá.
+  if (reused) {
+    const answered = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, role: 'BOT', createdAt: { gte: userMessage.createdAt } },
+      orderBy: { createdAt: 'asc' },
+      select: { text: true },
+    });
+    if (answered) {
+      return { text: answered.text, intent, actions: [], conversationId: conversation.id };
+    }
+  } else {
+    try {
+      const { getIO } = require('../lib/socket');
+      getIO()?.to(`business:${businessId}`).emit('conversation:new-message', {
+        conversationId: conversation.id,
+        message: userMessage,
+      });
+    } catch {}
+  }
+
+  // Dispara las automatizaciones de "mensaje entrante". Fire-and-forget: el modo
+  // (simular/ejecutar) lo resuelve dispatchEvent según el ajuste del negocio y
+  // nunca lanza, así que no agrega latencia ni puede romper la respuesta del bot.
+  void dispatchEvent(businessId, {
+    trigger: 'mensaje_entrante',
+    payload: {
+      channel,
+      conversationId: conversation.id,
+      clientId: options.clientId,
+      phone: options.contactPhone,
+    },
   });
 
-  try {
-    const { getIO } = require('../lib/socket');
-    getIO()?.to(`business:${businessId}`).emit('conversation:new-message', {
-      conversationId: conversation.id,
-      message: userMessage,
-    });
-  } catch {}
+  // Un humano tomó la conversación (o está esperando que alguien la tome): el
+  // mensaje ya quedó guardado y avisado al panel, pero el bot NO responde (ni
+  // llama a la IA, ni cuenta cuota, ni deriva). El estado vive en la conversación
+  // de ESTE negocio (se leyó con businessId) y solo un agente autenticado lo
+  // cambia (/take, /release, /reply, /close): el cliente no puede reactivar al bot.
+  // Plazos lazy: si la atención venció (humano inactivo / nadie tomó la derivación)
+  // la conversación vuelve al bot y este mensaje se responde normal.
+  let current: { status: string; metadata: unknown } = conversation;
+  if (isBotSilenced(current) && isAttentionExpired(current, Date.now())) {
+    const expired = await transitionAttention(conversation.id, businessId, { type: 'expire' });
+    if (expired.ok) current = { status: expired.status, metadata: expired.metadata };
+  }
+  if (isBotSilenced(current)) {
+    return silencedResponse(conversation.id, businessId, current.metadata, intent);
+  }
 
   const dbHistory = options.history || await loadHistory(conversation.id);
 
+  // Superpoderes del negocio: se consultan UNA sola vez por mensaje y se reusan
+  // (antes se consultaban hasta 3 veces: en buildSystemPrompt, en el gate de
+  // imágenes y al final — multiplicaba queries a DB y latencia en el hot-path).
+  const { superpowers, params: superpowerParams } = await loadSuperpowerState(businessId);
+
   let responseText: string;
   let actions: ChatAction[] = [];
+  // FinOps: consumo de tokens y latencia reales de la generación de IA (si hubo).
+  let usage: TokenUsage | undefined;
+  let aiLatencyMs: number | undefined;
+
+  // La derivación la hace el propio bot en este turno: el acuse al cliente es esta
+  // misma respuesta (queda marcado en metadata para no repetirlo).
+  let handedOffNow = false;
 
   if (intent === 'HUMAN') {
     responseText = 'Entendido, en breve te va a contactar una persona del equipo. Gracias por tu paciencia.';
     actions = [{ type: 'escalateToHuman', payload: { channel } }];
 
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { status: 'HANDOFF' },
-    });
+    // BOT -> ESPERANDO en una transacción. Si alguien la tomó justo antes (changed
+    // = false) no se pisa ni se acusa recibo: el bot se queda callado.
+    const handoff = await transitionAttention(conversation.id, businessId, { type: 'handoff', ack: true });
+    if (!handoff.ok) {
+      // Cerrada (o ya no existe) mientras tanto: no se acusa recibo, no se avisa a
+      // los admins ni se guarda respuesta del bot.
+      return discardedResponse(conversation.id, intent);
+    }
+    if (!handoff.changed) {
+      return silencedResponse(conversation.id, businessId, handoff.metadata, intent);
+    }
+    handedOffNow = true;
 
-    await prisma.notification.create({
-      data: {
-        userId: (await prisma.user.findFirst({ where: { businessId, role: 'ADMIN' } }))?.id || '',
-        type: 'GENERAL',
-        channel: 'PUSH',
-        title: 'Handoff solicitado',
-        body: `Un cliente pidió hablar con un humano en el chat (${channel}).`,
-        businessId,
-      },
-    }).catch(() => {});
+    // Aviso a TODOS los admins activos (no solo al primero). Sin admin: se loguea.
+    const admins = await prisma.user.findMany({
+      where: { businessId, role: 'ADMIN', isActive: true },
+      select: { id: true },
+    });
+    if (admins.length === 0) {
+      console.warn('Handoff solicitado pero el negocio no tiene ADMIN activo para avisar', { businessId, conversationId: conversation.id });
+    }
+    await Promise.all(
+      admins.map((admin) =>
+        prisma.notification.create({
+          data: {
+            userId: admin.id,
+            type: 'GENERAL',
+            channel: 'PUSH',
+            title: 'Handoff solicitado',
+            body: `Un cliente pidió hablar con un humano en el chat (${channel}).`,
+            businessId,
+          },
+        }).catch(() => {}),
+      ),
+    );
   } else if (intent === 'BOOKING') {
     const result = await handleBookingIntent(businessId);
     responseText = result.text;
@@ -241,26 +577,65 @@ export async function processMessage(
     const result = await handleCatalogIntent(businessId);
     responseText = result.text;
     actions = result.actions;
+  } else if (await isOverMessageQuota(businessId)) {
+    // Cupo mensual de mensajes del plan agotado: NO llamamos al LLM (corta el
+    // costo) ni construimos el prompt. Enforcea el `maxMessages` del plan, que
+    // antes solo se mostraba pero no se aplicaba. Escala por plan y se comparte
+    // entre instancias vía la DB (el conteo es autoritativo; ver billing/quota).
+    responseText = 'Este asistente alcanzó el límite de mensajes de su plan por este período. Escribinos de nuevo más tarde o contactá al negocio directamente.';
+    actions = [{ type: 'escalateToHuman' }];
   } else {
-    const systemPrompt = await buildSystemPrompt(businessId);
-    const catalog = await getActiveCatalog(businessId);
+    // Las lecturas del turno son independientes entre sí: se lanzan juntas y la
+    // latencia es la de la más lenta (antes ~8 round-trips en serie a la DB).
+    // El proveedor se resuelve en paralelo; su error (sin motor/keys) se maneja
+    // abajo, en el try de la generación, igual que antes.
+    const providerPromise = getAIProviderForBusiness(businessId);
+    providerPromise.catch(() => {}); // evita unhandledRejection si falla antes del await
+
+    const clientNamePromise: Promise<string | undefined> =
+      options.contactName || !options.clientId
+        ? Promise.resolve(options.contactName)
+        : // Scopeado por negocio: clientId puede venir del request, así que sin el
+          // businessId un atacante podría filtrar el nombre de un usuario de OTRO
+          // negocio hacia el prompt de IA (IDOR cross-tenant).
+          prisma.user
+            .findFirst({ where: { id: options.clientId, businessId }, select: { name: true } })
+            .then((c) => c?.name);
+
+    const [builtPrompt, catalog, clientName] = await Promise.all([
+      buildSystemPrompt(businessId, superpowers, superpowerParams),
+      getActiveCatalog(businessId),
+      clientNamePromise,
+    ]);
+    let systemPrompt = builtPrompt;
+    if (options.systemPromptExtra?.trim()) {
+      systemPrompt += '\n\n' + options.systemPromptExtra.trim();
+    }
     const catalogText = formatCatalogText(catalog);
+    // `systemPrompt` ya incluye `systemPromptExtra` (arriba): no se repite.
     const enrichedPrompt = systemPrompt + '\n\n' + catalogText;
 
-    let clientName = options.contactName;
-    if (!clientName && options.clientId) {
-      const client = await prisma.user.findUnique({ where: { id: options.clientId }, select: { name: true } });
-      clientName = client?.name;
+    // Superpoder "Oído y vista": solo pasamos imágenes al proveedor si está
+    // activo para el negocio. Si no, se ignoran (aunque hayan venido en options).
+    // Evitamos la consulta extra a la DB cuando el mensaje no trae imágenes.
+    let images: ImageInput[] | undefined;
+    if (options.images?.length && superpowers.has('Oído y vista')) {
+      images = options.images;
     }
 
+    const aiStart = Date.now();
     try {
-      const provider = getDefaultAIProvider();
+      const provider = await providerPromise;
       responseText = await provider.generateResponse(clientMessage, {
         businessId,
         clientName,
         history: dbHistory,
         systemPrompt: enrichedPrompt,
+        ...(images ? { images } : {}),
+        // FinOps: el proveedor nos pasa el consumo real de tokens.
+        recordUsage: (u) => { usage = u; },
       });
+      aiLatencyMs = Date.now() - aiStart;
     } catch (error) {
       console.error('Error generando respuesta de IA:', error);
       responseText = 'Disculpá, en este momento no puedo responder automáticamente. ¿Querés que te derive con una persona del equipo?';
@@ -268,15 +643,59 @@ export async function processMessage(
     }
   }
 
-  const start = Date.now();
-  const botMessage = await prisma.message.create({
-    data: { conversationId: conversation.id, role: 'BOT', text: responseText, responseTime: Date.now() - start },
+  // CARRERA bot vs humano: la IA tarda segundos. Si mientras tanto un humano tomó o
+  // respondió (o se derivó o se cerró), la respuesta del bot se DESCARTA: no se
+  // guarda ni se envía. La relectura del estado y el insert del mensaje BOT van en
+  // la MISMA transacción bajo `FOR UPDATE` de la conversación (el mismo lock de
+  // `transitionAttention`), así un take/reply/close concurrente no se cuela entre
+  // el chequeo y el insert. Un solo lock por transacción: no hay deadlock posible.
+  const persisted = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "conversations"
+      WHERE id = ${conversation.id} AND "businessId" = ${businessId}
+      FOR UPDATE`;
+    if (locked.length === 0) return { kind: 'closed' as const };
+    const cur = await tx.conversation.findUnique({
+      where: { id: conversation.id },
+      select: { status: true, metadata: true },
+    });
+    if (cur?.status === 'CLOSED') return { kind: 'closed' as const };
+    // En el turno de derivación la conversación ya está en HANDOFF por nosotros.
+    if (!handedOffNow && cur && isBotSilenced(cur)) {
+      return { kind: 'silenced' as const, metadata: cur.metadata };
+    }
+    const message = await tx.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: 'BOT',
+        text: responseText,
+        // Antes `responseTime` medía ~0 (el reloj arrancaba justo antes del insert);
+        // ahora refleja la latencia real de la generación de IA.
+        ...(aiLatencyMs !== undefined ? { responseTime: aiLatencyMs } : {}),
+        // Guardamos el consumo de tokens en el metadata del propio mensaje (que ya
+        // se persiste): cero escrituras extra y base para el dashboard de FinOps.
+        ...(usage ? { metadata: { usage } as unknown as Prisma.InputJsonObject } : {}),
+      },
+    });
+    return { kind: 'ok' as const, message };
   });
 
-  await prisma.conversation.update({
-    where: { id: conversation.id },
-    data: { updatedAt: new Date() },
-  });
+  if (persisted.kind === 'closed') return discardedResponse(conversation.id, intent);
+  if (persisted.kind === 'silenced') {
+    return silencedResponse(conversation.id, businessId, persisted.metadata, intent);
+  }
+  const botMessage = persisted.message;
+
+  // La respuesta YA está guardada: si esta escritura (solo `updatedAt`) falla no
+  // debe tumbar el turno ni dejar al cliente sin respuesta.
+  try {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
+  } catch (err) {
+    console.error('No se pudo actualizar la fecha de la conversación:', (err as Error).message);
+  }
 
   try {
     const { getIO } = require('../lib/socket');
@@ -287,13 +706,96 @@ export async function processMessage(
   } catch {}
 
 
-  const superpowers = await getActiveSuperpowers(businessId);
-
   if (superpowers.has('Vigilante')) {
     analyzeConversationSentiment(businessId, conversation.id, clientMessage).catch(() => {});
   }
 
+  if (superpowers.has('Alerta de emergencia')) {
+    detectEmergencyAlert(businessId, conversation.id, clientMessage, options.contactName).catch(() => {});
+  }
+
   return { text: responseText, intent, actions, conversationId: conversation.id };
+}
+
+/**
+ * Superpoder "Alerta de emergencia": detecta situaciones urgentes en el mensaje
+ * del cliente (queja grave, amenaza de irse/denunciar, cliente VIP o pedido
+ * grande) con reglas de keywords baratas y, si dispara, crea una notificación
+ * PUSH inmediata al ADMIN. Fire-and-forget: nunca frena el flujo del chat.
+ */
+async function detectEmergencyAlert(
+  businessId: string,
+  conversationId: string,
+  lastMessage: string,
+  contactName?: string,
+) {
+  const normalized = lastMessage.toLowerCase();
+
+  // Categorías de urgencia con sus disparadores.
+  const rules: { categoria: string; keywords: string[] }[] = [
+    {
+      categoria: 'Queja grave / amenaza',
+      keywords: [
+        'denunciar', 'denuncia', 'abogado', 'demanda', 'demandar', 'estafa', 'estafador',
+        'fraude', 'defensa del consumidor', 'inaceptable', 'vergüenza', 'verguenza',
+      ],
+    },
+    {
+      categoria: 'Amenaza de irse',
+      keywords: [
+        'nunca más', 'nunca mas', 'me voy a la competencia', 'dar de baja', 'darme de baja',
+        'cancelar todo', 'cerrar mi cuenta', 'no vuelvo', 'perdieron un cliente',
+      ],
+    },
+    {
+      categoria: 'Cliente VIP',
+      keywords: [
+        'soy cliente hace', 'cliente frecuente', 'siempre compro', 'vengo hace años',
+        'vengo hace anos', 'cliente de siempre', 'cliente vip',
+      ],
+    },
+    {
+      categoria: 'Pedido grande',
+      keywords: [
+        'por mayor', 'al por mayor', 'mayorista', 'catering', 'evento', 'gran pedido',
+        'pedido grande', 'compra grande', 'presupuesto para', 'para la empresa',
+      ],
+    },
+  ];
+
+  const matched = rules
+    .filter((r) => r.keywords.some((kw) => normalized.includes(kw)))
+    .map((r) => r.categoria);
+
+  // Señal barata extra: un pedido de muchas unidades ("50 unidades", "x100").
+  const bulkMatch = normalized.match(/(\d{2,})\s*(unidad|unidades|personas|docenas|cajas|productos|invitad)/);
+  if (bulkMatch && Number(bulkMatch[1]) >= 20 && !matched.includes('Pedido grande')) {
+    matched.push('Pedido grande');
+  }
+
+  if (matched.length === 0) return;
+
+  const admin = await prisma.user.findFirst({
+    where: { businessId, role: 'ADMIN' },
+    select: { id: true },
+  });
+  if (!admin) return;
+
+  const quien = contactName ? ` de ${contactName}` : '';
+  const excerpt = lastMessage.length > 160 ? `${lastMessage.slice(0, 157)}...` : lastMessage;
+
+  await prisma.notification.create({
+    data: {
+      userId: admin.id,
+      type: 'GENERAL',
+      channel: 'PUSH',
+      title: `🚨 Emergencia: ${matched.join(' + ')}`,
+      body:
+        `Situación urgente detectada en el chat${quien} (conversación ${conversationId}).\n` +
+        `Mensaje: "${excerpt}"\nEntrá a la conversación para intervenir cuanto antes.`,
+      businessId,
+    },
+  });
 }
 
 async function analyzeConversationSentiment(
@@ -335,30 +837,119 @@ async function getOrCreateConversation(
   options: ProcessMessageOptions,
 ) {
   if (options.conversationId) {
+    // Solo se reusa una conversación ACTIVA de este negocio. Una CLOSED (o de otro
+    // negocio) no se reutiliza: se abre una nueva con el bot activo, igual que los
+    // lookups de WhatsApp/Meta/voz (OPEN o HANDOFF).
     const existing = await prisma.conversation.findFirst({
-      where: { id: options.conversationId, businessId },
+      where: { id: options.conversationId, businessId, status: { in: ['OPEN', 'HANDOFF'] } },
     });
     if (existing) return existing;
   }
 
-  const botId = options.botId || await getDefaultBotId(businessId);
+  // Continuidad por suscriptor (canales externos tipo ManyChat): si no vino un
+  // conversationId explícito pero sí un subscriberId, reusamos su conversación
+  // activa (OPEN o HANDOFF) más reciente en vez de abrir una nueva en cada mensaje:
+  // una derivada a humano sigue siendo la misma charla.
+  if (!options.conversationId && options.subscriberId) {
+    const prev = await prisma.conversation.findFirst({
+      where: {
+        businessId,
+        status: { in: ['OPEN', 'HANDOFF'] },
+        metadata: { path: ['subscriberId'], equals: options.subscriberId },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (prev) return prev;
+  }
 
+  // El `botId` que llega puede venir de un request: se usa SOLO si el bot es de
+  // ESTE negocio. Si no, se ignora y se usa el bot por defecto del negocio (nunca se
+  // crea una conversación colgada de un bot ajeno).
+  const ownBotId = options.botId
+    ? (await prisma.bot.findFirst({ where: { id: options.botId, businessId }, select: { id: true } }))?.id
+    : undefined;
+  const botId = ownBotId || await getDefaultBotId(businessId);
+
+  // Mapa al enum BotChannel del schema (TELEGRAM | WHATSAPP | WEBCHAT | INSTAGRAM).
+  // MESSENGER no existe en el enum todavía, así que — igual que VOICE — cae en
+  // WEBCHAT; la conexión (Connection.type='MESSENGER') conserva el canal real.
   const channelMap: Record<ChatChannel, string> = {
     WEB: 'WEBCHAT',
     TELEGRAM: 'TELEGRAM',
     WHATSAPP: 'WHATSAPP',
     VOICE: 'WEBCHAT',
+    INSTAGRAM: 'INSTAGRAM',
+    MESSENGER: 'WEBCHAT',
   };
 
-  return prisma.conversation.create({
-    data: {
-      businessId,
-      botId,
-      channel: channelMap[channel] as any,
-      contactName: options.contactName,
-      contactPhone: options.contactPhone,
-      status: 'OPEN',
-    },
+  // Canales sin enum propio en BotChannel: MESSENGER y VOICE se persisten como
+  // WEBCHAT, así que guardamos el canal real en metadata.realChannel para poder
+  // distinguirlos en el Inbox sin tocar el schema. Los canales que ya tienen
+  // enum propio no necesitan metadata (channel alcanza).
+  const realChannelMap: Partial<Record<ChatChannel, string>> = {
+    MESSENGER: 'MESSENGER',
+    VOICE: 'VOICE',
+  };
+  const realChannel = realChannelMap[channel];
+
+  // metadata guarda el canal real (cuando no tiene enum propio), el
+  // subscriberId del canal externo (para reusar la conversación luego) y la
+  // atribución Click-to-WhatsApp (de qué anuncio vino). Es Record<string,
+  // unknown> porque la atribución es un objeto, no un string.
+  const metadata: Record<string, unknown> = {};
+  if (realChannel) metadata.realChannel = realChannel;
+  if (options.subscriberId) metadata.subscriberId = options.subscriberId;
+  if (options.attribution) metadata.attribution = options.attribution;
+
+  const createData = {
+    businessId,
+    botId,
+    channel: channelMap[channel] as any,
+    contactName: options.contactName,
+    contactPhone: options.contactPhone,
+    status: 'OPEN' as const,
+    ...(Object.keys(metadata).length ? { metadata: metadata as Prisma.InputJsonValue } : {}),
+  };
+
+  // Sin identificador del contacto (widget anónimo) no hay con qué deduplicar.
+  const contactKey = options.contactPhone
+    ? `phone:${options.contactPhone}`
+    : options.subscriberId
+    ? `sub:${options.subscriberId}`
+    : null;
+  if (!contactKey) return prisma.conversation.create({ data: createData });
+
+  // Lookup + alta son un "buscar y si no hay, crear": sin serializar, dos primeros
+  // mensajes simultáneos del mismo contacto (dos webhooks, un reintento) veían "no
+  // existe" y creaban DOS conversaciones. El schema está congelado (sin UNIQUE), así
+  // que se serializa con un advisory lock transaccional por (negocio, canal, contacto)
+  // y se re-busca ADENTRO con el lock tomado (patrón de lib/singletonLock).
+  return prisma.$transaction(async (tx) => {
+    await lockSingleton(tx, businessId, `conv-create:${channelMap[channel]}:${contactKey}`);
+    // VOICE, MESSENGER y WEB comparten el enum WEBCHAT: lo que los distingue es
+    // `metadata.realChannel`. Se exige que coincida (o que esté AUSENTE para WEB), si
+    // no una llamada se colgaba de una conversación de chat/Messenger abierta del
+    // mismo teléfono y viceversa.
+    const realChannelFilter: Prisma.ConversationWhereInput = realChannel
+      ? { metadata: { path: ['realChannel'], equals: realChannel } }
+      : { metadata: { path: ['realChannel'], equals: Prisma.AnyNull } };
+    const dup = await tx.conversation.findFirst({
+      where: {
+        businessId,
+        channel: channelMap[channel] as any,
+        status: { in: ['OPEN', 'HANDOFF'] },
+        ...(ownBotId ? { botId: ownBotId } : {}),
+        AND: [
+          options.contactPhone
+            ? { contactPhone: options.contactPhone }
+            : { metadata: { path: ['subscriberId'], equals: options.subscriberId } },
+          realChannelFilter,
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (dup) return dup;
+    return tx.conversation.create({ data: createData });
   });
 }
 
@@ -376,13 +967,17 @@ async function getDefaultBotId(businessId: string): Promise<string> {
 }
 
 async function loadHistory(conversationId: string): Promise<ConversationTurn[]> {
+  // Traemos los ÚLTIMOS 50 mensajes (orden desc + take) y luego los revertimos a
+  // orden cronológico. Con `asc` + take 50 traíamos los PRIMEROS 50 de la charla:
+  // en conversaciones largas la IA recibía contexto viejo y perdía lo reciente.
   const messages = await prisma.message.findMany({
     where: { conversationId },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { createdAt: 'desc' },
     take: 50,
     select: { role: true, text: true },
   });
   return messages
+    .reverse()
     .filter((m) => m.role !== 'SYSTEM')
     .map((m) => ({
       role: m.role === 'USER' ? 'user' as const : 'assistant' as const,

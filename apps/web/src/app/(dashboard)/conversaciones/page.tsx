@@ -1,14 +1,17 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   MessageSquare, Clock, X, ChevronRight, User, Filter, Search,
   Send, Loader2, AlertTriangle, Bot, Phone, Mail, Wifi, WifiOff,
+  Tag, StickyNote, UserPlus, Plus, Info, Check, Sparkles, RefreshCw, Flame, Megaphone,
 } from 'lucide-react';
 import { useConversations, useConversationDetail } from '@/hooks/use-conversations';
 import { useSocket, useSocketEvent } from '@/hooks/use-socket';
 import { useAuth } from '@/lib/auth-context';
+import { useToast } from '@/components/common/Toast';
 import * as conversationsApi from '@/lib/api/conversations';
+import * as teamApi from '@/lib/api/team';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 
@@ -18,12 +21,61 @@ const STATUS_COLORS: Record<string, { label: string; class: string; dot: string 
   HANDOFF: { label: 'Derivada', class: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', dot: 'bg-yellow-400' },
 };
 
+// Estilo del badge de temperatura del lead (intención de compra).
+const TEMP_STYLE: Record<conversationsApi.LeadTemperature, { label: string; class: string; dot: string }> = {
+  CALIENTE: { label: 'Caliente', class: 'bg-red-500/10 text-red-400 border-red-500/20', dot: 'bg-red-400' },
+  TIBIO: { label: 'Tibio', class: 'bg-amber-500/10 text-amber-400 border-amber-500/20', dot: 'bg-amber-400' },
+  FRIO: { label: 'Frío', class: 'bg-sky-500/10 text-sky-400 border-sky-500/20', dot: 'bg-sky-400' },
+};
+
 const CHANNEL_LABELS: Record<string, string> = {
   TELEGRAM: 'Telegram',
   WHATSAPP: 'WhatsApp',
   WEBCHAT: 'Web',
   INSTAGRAM: 'Instagram',
+  // Messenger y Voz se persisten como WEBCHAT en el enum; se distinguen por
+  // `displayChannel` (metadata.realChannel) que expone la API.
+  MESSENGER: 'Messenger',
+  VOICE: 'Voz',
 };
+
+// Canal del enum BotChannel al que hay que pedirle al server cada filtro:
+// Messenger y Voz viajan como WEBCHAT, así que server-side se filtra por WEBCHAT
+// y luego el cliente refina por displayChannel (ver `listParams` y `filtered`).
+const SERVER_CHANNEL_FOR: Record<string, string> = {
+  MESSENGER: 'WEBCHAT',
+  VOICE: 'WEBCHAT',
+};
+
+// Canales disponibles para filtrar. Messenger y Voz no tienen enum propio: se
+// distinguen por `displayChannel` (metadata.realChannel) y se filtran en cliente.
+const CHANNEL_FILTERS: { value: string; label: string }[] = [
+  { value: 'TELEGRAM', label: 'Telegram' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+  { value: 'WEBCHAT', label: 'Web' },
+  { value: 'MESSENGER', label: 'Messenger' },
+  { value: 'INSTAGRAM', label: 'Instagram' },
+  { value: 'VOICE', label: 'Voz' },
+];
+
+// Canal efectivo de una conversación: displayChannel si vino, si no el enum.
+function channelOf(conv: conversationsApi.Conversation): string {
+  return conv.displayChannel || conv.channel;
+}
+
+// Vistas del Inbox estilo respond.io. El filtrado real lo hace el backend
+// (?view=...); acá solo elegimos la pestaña activa.
+const VIEW_TABS: { value: conversationsApi.InboxView; label: string }[] = [
+  { value: 'all', label: 'Todas' },
+  { value: 'attention', label: 'Te necesitan' },
+  { value: 'unread', label: 'Sin leer' },
+  { value: 'leads', label: 'Interesados' },
+];
+
+interface TeamOption {
+  id: string;
+  name: string;
+}
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -37,46 +89,163 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' });
 }
 
+// Una conversación está "no leída" (para EL usuario actual) si su último mensaje
+// es del cliente (USER) y llegó después de la última vez que ESE usuario la abrió
+// (metadata.readBy[userId]). Así el "no leído" es por agente, no global.
+function isUnread(conv: conversationsApi.Conversation, userId?: string): boolean {
+  const last = conv.messages?.[0];
+  if (!last || last.role !== 'USER') return false;
+  const readAt = (userId && conv.metadata?.readBy?.[userId]) || conv.metadata?.lastReadAt;
+  if (!readAt) return true;
+  return new Date(last.createdAt).getTime() > new Date(readAt).getTime();
+}
+
 export default function ConversacionesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [channelFilter, setChannelFilter] = useState<string>('');
+  const [tagFilter, setTagFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
-  const { conversations, total, isLoading, error, refetch, closeConversation } = useConversations(
-    statusFilter ? { status: statusFilter } : undefined
-  );
+  // La búsqueda se hace en el servidor (sobre TODAS las conversaciones, no solo la
+  // página cargada) y con debounce: un request por pausa de tipeo, no por tecla.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+  const listParams = useMemo(() => {
+    const p: { status?: string; channel?: string; search?: string } = {};
+    if (statusFilter) p.status = statusFilter;
+    if (debouncedSearch) p.search = debouncedSearch;
+    // Messenger/Voz se piden como WEBCHAT (su enum real) y se refinan en cliente.
+    if (channelFilter) p.channel = SERVER_CHANNEL_FOR[channelFilter] || channelFilter;
+    return Object.keys(p).length ? p : undefined;
+  }, [statusFilter, channelFilter, debouncedSearch]);
+  const {
+    conversations, total, isLoading, isLoadingMore, hasMore, loadMore, error, refetch, closeConversation,
+  } = useConversations(listParams);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { detail, isLoading: detailLoading, refetchDetail } = useConversationDetail(selectedId);
+  const {
+    detail, isLoading: detailLoading, refetchDetail,
+    hasMoreMessages, isLoadingOlder, loadOlder, prependCount,
+  } = useConversationDetail(selectedId);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [team, setTeam] = useState<TeamOption[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [noteInput, setNoteInput] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+  const [savingTag, setSavingTag] = useState(false);
+  // Copiloto del inbox: resumen + respuesta sugerida por la IA del negocio.
+  const [copilot, setCopilot] = useState<conversationsApi.CopilotResult | null>(null);
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  // Lead scoring: intención de compra calculada por la IA (se persiste en metadata).
+  const [scoring, setScoring] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { business } = useAuth();
+  const { business, user } = useAuth();
+  const { toast } = useToast();
   const { connected } = useSocket(business?.id ?? null);
 
+  useEffect(() => {
+    let cancelled = false;
+    teamApi.getMembers()
+      .then((members) => {
+        if (!cancelled) setTeam(members.map((m) => ({ id: m.id, name: m.name })));
+      })
+      .catch(() => { /* el equipo es opcional para asignar */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Los eventos de socket llegan en ráfagas: se juntan en un solo refresco
+  // (lista + detalle si corresponde) en vez de pedir todo por cada evento.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshDetailPending = useRef(false);
+  const scheduleRefresh = useCallback((includeDetail: boolean) => {
+    if (includeDetail) refreshDetailPending.current = true;
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      const withDetail = refreshDetailPending.current;
+      refreshDetailPending.current = false;
+      if (withDetail) refetchDetail();
+      refetch();
+    }, 400);
+  }, [refetch, refetchDetail]);
+
+  useEffect(() => () => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+  }, []);
+
   useSocketEvent<{ conversationId: string }>('conversation:new-message', (data) => {
-    if (data.conversationId === selectedId) {
-      refetchDetail();
-    }
-    refetch();
-  }, [selectedId]);
+    scheduleRefresh(data.conversationId === selectedId);
+  }, [selectedId, scheduleRefresh]);
 
   useSocketEvent<{ conversationId: string }>('conversation:closed', () => {
-    refetch();
-  });
+    scheduleRefresh(false);
+  }, [scheduleRefresh]);
 
-  const filtered = searchQuery
-    ? conversations.filter((c) => {
-        const q = searchQuery.toLowerCase();
-        return (
-          c.contactName?.toLowerCase().includes(q) ||
-          c.contactPhone?.toLowerCase().includes(q) ||
-          c.messages?.[0]?.text.toLowerCase().includes(q)
-        );
-      })
-    : conversations;
+  useSocketEvent<{ conversationId: string }>('conversation:updated', (data) => {
+    scheduleRefresh(data.conversationId === selectedId);
+  }, [selectedId, scheduleRefresh]);
 
+  // Etiquetas únicas presentes en las conversaciones cargadas (para el filtro).
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    conversations.forEach((c) => c.metadata?.tags?.forEach((t) => set.add(t)));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [conversations]);
+
+  const filtered = useMemo(() => {
+    let list = conversations;
+    // Refinamos el canal por displayChannel: distingue Messenger/Voz (que en el
+    // enum viajan como WEBCHAT) del Web real. Los enum propios también coinciden.
+    if (channelFilter) {
+      list = list.filter((c) => channelOf(c) === channelFilter);
+    }
+    if (tagFilter) {
+      list = list.filter((c) => c.metadata?.tags?.includes(tagFilter));
+    }
+    return list;
+  }, [conversations, channelFilter, tagFilter]);
+
+  // Scroll sentinel: al llegar al final de la lista pide la página siguiente.
+  const listEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const el = listEndRef.current;
+    if (!el || !hasMore || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMore();
+    }, { rootMargin: '120px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, loadMore, filtered.length]);
+
+  // Hilo: baja al final cuando llega un mensaje, pero NO cuando lo que cambió es
+  // el principio (el usuario cargó mensajes anteriores y no debe perder su lugar).
+  const messagesBoxRef = useRef<HTMLDivElement>(null);
+  const lastPrependRef = useRef(0);
+  const skipNextScroll = useRef(false);
+  const scrollHeightBeforeOlder = useRef(0);
+  useLayoutEffect(() => {
+    if (prependCount === lastPrependRef.current) return;
+    lastPrependRef.current = prependCount;
+    skipNextScroll.current = true; // el efecto de abajo corre justo después
+    const box = messagesBoxRef.current;
+    if (box) box.scrollTop += box.scrollHeight - scrollHeightBeforeOlder.current;
+  }, [prependCount]);
+  useEffect(() => {
+    if (skipNextScroll.current) {
+      skipNextScroll.current = false;
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [detail?.messages?.length]);
+  }, [detail?.messages?.length, prependCount]);
+
+  function handleLoadOlder() {
+    scrollHeightBeforeOlder.current = messagesBoxRef.current?.scrollHeight ?? 0;
+    void loadOlder();
+  }
 
   useEffect(() => {
     if (selectedId && detail) {
@@ -84,18 +253,139 @@ export default function ConversacionesPage() {
     }
   }, [selectedId, detail]);
 
+  // Al cambiar de conversación, limpiamos el copiloto (el resumen/sugerencia
+  // anterior ya no aplica a la nueva charla).
+  useEffect(() => {
+    setCopilot(null);
+    setCopilotLoading(false);
+  }, [selectedId]);
+
+  async function handleCopilot() {
+    if (!selectedId || copilotLoading) return;
+    setCopilotLoading(true);
+    try {
+      const result = await conversationsApi.copilot(selectedId);
+      setCopilot(result);
+    } catch {
+      toast({ type: 'error', message: 'El copiloto de IA no está disponible en este momento.' });
+    } finally {
+      setCopilotLoading(false);
+    }
+  }
+
+  async function handleLeadScore() {
+    if (!selectedId || scoring) return;
+    setScoring(true);
+    try {
+      const result = await conversationsApi.leadScore(selectedId);
+      refetchDetail();
+      refetch();
+      toast({ type: 'success', message: `Interés: ${TEMP_STYLE[result.temperature].label} · ${result.score}/100` });
+    } catch {
+      toast({ type: 'error', message: 'El scoring de IA no está disponible en este momento.' });
+    } finally {
+      setScoring(false);
+    }
+  }
+
+  const handleSelect = useCallback(async (id: string) => {
+    setSelectedId(id);
+    try {
+      await conversationsApi.markRead(id);
+      scheduleRefresh(false);
+    } catch { /* marcar leído no es crítico */ }
+  }, [scheduleRefresh]);
+
+  // Idempotency-Key del envío en curso: un doble click o un reintento de red del
+  // MISMO texto reusa la clave y el server no manda el mensaje dos veces.
+  const replyKeyRef = useRef<{ conversationId: string; text: string; key: string } | null>(null);
+  const sendingRef = useRef(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  function keyForReply(conversationId: string, text: string): string {
+    const current = replyKeyRef.current;
+    if (current && current.conversationId === conversationId && current.text === text) return current.key;
+    const key =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    replyKeyRef.current = { conversationId, text, key };
+    return key;
+  }
+
+  // El mensaje SIEMPRE queda guardado; si no llegó al cliente, avisamos el motivo.
+  function notifyDelivery(result: conversationsApi.ReplyResult) {
+    if (result.deliveryStatus === 'failed') {
+      toast({
+        type: 'error',
+        message: `No se pudo enviar al cliente: ${result.deliveryError || 'el canal rechazó el mensaje.'}`,
+      });
+    }
+  }
+
   async function handleReply() {
-    if (!replyText.trim() || !selectedId || sending) return;
+    const text = replyText.trim();
+    if (!text || !selectedId || sending || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     try {
-      await conversationsApi.reply(selectedId, replyText.trim());
+      const result = await conversationsApi.reply(selectedId, text, keyForReply(selectedId, text));
+      replyKeyRef.current = null;
       setReplyText('');
+      // `duplicate`: el primer request (mismo doble click) ya mostró el resultado.
+      if (!('duplicate' in result)) notifyDelivery(result);
       refetchDetail();
       refetch();
     } catch (err) {
       console.error('Error sending reply:', err);
+      toast({ type: 'error', message: 'No se pudo enviar la respuesta.' });
     } finally {
+      sendingRef.current = false;
       setSending(false);
+    }
+  }
+
+  async function handleRetryDelivery(messageId: string) {
+    if (!selectedId || retryingId) return;
+    setRetryingId(messageId);
+    try {
+      const result = await conversationsApi.retryReply(selectedId, messageId);
+      notifyDelivery(result);
+      refetchDetail();
+      refetch();
+    } catch (err) {
+      console.error('Error retrying delivery:', err);
+      toast({ type: 'error', message: 'No se pudo reintentar el envío.' });
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
+  // Tomar / devolver al bot: pausa o reactiva el bot SOLO en esta conversación
+  // (metadata.botPaused). Responder como humano también pausa al bot.
+  const [togglingBot, setTogglingBot] = useState(false);
+
+  async function handleToggleBot(pause: boolean, force = false) {
+    if (!selectedId || togglingBot) return;
+    setTogglingBot(true);
+    try {
+      if (pause) await (force ? conversationsApi.take(selectedId, true) : conversationsApi.take(selectedId));
+      else await conversationsApi.release(selectedId);
+      toast({
+        type: 'success',
+        message: pause ? 'Tomaste la conversación: el bot dejó de responder.' : 'Devuelta al bot: vuelve a responder automáticamente.',
+      });
+      refetchDetail();
+      refetch();
+    } catch (err) {
+      console.error('Error toggling bot:', err);
+      // El server explica el motivo (p. ej. "Ya la está atendiendo Ana"); si solo hay
+      // un error de red/HTTP genérico mostramos el mensaje fijo.
+      const detailMsg = err instanceof Error && err.message && !err.message.startsWith('HTTP ') ? err.message : '';
+      const base = pause ? 'No se pudo tomar la conversación.' : 'No se pudo devolver al bot.';
+      toast({ type: 'error', message: detailMsg ? `${base} ${detailMsg}` : base });
+    } finally {
+      setTogglingBot(false);
     }
   }
 
@@ -104,10 +394,83 @@ export default function ConversacionesPage() {
     if (selectedId === id) setSelectedId(null);
   }
 
+  async function handleAssign(memberId: string) {
+    if (!selectedId) return;
+    try {
+      await conversationsApi.assign(selectedId, memberId || null);
+      refetchDetail();
+      refetch();
+      toast({ type: 'success', message: memberId ? 'Conversación asignada.' : 'Asignación quitada.' });
+    } catch {
+      toast({ type: 'error', message: 'No se pudo asignar la conversación.' });
+    }
+  }
+
+  async function handleAddTag() {
+    const tag = tagInput.trim();
+    if (!tag || !selectedId || savingTag) return;
+    const current = detail?.metadata?.tags ?? [];
+    if (current.some((t) => t.toLowerCase() === tag.toLowerCase())) {
+      setTagInput('');
+      return;
+    }
+    setSavingTag(true);
+    try {
+      await conversationsApi.setTags(selectedId, [...current, tag]);
+      setTagInput('');
+      refetchDetail();
+      refetch();
+    } catch {
+      toast({ type: 'error', message: 'No se pudo agregar la etiqueta.' });
+    } finally {
+      setSavingTag(false);
+    }
+  }
+
+  async function handleRemoveTag(tag: string) {
+    if (!selectedId) return;
+    const current = detail?.metadata?.tags ?? [];
+    try {
+      await conversationsApi.setTags(selectedId, current.filter((t) => t !== tag));
+      refetchDetail();
+      refetch();
+    } catch {
+      toast({ type: 'error', message: 'No se pudo quitar la etiqueta.' });
+    }
+  }
+
+  async function handleAddNote() {
+    const text = noteInput.trim();
+    if (!text || !selectedId || savingNote) return;
+    setSavingNote(true);
+    try {
+      await conversationsApi.addNote(selectedId, text);
+      setNoteInput('');
+      refetchDetail();
+      toast({ type: 'success', message: 'Nota agregada.' });
+    } catch {
+      toast({ type: 'error', message: 'No se pudo agregar la nota.' });
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
   if (isLoading) return <LoadingSpinner label="Cargando conversaciones..." />;
 
   const openCount = conversations.filter((c) => c.status === 'OPEN').length;
   const handoffCount = conversations.filter((c) => c.status === 'HANDOFF').length;
+  const unreadCount = conversations.filter((c) => isUnread(c, user?.id)).length;
+
+  // Contadores por canal efectivo (displayChannel) sobre las conversaciones
+  // cargadas, para que Messenger/Voz cuenten aparte del Web real.
+  const channelCounts = conversations.reduce<Record<string, number>>((acc, c) => {
+    const ch = channelOf(c);
+    acc[ch] = (acc[ch] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const notes = detail?.metadata?.notes ?? [];
+  const detailTags = detail?.metadata?.tags ?? [];
 
   return (
     <div className="space-y-4">
@@ -117,7 +480,7 @@ export default function ConversacionesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            Conversaciones
+            Inbox
             {connected ? (
               <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-normal">
                 <Wifi className="h-3 w-3" /> en vivo
@@ -128,8 +491,14 @@ export default function ConversacionesPage() {
               </span>
             )}
           </h1>
-          <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+          <div className="flex items-center gap-3 mt-1 text-xs text-slate-500 flex-wrap">
             <span>{total} total</span>
+            {unreadCount > 0 && (
+              <span className="flex items-center gap-1 text-brand-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-400" />
+                {unreadCount} sin leer
+              </span>
+            )}
             {openCount > 0 && (
               <span className="flex items-center gap-1 text-emerald-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -147,37 +516,104 @@ export default function ConversacionesPage() {
       </div>
 
       {/* Filters + Search */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex gap-1.5 flex-wrap">
-          {[
-            { value: '', label: 'Todas' },
-            { value: 'OPEN', label: 'Abiertas' },
-            { value: 'HANDOFF', label: 'Derivadas' },
-            { value: 'CLOSED', label: 'Cerradas' },
-          ].map((opt) => (
+      <div className="space-y-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { value: '', label: 'Todas' },
+              { value: 'OPEN', label: 'Abiertas' },
+              { value: 'HANDOFF', label: 'Derivadas' },
+              { value: 'CLOSED', label: 'Cerradas' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setStatusFilter(opt.value)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                  statusFilter === opt.value
+                    ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
+                    : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar por nombre, teléfono o email..."
+              className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-1.5 pl-9 text-sm text-white placeholder:text-slate-600 focus:border-brand-400/50 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Channel filter */}
+        <div className="flex gap-1.5 flex-wrap items-center">
+          <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-600">
+            <Filter className="h-3 w-3" /> Canal
+          </span>
+          <button
+            onClick={() => setChannelFilter('')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+              channelFilter === ''
+                ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
+                : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+            }`}
+          >
+            Todos
+          </button>
+          {CHANNEL_FILTERS.map((opt) => (
             <button
               key={opt.value}
-              onClick={() => setStatusFilter(opt.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                statusFilter === opt.value
+              onClick={() => setChannelFilter(opt.value)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+                channelFilter === opt.value
                   ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
                   : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
               }`}
             >
               {opt.label}
+              {channelCounts[opt.value] ? (
+                <span className="text-[9px] text-slate-500">{channelCounts[opt.value]}</span>
+              ) : null}
             </button>
           ))}
         </div>
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Buscar por nombre, teléfono o mensaje..."
-            className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-1.5 pl-9 text-sm text-white placeholder:text-slate-600 focus:border-brand-400/50 focus:outline-none"
-          />
-        </div>
+
+        {/* Tag filter */}
+        {allTags.length > 0 && (
+          <div className="flex gap-1.5 flex-wrap items-center">
+            <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-600">
+              <Tag className="h-3 w-3" /> Etiquetas
+            </span>
+            <button
+              onClick={() => setTagFilter('')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                tagFilter === ''
+                  ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
+                  : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+              }`}
+            >
+              Todas
+            </button>
+            {allTags.map((tag) => (
+              <button
+                key={tag}
+                onClick={() => setTagFilter(tag)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                  tagFilter === tag
+                    ? 'bg-brand-400/10 text-brand-400 border-brand-400/30'
+                    : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'
+                }`}
+              >
+                #{tag}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Split pane */}
@@ -188,7 +624,7 @@ export default function ConversacionesPage() {
             <div className="text-center py-12">
               <MessageSquare className="h-10 w-10 text-slate-700 mx-auto mb-3" />
               <p className="text-sm text-slate-500">
-                {searchQuery ? 'Sin resultados para la búsqueda.' : 'No hay conversaciones todavía.'}
+                {searchQuery || tagFilter ? 'Sin resultados para el filtro.' : 'No hay conversaciones todavía.'}
               </p>
             </div>
           )}
@@ -196,10 +632,13 @@ export default function ConversacionesPage() {
             const status = STATUS_COLORS[conv.status] || STATUS_COLORS.OPEN;
             const lastMsg = conv.messages?.[0];
             const isSelected = selectedId === conv.id;
+            const unread = isUnread(conv, user?.id);
+            const assignedName = conv.metadata?.assignedToName;
+            const tags = conv.metadata?.tags ?? [];
             return (
               <button
                 key={conv.id}
-                onClick={() => setSelectedId(conv.id)}
+                onClick={() => handleSelect(conv.id)}
                 className={`w-full rounded-xl border p-3 text-left flex items-start gap-3 transition-all ${
                   isSelected
                     ? 'border-brand-400/50 bg-brand-400/5'
@@ -214,18 +653,55 @@ export default function ConversacionesPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-white truncate">{conv.contactName || 'Anónimo'}</p>
+                    <p className={`text-sm truncate flex items-center gap-1.5 ${unread ? 'font-semibold text-white' : 'font-medium text-white'}`}>
+                      {unread && <span className="w-2 h-2 rounded-full bg-brand-400 shrink-0" />}
+                      {conv.contactName || 'Anónimo'}
+                    </p>
                     <span className="text-[10px] text-slate-600 shrink-0">{timeAgo(conv.updatedAt)}</span>
                   </div>
                   {lastMsg && (
-                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                    <p className={`text-xs truncate mt-0.5 ${unread ? 'text-slate-300' : 'text-slate-500'}`}>
                       {lastMsg.role === 'BOT' ? 'Bot: ' : ''}{lastMsg.text}
                     </p>
                   )}
-                  <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-600">
-                    <span>{CHANNEL_LABELS[conv.channel] || conv.channel}</span>
+                  {tags.length > 0 && (
+                    <div className="flex items-center gap-1 mt-1 flex-wrap">
+                      {tags.slice(0, 3).map((t) => (
+                        <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-brand-400/10 text-brand-400 border border-brand-400/20">
+                          #{t}
+                        </span>
+                      ))}
+                      {tags.length > 3 && <span className="text-[9px] text-slate-600">+{tags.length - 3}</span>}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-600 flex-wrap">
+                    {conv.metadata?.attribution && (
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-medium bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20"
+                        title={conv.metadata.attribution.headline || conv.metadata.attribution.sourceUrl || 'Vino de un anuncio (Click-to-WhatsApp)'}
+                      >
+                        <Megaphone className="h-2.5 w-2.5" /> Anuncio
+                      </span>
+                    )}
+                    {conv.metadata?.leadScore && (
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-medium ${TEMP_STYLE[conv.metadata.leadScore.temperature].class}`}
+                        title={`Intención de compra: ${conv.metadata.leadScore.score}/100`}
+                      >
+                        <Flame className="h-2.5 w-2.5" /> {TEMP_STYLE[conv.metadata.leadScore.temperature].label}
+                      </span>
+                    )}
+                    <span>{CHANNEL_LABELS[channelOf(conv)] || channelOf(conv)}</span>
                     <span>·</span>
                     <span>{conv._count?.messages ?? 0} msgs</span>
+                    {assignedName && (
+                      <>
+                        <span>·</span>
+                        <span className="flex items-center gap-0.5 text-slate-400">
+                          <User className="h-2.5 w-2.5" /> {assignedName}
+                        </span>
+                      </>
+                    )}
                     {conv.status === 'HANDOFF' && (
                       <>
                         <span>·</span>
@@ -237,16 +713,28 @@ export default function ConversacionesPage() {
               </button>
             );
           })}
+          {hasMore && (
+            <div ref={listEndRef} className="py-2 text-center">
+              <button
+                onClick={loadMore}
+                disabled={isLoadingMore}
+                className="text-xs text-slate-400 hover:text-white disabled:opacity-60"
+              >
+                {isLoadingMore ? 'Cargando…' : 'Cargar más conversaciones'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Chat detail */}
-        <div className="lg:col-span-2 rounded-xl border border-slate-700/50 bg-slate-800/30 flex flex-col" style={{ minHeight: '28rem' }}>
+        <div className="lg:col-span-2 rounded-xl border border-slate-700/50 bg-slate-800/30 flex overflow-hidden" style={{ minHeight: '28rem' }}>
+          <div className="flex-1 flex flex-col min-w-0">
           {!selectedId && (
             <div className="flex-1 flex items-center justify-center text-center">
               <div>
                 <MessageSquare className="h-12 w-12 text-slate-700 mx-auto mb-3" />
                 <p className="text-sm text-slate-500">Seleccioná una conversación para ver el historial</p>
-                <p className="text-xs text-slate-600 mt-1">Podés responder como humano a las conversaciones activas</p>
+                <p className="text-xs text-slate-600 mt-1">Podés responder, asignar, etiquetar y dejar notas internas</p>
               </div>
             </div>
           )}
@@ -267,19 +755,27 @@ export default function ConversacionesPage() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-white">{detail.contactName || 'Cliente anónimo'}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                    <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Bot className="h-2.5 w-2.5" /> {detail.bot?.name || 'Bot'}
                       </span>
                       <span>·</span>
-                      <span>{CHANNEL_LABELS[detail.channel] || detail.channel}</span>
+                      <span>{CHANNEL_LABELS[detail.displayChannel || detail.channel] || detail.displayChannel || detail.channel}</span>
                       <span>·</span>
-                      <span>{detail.messages.length} mensajes</span>
+                      <span>{detail.messages.length}{hasMoreMessages ? '+' : ''} mensajes</span>
                       {detail.contactPhone && (
                         <>
                           <span>·</span>
                           <span className="flex items-center gap-0.5">
                             <Phone className="h-2.5 w-2.5" /> {detail.contactPhone}
+                          </span>
+                        </>
+                      )}
+                      {detail.metadata?.assignedToName && (
+                        <>
+                          <span>·</span>
+                          <span className="flex items-center gap-0.5 text-brand-400">
+                            <User className="h-2.5 w-2.5" /> {detail.metadata.assignedToName}
                           </span>
                         </>
                       )}
@@ -290,6 +786,103 @@ export default function ConversacionesPage() {
                   <span className={`badge border text-[9px] ${(STATUS_COLORS[detail.status] || STATUS_COLORS.OPEN).class}`}>
                     {(STATUS_COLORS[detail.status] || STATUS_COLORS.OPEN).label}
                   </span>
+                  {detail.metadata?.attribution && (
+                    <span
+                      className="badge border text-[9px] bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20"
+                      title={detail.metadata.attribution.headline || detail.metadata.attribution.sourceUrl || 'Vino de un anuncio (Click-to-WhatsApp)'}
+                    >
+                      <Megaphone className="h-3 w-3" /> Anuncio
+                    </span>
+                  )}
+                  {detail.metadata?.leadScore && (
+                    <span
+                      className={`badge border text-[9px] ${TEMP_STYLE[detail.metadata.leadScore.temperature].class}`}
+                      title={detail.metadata.leadScore.reason}
+                    >
+                      <Flame className="h-3 w-3" /> {TEMP_STYLE[detail.metadata.leadScore.temperature].label} · {detail.metadata.leadScore.score}
+                    </span>
+                  )}
+                  {detail.status !== 'CLOSED' && (() => {
+                    // Estados de atención (ver server services/conversationState.ts):
+                    // HUMANO (botPaused) / ESPERANDO (derivada, nadie la tomó) / BOT.
+                    const paused = detail.metadata?.botPaused === true;
+                    const waiting = !paused && detail.status === 'HANDOFF';
+                    const heldByOther = paused && !!detail.metadata?.pausedBy && detail.metadata.pausedBy !== user?.id;
+                    return (
+                      <>
+                        {paused ? (
+                          <span
+                            className="badge border text-[9px] bg-violet-500/10 text-violet-400 border-violet-500/20"
+                            title="El bot está pausado en esta conversación"
+                          >
+                            <User className="h-3 w-3" /> Atendida por {detail.metadata?.pausedByName || 'un agente'}
+                          </span>
+                        ) : waiting ? (
+                          <span
+                            className="badge border text-[9px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+                            title="El cliente pidió una persona y el bot está callado hasta que alguien la tome"
+                          >
+                            <AlertTriangle className="h-3 w-3" /> Esperando agente
+                          </span>
+                        ) : (
+                          <span
+                            className="badge border text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                            title="El bot responde automáticamente"
+                          >
+                            <Bot className="h-3 w-3" /> Bot activo
+                          </span>
+                        )}
+                        {!paused && (
+                          <button
+                            onClick={() => handleToggleBot(true)}
+                            disabled={togglingBot}
+                            className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Pausar al bot y atender vos"
+                          >
+                            {togglingBot ? <Loader2 className="h-3 w-3 animate-spin" /> : <User className="h-3 w-3" />}
+                            Tomar conversación
+                          </button>
+                        )}
+                        {heldByOther && user?.role === 'ADMIN' && (
+                          <button
+                            onClick={() => handleToggleBot(true, true)}
+                            disabled={togglingBot}
+                            className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Quitarle la conversación al agente que la tiene (solo administradores)"
+                          >
+                            <User className="h-3 w-3" /> Tomar igual
+                          </button>
+                        )}
+                        {(paused || waiting) && (
+                          <button
+                            onClick={() => handleToggleBot(false)}
+                            disabled={togglingBot}
+                            className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Reactivar las respuestas automáticas del bot"
+                          >
+                            {togglingBot ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3 text-emerald-400" />}
+                            Devolver al bot
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
+                  <button
+                    onClick={handleLeadScore}
+                    disabled={scoring}
+                    className="btn-secondary text-xs py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Estimar la intención de compra del cliente con IA"
+                  >
+                    {scoring ? <Loader2 className="h-3 w-3 animate-spin" /> : <Flame className="h-3 w-3 text-red-400" />}
+                    {detail.metadata?.leadScore ? 'Re-medir' : 'Medir interés'}
+                  </button>
+                  <button
+                    onClick={() => setShowDetails((v) => !v)}
+                    className={`btn-secondary text-xs py-1 ${showDetails ? 'text-brand-400' : ''}`}
+                    title="Detalles, asignación, etiquetas y notas"
+                  >
+                    <Info className="h-3 w-3" /> Detalles
+                  </button>
                   {detail.status !== 'CLOSED' && (
                     <button onClick={() => handleClose(detail.id)} className="btn-secondary text-xs py-1">
                       <X className="h-3 w-3" /> Cerrar
@@ -308,8 +901,33 @@ export default function ConversacionesPage() {
                 </div>
               )}
 
+              {/* Tags chips row */}
+              {detailTags.length > 0 && (
+                <div className="mx-4 mt-3 flex items-center gap-1.5 flex-wrap">
+                  {detailTags.map((tag) => (
+                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-brand-400/10 text-brand-400 border border-brand-400/20 flex items-center gap-1">
+                      #{tag}
+                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-white">
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: '22rem' }}>
+              <div ref={messagesBoxRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: '22rem' }}>
+                {hasMoreMessages && (
+                  <div className="text-center">
+                    <button
+                      onClick={handleLoadOlder}
+                      disabled={isLoadingOlder}
+                      className="text-xs text-slate-400 hover:text-white disabled:opacity-60"
+                    >
+                      {isLoadingOlder ? 'Cargando…' : 'Cargar mensajes anteriores'}
+                    </button>
+                  </div>
+                )}
                 {detail.messages.map((msg) => (
                   <div key={msg.id} className={`flex ${msg.role === 'USER' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
@@ -322,6 +940,25 @@ export default function ConversacionesPage() {
                         {new Date(msg.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                         {msg.responseTime != null && msg.role === 'BOT' ? ` · ${msg.responseTime}ms` : ''}
                       </p>
+                      {msg.metadata?.sender === 'human' && msg.metadata.deliveryStatus === 'failed' && (
+                        <div className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-red-500/10 border border-red-500/20 px-2 py-1.5">
+                          <AlertTriangle className="h-3 w-3 text-red-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-medium text-red-300">No se pudo enviar al cliente</p>
+                            {msg.metadata.deliveryError && (
+                              <p className="text-[10px] text-red-300/80">{msg.metadata.deliveryError}</p>
+                            )}
+                            <button
+                              onClick={() => handleRetryDelivery(msg.id)}
+                              disabled={retryingId !== null}
+                              className="mt-1 text-[10px] text-red-200 underline hover:text-white disabled:opacity-50 flex items-center gap-1"
+                            >
+                              {retryingId === msg.id && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                              Reintentar
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -331,6 +968,84 @@ export default function ConversacionesPage() {
               {/* Reply input */}
               {detail.status !== 'CLOSED' && (
                 <div className="p-3 border-t border-slate-700/50">
+                  {/* Copiloto IA: resumen + respuesta sugerida para el agente */}
+                  <div className="mb-2">
+                    {!copilot && (
+                      <button
+                        onClick={handleCopilot}
+                        disabled={copilotLoading}
+                        className="btn-secondary text-xs py-1.5 w-full justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Pedí a la IA un resumen de la charla y una respuesta sugerida"
+                      >
+                        {copilotLoading ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> El copiloto está pensando...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5 text-brand-400" /> Copiloto IA · resumir y sugerir respuesta
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {copilot && (
+                      <div className="rounded-xl border border-brand-400/25 bg-brand-400/5 p-3 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 text-[11px] font-semibold text-brand-400 uppercase tracking-wide">
+                            <Sparkles className="h-3.5 w-3.5" /> Copiloto IA
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={handleCopilot}
+                              disabled={copilotLoading}
+                              className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 disabled:opacity-50"
+                              title="Regenerar"
+                            >
+                              {copilotLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                              Regenerar
+                            </button>
+                            <button
+                              onClick={() => setCopilot(null)}
+                              className="text-slate-500 hover:text-white ml-1"
+                              title="Cerrar copiloto"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {copilot.summary && (
+                          <div>
+                            <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Resumen</p>
+                            <p className="text-xs text-slate-200 whitespace-pre-wrap">{copilot.summary}</p>
+                          </div>
+                        )}
+
+                        {copilot.suggestedReply && (
+                          <div>
+                            <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Respuesta sugerida</p>
+                            <p className="text-xs text-slate-200 whitespace-pre-wrap rounded-lg bg-slate-800/60 border border-slate-700/50 px-2.5 py-2">
+                              {copilot.suggestedReply}
+                            </p>
+                            <div className="flex items-center gap-2 mt-2">
+                              <button
+                                onClick={() => {
+                                  setReplyText(copilot.suggestedReply);
+                                  inputRef.current?.focus();
+                                }}
+                                className="btn-primary text-xs py-1"
+                              >
+                                <Check className="h-3 w-3" /> Usar esta respuesta
+                              </button>
+                              <span className="text-[10px] text-slate-500">Podés editarla antes de enviar.</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex items-center gap-2">
                     <input
                       ref={inputRef}
@@ -353,6 +1068,134 @@ export default function ConversacionesPage() {
                 </div>
               )}
             </>
+          )}
+          </div>
+
+          {/* Details / side panel */}
+          {selectedId && detail && showDetails && (
+            <div className="hidden lg:flex w-72 shrink-0 flex-col border-l border-slate-700/50 bg-slate-900/40 overflow-y-auto">
+              {/* Intención de compra (lead scoring) */}
+              <div className="p-4 border-b border-slate-700/50">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 mb-2">
+                  <Flame className="h-3 w-3" /> Intención de compra
+                </p>
+                {detail.metadata?.leadScore ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`badge border text-[9px] ${TEMP_STYLE[detail.metadata.leadScore.temperature].class}`}>
+                        {TEMP_STYLE[detail.metadata.leadScore.temperature].label}
+                      </span>
+                      <span className="text-xs font-semibold text-white">{detail.metadata.leadScore.score}/100</span>
+                    </div>
+                    {detail.metadata.leadScore.reason && (
+                      <p className="text-xs text-slate-300 whitespace-pre-wrap">{detail.metadata.leadScore.reason}</p>
+                    )}
+                    <p className="text-[9px] text-slate-600">Calculado hace {timeAgo(detail.metadata.leadScore.at)}</p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-600">Todavía no se midió. Usá &quot;Medir interés&quot; arriba.</p>
+                )}
+                <button
+                  onClick={handleLeadScore}
+                  disabled={scoring}
+                  className="mt-2 w-full btn-secondary text-xs py-1.5 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {scoring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  {detail.metadata?.leadScore ? 'Recalcular' : 'Medir ahora'}
+                </button>
+              </div>
+
+              {/* Asignación */}
+              <div className="p-4 border-b border-slate-700/50">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 mb-2">
+                  <UserPlus className="h-3 w-3" /> Asignado a
+                </p>
+                <select
+                  value={detail.metadata?.assignedTo ?? ''}
+                  onChange={(e) => handleAssign(e.target.value)}
+                  className="w-full rounded-lg border border-slate-600 bg-slate-700/50 px-2 py-1.5 text-xs text-white focus:border-brand-400/50 focus:outline-none"
+                >
+                  <option value="">Sin asignar</option>
+                  {team.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                {team.length === 0 && (
+                  <p className="text-[10px] text-slate-600 mt-1.5">No hay miembros del equipo cargados.</p>
+                )}
+              </div>
+
+              {/* Etiquetas */}
+              <div className="p-4 border-b border-slate-700/50">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 mb-2">
+                  <Tag className="h-3 w-3" /> Etiquetas
+                </p>
+                <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                  {detailTags.length === 0 && <span className="text-[10px] text-slate-600">Sin etiquetas.</span>}
+                  {detailTags.map((tag) => (
+                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-brand-400/10 text-brand-400 border border-brand-400/20 flex items-center gap-1">
+                      #{tag}
+                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-white">
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddTag()}
+                    placeholder="Nueva etiqueta..."
+                    maxLength={40}
+                    className="flex-1 rounded-lg border border-slate-600 bg-slate-700/50 px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-brand-400/50 focus:outline-none"
+                  />
+                  <button
+                    onClick={handleAddTag}
+                    disabled={savingTag || !tagInput.trim()}
+                    className="h-7 w-7 rounded-lg bg-brand-400 hover:bg-brand-500 flex items-center justify-center text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                  >
+                    {savingTag ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Notas internas */}
+              <div className="p-4 flex-1">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1.5 mb-2">
+                  <StickyNote className="h-3 w-3" /> Notas internas
+                </p>
+                <div className="space-y-2 mb-3">
+                  {notes.length === 0 && <span className="text-[10px] text-slate-600">Sin notas todavía.</span>}
+                  {notes.map((note, i) => (
+                    <div key={i} className="rounded-lg bg-amber-500/5 border border-amber-500/15 px-2.5 py-2">
+                      <p className="text-xs text-slate-200 whitespace-pre-wrap">{note.text}</p>
+                      <p className="text-[9px] text-slate-500 mt-1">
+                        {note.byName ? `${note.byName} · ` : ''}
+                        {new Date(note.at).toLocaleString('es-AR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <textarea
+                  value={noteInput}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  placeholder="Escribí una nota privada del equipo..."
+                  rows={3}
+                  maxLength={2000}
+                  className="w-full rounded-lg border border-slate-600 bg-slate-700/50 px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-brand-400/50 focus:outline-none resize-none"
+                />
+                <button
+                  onClick={handleAddNote}
+                  disabled={savingNote || !noteInput.trim()}
+                  className="mt-2 w-full btn-secondary text-xs py-1.5 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {savingNote ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Agregar nota
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </div>

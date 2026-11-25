@@ -37,6 +37,8 @@ export function useSuperpowers(): UseSuperpowersResult {
               description: s.description,
               icon: match?.icon ?? SUPERPOWERS[0].icon,
               isActive: s.isActive,
+              params: s.params,
+              paramSpecs: s.paramSpecs,
             };
           });
           setSuperpowers(mapped);
@@ -44,8 +46,9 @@ export function useSuperpowers(): UseSuperpowersResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar superpoderes');
-          // Fallback a datos mock cuando la API no está disponible.
-          setSuperpowers(SUPERPOWERS);
+          // Sin datos falsos: ante un error mostramos el ErrorAlert y lista vacía,
+          // no superpoderes simulados. SUPERPOWERS se usa solo para mapear íconos.
+          setSuperpowers([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);

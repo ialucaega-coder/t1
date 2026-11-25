@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireStaff } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { asyncHandler } from '../middleware/errorHandler';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { createNotificationSchema, CreateNotificationInput } from '../validators/notifications';
 
@@ -62,13 +62,21 @@ router.get(
   })
 );
 
-// POST /api/notifications — Crear notificación
+// POST /api/notifications — Crear notificación (solo staff). El destinatario tiene
+// que ser un usuario DE ESTE negocio: sin el chequeo se podía crear una
+// notificación a un usuario de otro negocio (con el businessId del que la crea).
 router.post(
   '/',
   requireAuth,
+  requireStaff,
   validate(createNotificationSchema),
   asyncHandler(async (req, res) => {
     const data = req.body as CreateNotificationInput;
+    const recipient = await prisma.user.findFirst({
+      where: { id: data.userId, businessId: req.auth!.businessId },
+      select: { id: true },
+    });
+    if (!recipient) throw new AppError(404, 'El destinatario no pertenece a este negocio');
     const notification = await prisma.notification.create({
       data: { ...data, businessId: req.auth!.businessId },
     });
@@ -102,16 +110,26 @@ router.patch(
   })
 );
 
+/**
+ * Marca UNA notificación como leída: solo las del propio usuario (userId en el
+ * where, además del negocio). Antes bastaba con que fuera del negocio, así que un
+ * miembro podía marcar como leídas las notificaciones de otro.
+ */
+async function markOneRead(id: string, businessId: string, userId: string) {
+  const result = await prisma.notification.updateMany({
+    where: { id, businessId, userId },
+    data: { isRead: true },
+  });
+  if (result.count === 0) throw new AppError(404, 'Notificación no encontrada');
+  return prisma.notification.findFirst({ where: { id, businessId, userId } });
+}
+
 // PUT /api/notifications/:id/read — Marcar una como leída
 router.put(
   '/:id/read',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const notification = await prisma.notification.update({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
-      data: { isRead: true },
-    });
-    res.json(notification);
+    res.json(await markOneRead(String(req.params.id), req.auth!.businessId, req.auth!.userId));
   })
 );
 
@@ -120,11 +138,7 @@ router.patch(
   '/:id/read',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const notification = await prisma.notification.update({
-      where: { id: String(req.params.id), businessId: req.auth!.businessId },
-      data: { isRead: true },
-    });
-    res.json(notification);
+    res.json(await markOneRead(String(req.params.id), req.auth!.businessId, req.auth!.userId));
   })
 );
 

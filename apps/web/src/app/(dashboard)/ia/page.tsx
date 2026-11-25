@@ -1,26 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Bot, Sparkles, Send, Loader2, CheckCircle2, XCircle, Copy, Check } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Sparkles, Send, Loader2, Copy, Check, Save, RefreshCw } from 'lucide-react';
 import * as aiApi from '@/lib/api/ai';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { ErrorAlert } from '@/components/common/ErrorAlert';
-import type { AIProviderStatus, AIProvidersResponse, ChatTurn } from '@/types';
+import type { ChatTurn } from '@/types';
+import { useToast } from '@/components/common/Toast';
+import { MotorDeIA } from './MotorDeIA';
+import { UsageFinOps } from './UsageFinOps';
+import { SpendCapCard } from '@/components/ai/SpendCapCard';
 
-// Metadata solo visual (nombre lindo, descripción, colores) para cada proveedor
-// soportado por el backend. El estado real (configurado o no) viene de la API.
-const PROVIDER_META: Record<string, { label: string; description: string; color: string }> = {
-  anthropic: {
-    label: 'Claude (Anthropic)',
-    description: 'El modelo detrás de este mismo panel — gran balance de calidad y costo.',
-    color: 'from-amber-500/10 to-amber-600/5',
-  },
-  openai: {
-    label: 'ChatGPT (OpenAI)',
-    description: 'La IA más conocida — modelos rápidos y económicos para volumen alto.',
-    color: 'from-green-500/10 to-green-600/5',
-  },
-};
+/** Topes del server para el chat de prueba (routes/ai.ts). */
+const MAX_CHAT_TEXT = 4000;
+const MAX_CHAT_HISTORY = 20;
 
 export default function IAPage() {
   return (
@@ -29,104 +20,52 @@ export default function IAPage() {
         <p className="mono-label mb-1">CONFIGURACIÓN DE IA</p>
         <h3 className="text-lg font-bold text-white mb-2">El cerebro de tu bot</h3>
         <p className="text-sm text-slate-400">
-          Acá ves qué proveedores de IA están conectados, editás el prompt de sistema que define
-          cómo se comporta tu bot, y podés probarlo con un mensaje real antes de publicarlo.
+          Elegí el motor de IA que responde a tus clientes, cargá tus API keys, editás el prompt de
+          sistema que define cómo se comporta tu bot, y probalo con un mensaje real antes de publicarlo.
         </p>
       </div>
 
-      <ProvidersSection />
+      <MotorDeIA />
+      <UsageFinOps />
+      <SpendCapCard />
       <PromptEditorSection />
       <TestChatSection />
     </div>
   );
 }
 
-/** Sección: estado de los proveedores de IA configurados en el backend. */
-function ProvidersSection() {
-  const [providers, setProviders] = useState<AIProviderStatus[]>([]);
-  const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // Carga el estado de los proveedores al montar el componente.
-    aiApi
-      .getProviders()
-      .then((res: AIProvidersResponse) => {
-        if (cancelled) return;
-        setProviders(res.providers);
-        setDefaultProvider(res.defaultProvider);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'No se pudo cargar el estado de los proveedores');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div>
-      <p className="mono-label mb-2">PROVEEDORES</p>
-      <h3 className="text-lg font-bold text-white mb-4">Estado de conexión</h3>
-
-      {loading && <LoadingSpinner label="Cargando IA..." />}
-
-      {error && <ErrorAlert message={error} />}
-
-      {!loading && !error && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {providers.map((provider) => {
-            const meta = PROVIDER_META[provider.name] ?? {
-              label: provider.name,
-              description: '',
-              color: 'from-slate-500/10 to-slate-600/5',
-            };
-            const isDefault = defaultProvider === provider.name;
-            return (
-              <div key={provider.name} className={`card-accent bg-gradient-to-br ${meta.color}`}>
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface">
-                    <Bot className="h-5 w-5 text-brand-400" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-white">{meta.label}</h4>
-                    <p className="text-xs text-slate-400">{meta.description}</p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  {provider.configured ? (
-                    <span className="badge-active flex items-center gap-1">
-                      <CheckCircle2 className="h-3 w-3" /> CONECTADO
-                    </span>
-                  ) : (
-                    <span className="badge text-slate-500 border border-slate-700 flex items-center gap-1">
-                      <XCircle className="h-3 w-3" /> SIN CONFIGURAR
-                    </span>
-                  )}
-                  {isDefault && <span className="badge-premium">POR DEFECTO</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** Sección: editor del prompt de sistema, con generación automática desde los datos del negocio. */
 function PromptEditorSection() {
+  const { toast } = useToast();
   const [prompt, setPrompt] = useState('');
   const [tone, setTone] = useState<'formal' | 'amigable' | 'directo'>('amigable');
   const [generating, setGenerating] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Estado de la carga del prompt guardado. Si falla, NO se puede guardar: el editor
+  // quedaría vacío y un "Guardar" pisaría el prompt real del negocio con texto vacío.
+  const [loadState, setLoadState] = useState<'loading' | 'ok' | 'error'>('loading');
+  const [loadError, setLoadError] = useState('');
+  const [loadToken, setLoadToken] = useState(0);
+
+  // Carga el prompt de sistema guardado del negocio al montar (y al reintentar).
+  useEffect(() => {
+    let cancelled = false;
+    setLoadState('loading');
+    aiApi.getSystemPrompt()
+      .then((res) => {
+        if (cancelled) return;
+        setPrompt(res.prompt ?? '');
+        setLoadState('ok');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(err instanceof Error && err.message ? err.message : 'No se pudo cargar el prompt guardado');
+        setLoadState('error');
+      });
+    return () => { cancelled = true; };
+  }, [loadToken]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -138,6 +77,22 @@ function PromptEditorSection() {
       setError(err instanceof Error ? err.message : 'No se pudo generar el prompt');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (loadState !== 'ok') return;
+    setSaving(true);
+    setError(null);
+    try {
+      await aiApi.saveSystemPrompt(prompt);
+      toast({ type: 'success', message: 'Prompt de sistema guardado — tu bot ya lo usa' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'No se pudo guardar el prompt';
+      setError(msg);
+      toast({ type: 'error', message: msg });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -165,12 +120,28 @@ function PromptEditorSection() {
             <option value="formal">Tono formal</option>
             <option value="directo">Tono directo</option>
           </select>
-          <button className="btn-primary text-xs py-1.5" onClick={handleGenerate} disabled={generating}>
+          <button className="btn-secondary text-xs py-1.5" onClick={handleGenerate} disabled={generating}>
             {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             Generar desde mi negocio
           </button>
+          <button className="btn-primary text-xs py-1.5" onClick={handleSave} disabled={saving || loadState !== 'ok'}>
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Guardar
+          </button>
         </div>
       </div>
+
+      {loadState === 'error' && (
+        <div role="alert" className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <span>
+            No se pudo cargar el prompt guardado ({loadError}). Para no pisarlo con un texto vacío, el guardado
+            está bloqueado hasta que cargue.
+          </span>
+          <button className="btn-secondary text-xs py-1 px-2 shrink-0" onClick={() => setLoadToken((t) => t + 1)}>
+            <RefreshCw className="h-3 w-3" /> Reintentar
+          </button>
+        </div>
+      )}
 
       {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
 
@@ -210,6 +181,9 @@ function TestChatSection() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Conversación de la bandeja creada por el primer mensaje: se reenvía en los siguientes
+  // para que todo el chat de prueba quede en UNA conversación (antes se abría una por mensaje).
+  const conversationIdRef = useRef<string | undefined>(undefined);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -222,7 +196,9 @@ function TestChatSection() {
     setError(null);
 
     try {
-      const res = await aiApi.sendChatMessage(text, messages);
+      // El server acepta como máximo 20 turnos de historial de 4000 caracteres cada uno.
+      const res = await aiApi.sendChatMessage(text, messages.slice(-MAX_CHAT_HISTORY), conversationIdRef.current);
+      if (res.conversationId) conversationIdRef.current = res.conversationId;
       setMessages([...nextHistory, { role: 'assistant', content: res.text }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo enviar el mensaje');
@@ -271,6 +247,7 @@ function TestChatSection() {
           <input
             className="input"
             placeholder="Escribí un mensaje de prueba..."
+            maxLength={MAX_CHAT_TEXT}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {

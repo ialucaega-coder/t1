@@ -4,7 +4,7 @@ import {
   MessageCircle, Bot, Sparkles, BarChart3, Users,
   PaintBucket, TrendingUp, Store, Trophy, Building2, UserCheck,
   Settings, CreditCard, Calendar, ShoppingBag, Shield,
-  Map, Megaphone, DollarSign,
+  Map, Megaphone, DollarSign, Phone, Images, Workflow, FileCheck,
 } from 'lucide-react';
 
 export type NavItem = {
@@ -30,7 +30,11 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Novedades', href: '/novedades', icon: Bell },
       { name: 'Conexiones', href: '/conexiones', icon: Link2 },
       { name: 'Plantillas WhatsApp', href: '/plantillas', icon: MessageCircle },
+      { name: 'Plantillas HSM', href: '/plantillas-oficiales', icon: FileCheck, badge: 'new' },
       { name: 'IA', href: '/ia', icon: Bot },
+      { name: 'Asistente de Voz', href: '/asistente-voz', icon: Phone, badge: 'new' },
+      { name: 'Voz de Marca', href: '/voz-de-marca', icon: Megaphone, badge: 'new' },
+      { name: 'Galería', href: '/galeria', icon: Images, badge: 'new' },
       { name: 'Conversaciones', href: '/conversaciones', icon: MessageCircle },
     ],
   },
@@ -39,12 +43,14 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { name: 'Superpoderes', href: '/superpoderes', icon: Shield, badge: 'active' },
       { name: 'Análisis', href: '/analisis', icon: BarChart3, badge: 'active' },
-      { name: 'Plantillas', href: '/plantillas-negocio', icon: Store, badge: 'active' },
+      { name: 'Bots por giro', href: '/plantillas-negocio', icon: Store, badge: 'active' },
       { name: 'Equipo', href: '/equipo', icon: Users, badge: 'new' },
       { name: 'White-label', href: '/whitelabel', icon: PaintBucket, badge: 'active' },
       { name: 'Estadísticas', href: '/estadisticas', icon: TrendingUp, badge: 'active' },
       { name: 'Marketplace', href: '/marketplace', icon: Map, badge: 'active' },
       { name: 'Campañas', href: '/campanas', icon: Megaphone, badge: 'new' },
+      { name: 'Automatizaciones', href: '/workflows', icon: Workflow, badge: 'new' },
+      { name: 'Oficina Mr Go', href: '/oficina', icon: Building2, badge: 'new' },
       { name: 'Arena', href: '/arena', icon: Trophy, badge: 'prizes' },
     ],
   },
@@ -57,6 +63,7 @@ export const NAVIGATION: NavGroup[] = [
       { name: 'Órdenes', href: '/ordenes', icon: ShoppingBag },
       { name: 'Movimientos', href: '/movimientos', icon: DollarSign },
       { name: 'POS / Caja', href: '/pos', icon: CreditCard, badge: 'new' },
+      { name: 'Cobros', href: '/cobros', icon: DollarSign, badge: 'new' },
       { name: 'Clientes', href: '/clientes', icon: UserCheck },
     ],
   },
@@ -71,6 +78,15 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { name: 'Configuración', href: '/configuracion', icon: Settings },
       { name: 'Facturación', href: '/facturacion', icon: CreditCard },
+    ],
+  },
+  {
+    // Panel del dueño de la plataforma (super admin). El acceso real lo corta el
+    // backend por allowlist de email (PLATFORM_ADMIN_EMAILS); a quien no esté en
+    // la lista, la página le muestra "Acceso restringido".
+    label: 'PLATAFORMA',
+    items: [
+      { name: 'Super Admin', href: '/plataforma', icon: Shield },
     ],
   },
 ];

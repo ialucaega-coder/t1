@@ -28,12 +28,22 @@ export function PaymentModal({ total, items, clientName, discount, onClose, onCo
   const [processing, setProcessing] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [receiptId, setReceiptId] = useState('');
+  const [error, setError] = useState('');
+  // Clave de idempotencia estable para ESTA venta: si el cobro se reintenta
+  // (doble click, corte de red), el backend no duplica el movimiento. Se genera
+  // una vez por montaje del modal (una por venta).
+  const [idempotencyKey] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 
   const cashAmount = Number(cashReceived) || 0;
   const change = method === 'CASH' ? cashAmount - total : 0;
 
   async function handlePay() {
     setProcessing(true);
+    setError('');
     try {
       const res = await httpClient.post<{ id: string }>('/transactions', {
         amount: total,
@@ -41,12 +51,18 @@ export function PaymentModal({ total, items, clientName, discount, onClose, onCo
         paymentMethod: method,
         notes: clientName ? `Cliente: ${clientName}` : undefined,
         reference: discount > 0 ? `Descuento ${discount}%` : undefined,
-      });
+      }, { 'Idempotency-Key': idempotencyKey });
       setReceiptId(res.id?.slice(-8)?.toUpperCase() || 'OK');
       setCompleted(true);
-    } catch {
-      setReceiptId('LOCAL');
-      setCompleted(true);
+    } catch (err) {
+      // El cobro NO se registró: no mostramos "Venta completada". El carrito
+      // queda intacto y el botón sigue habilitado para reintentar; la misma
+      // Idempotency-Key evita duplicar el movimiento si el server sí lo grabó.
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'No se pudo registrar el cobro. Revisá tu conexión e intentá de nuevo.'
+      );
     } finally {
       setProcessing(false);
     }
@@ -169,13 +185,28 @@ export function PaymentModal({ total, items, clientName, discount, onClose, onCo
               </div>
             )}
 
+            {error && (
+              <div
+                role="alert"
+                className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400"
+              >
+                <p className="font-semibold">No se pudo registrar el cobro</p>
+                <p className="mt-0.5">{error}</p>
+                <p className="mt-1 text-red-400/70">La venta sigue en el carrito. Podés reintentar.</p>
+              </div>
+            )}
+
             {/* Botón cobrar */}
             <button
               onClick={handlePay}
               disabled={processing || (method === 'CASH' && cashAmount > 0 && cashAmount < total)}
               className="btn-primary w-full justify-center text-sm py-3 disabled:opacity-40"
             >
-              {processing ? 'Procesando...' : `Cobrar $${total.toLocaleString('es-AR')}`}
+              {processing
+                ? 'Procesando...'
+                : error
+                  ? `Reintentar cobro $${total.toLocaleString('es-AR')}`
+                  : `Cobrar $${total.toLocaleString('es-AR')}`}
             </button>
           </div>
         )}

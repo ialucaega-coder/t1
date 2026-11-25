@@ -24,6 +24,8 @@ export interface ChatbotResponse {
   text: string;
   intent: ChatIntent;
   actions: ChatAction[];
+  /** Conversación de la bandeja donde se guardó el intercambio (reenviarla para seguir en la misma). */
+  conversationId?: string;
 }
 
 export interface GeneratePromptResponse {

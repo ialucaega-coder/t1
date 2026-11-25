@@ -1,16 +1,43 @@
 /**
  * Proveedor de IA usando ChatGPT (OpenAI).
  *
- * NOTA: este archivo importa el SDK 'openai', que todavía NO está instalado
- * en package.json. Hay que agregarlo con:
- *   npm install openai --workspace=apps/server
- * hasta entonces, `tsc --noEmit` va a fallar al no encontrar el módulo.
+ * El SDK 'openai' está instalado en el monorepo. Este proveedor soporta el
+ * superpoder "Oído y vista" (visión): los modelos gpt-4o / gpt-4o-mini aceptan
+ * imágenes por URL o base64 como parte del contenido del mensaje del usuario.
  */
 import OpenAI from 'openai';
-import type { AIProvider, AIProviderConfig, ConversationContext } from '../provider';
+import type { AIProvider, AIProviderConfig, ConversationContext, ImageInput } from '../provider';
+import { LLM_TIMEOUT_MS } from '../provider';
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_MAX_TOKENS = 1024;
+
+/** Content-type por defecto para imágenes base64 si el caller no lo especifica. */
+const DEFAULT_IMAGE_MIME = 'image/jpeg';
+
+/**
+ * Arma el contenido del mensaje del usuario para la API de OpenAI. Si no hay
+ * imágenes, devuelve el texto plano; si las hay, devuelve el arreglo de partes
+ * (texto + image_url), usando data-URL para base64 y la URL directa si vino URL.
+ */
+function buildUserContent(
+  prompt: string,
+  images?: ImageInput[],
+): string | OpenAI.Chat.Completions.ChatCompletionContentPart[] {
+  if (!images || images.length === 0) return prompt;
+
+  const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+  for (const img of images) {
+    if (img.url) {
+      parts.push({ type: 'image_url', image_url: { url: img.url } });
+    } else if (img.base64) {
+      const mime = img.mediaType || DEFAULT_IMAGE_MIME;
+      parts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${img.base64}` } });
+    }
+  }
+  parts.push({ type: 'text', text: prompt });
+  return parts;
+}
 
 export class OpenAIProvider implements AIProvider {
   name = 'openai';
@@ -21,7 +48,18 @@ export class OpenAIProvider implements AIProvider {
   private temperature: number;
 
   constructor(config: AIProviderConfig) {
-    this.client = new OpenAI({ apiKey: config.apiKey });
+    // baseURL permite apuntar a cualquier API compatible con OpenAI (Groq,
+    // DeepSeek, Mistral, Together, Perplexity, Cohere, Gemini, Ollama, LM Studio).
+    // Sin timeout explícito el SDK espera hasta 10 min por request: un proveedor
+    // lento dejaría handlers colgados y saturaría el event loop. Los modelos
+    // locales (Ollama/LM Studio) son más lentos, así que tienen más margen.
+    const isLocal = Boolean(config.baseURL && /\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(config.baseURL));
+    this.client = new OpenAI({
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+      timeout: isLocal ? 120_000 : LLM_TIMEOUT_MS,
+      maxRetries: 1,
+    });
     this.model = config.model || DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.temperature = config.temperature ?? 0.7;
@@ -30,12 +68,15 @@ export class OpenAIProvider implements AIProvider {
   /**
    * Genera una respuesta usando la API de Chat Completions de OpenAI.
    * El prompt de sistema se manda como primer mensaje con role "system".
+   * Si el contexto trae imágenes (superpoder "Oído y vista"), se adjuntan al
+   * mensaje del usuario como partes multimodales (requiere un modelo con visión,
+   * ej: gpt-4o / gpt-4o-mini).
    */
   async generateResponse(prompt: string, context: ConversationContext): Promise<string> {
-    const messages = [
-      { role: 'system' as const, content: context.systemPrompt },
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      { role: 'system', content: context.systemPrompt },
       ...context.history.map((turn) => ({ role: turn.role, content: turn.content })),
-      { role: 'user' as const, content: prompt },
+      { role: 'user', content: buildUserContent(prompt, context.images) },
     ];
 
     const response = await this.client.chat.completions.create({
@@ -43,6 +84,14 @@ export class OpenAIProvider implements AIProvider {
       max_tokens: this.maxTokens,
       temperature: this.temperature,
       messages,
+    });
+
+    // FinOps: registramos el consumo real de tokens que reporta la API.
+    context.recordUsage?.({
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+      model: this.model,
+      provider: this.name,
     });
 
     return response.choices[0]?.message?.content ?? '';

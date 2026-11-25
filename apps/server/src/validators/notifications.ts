@@ -15,9 +15,9 @@ const notificationChannelEnum = z.enum(['EMAIL', 'WHATSAPP', 'TELEGRAM', 'SMS', 
 export const createNotificationSchema = z.object({
   type: notificationTypeEnum,
   channel: notificationChannelEnum,
-  title: z.string().min(1),
-  body: z.string().min(1),
-  userId: z.string().min(1),
+  title: z.string().trim().min(1).max(120),
+  body: z.string().trim().min(1).max(2000),
+  userId: z.string().min(1).max(60),
 });
 
 export type CreateNotificationInput = z.infer<typeof createNotificationSchema>;

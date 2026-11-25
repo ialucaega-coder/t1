@@ -1,8 +1,25 @@
 import { Router } from 'express';
-import { requireAuth } from '../middleware/auth';
+import crypto from 'crypto';
+import { requireAuth, requireRole, requireStaff } from '../middleware/auth';
+import { requireCapability } from '../middleware/capability';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { encrypt, safeDecrypt } from '../lib/crypto';
 import { createBot, stopBot, setWebhook, handleUpdate, getBotInfo } from '../services/telegram/bot';
+import { defineQueue, enqueue } from '../lib/queue';
+import { INBOUND_RETRY } from '../services/channels/inboundRetry';
+
+/** Comparación en tiempo constante de dos strings (evita timing attacks). */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  try {
+    return crypto.timingSafeEqual(ba, bb);
+  } catch {
+    return false;
+  }
+}
 
 // ────────────────────────────────────────────────────────────────
 // Rutas de Telegram
@@ -14,6 +31,57 @@ import { createBot, stopBot, setWebhook, handleUpdate, getBotInfo } from '../ser
 // ────────────────────────────────────────────────────────────────
 
 const router = Router();
+
+// ────────────────────────────────────────────────────────────────
+// Cola de updates. El procesamiento (LLM + respuesta por la API del bot) corre en un
+// worker: el webhook responde 200 enseguida (Telegram reintenta el update si tarda) y
+// el trabajo se reparte entre instancias. El token del bot NO viaja por la cola: el
+// worker relee la conexión y lo descifra.
+// ────────────────────────────────────────────────────────────────
+const TELEGRAM_UPDATE_QUEUE = 'telegram-update';
+
+interface TelegramUpdateJob {
+  businessId: string;
+  update: unknown;
+}
+
+type TelegramConfig = { botToken?: string; botTokenEnc?: string; webhookSecret?: string } | null;
+
+/** Token del bot (descifrado si está cifrado en reposo), o undefined si no se puede leer. */
+function readBotToken(config: TelegramConfig): string | undefined {
+  try {
+    return config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Procesa un update de Telegram. Reintentos (criterio de services/channels/
+ * inboundRetry.ts): la lectura de la conexión corre ANTES de que el bot haga nada,
+ * así que un fallo ahí (DB caída un instante) se relanza y la cola reintenta con
+ * backoff. Un fallo dentro de `handleUpdate` NO se reintenta: el bot pudo haber
+ * contestado ya (varios pasos/mensajes por update) y repetirlo le respondería dos
+ * veces al cliente. El dedupe por `update_id` evita procesar el mismo update dos veces.
+ */
+export async function processTelegramUpdate({ businessId, update }: TelegramUpdateJob): Promise<void> {
+  const connection = await prisma.connection.findFirst({
+    where: { businessId, type: 'TELEGRAM', isActive: true },
+    orderBy: { id: 'asc' },
+  });
+  if (!connection) return; // se desconectó mientras el update esperaba en la cola
+
+  try {
+    // Con varias instancias, la que procesa puede no tener el bot en memoria y lo arma
+    // al vuelo con este token.
+    await handleUpdate(businessId, update as never, readBotToken(connection.config as TelegramConfig));
+  } catch (error) {
+    // No se reintenta: repetir un update podría contestarle dos veces al cliente.
+    console.error(`Error procesando update de Telegram para ${businessId}:`, error);
+  }
+}
+
+defineQueue<TelegramUpdateJob>(TELEGRAM_UPDATE_QUEUE, processTelegramUpdate, { concurrency: 10 });
 
 /**
  * POST /api/telegram/webhook/:businessId
@@ -29,6 +97,7 @@ router.post(
     // Verificar que la conexión existe y está activa
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM', isActive: true },
+      orderBy: { id: 'asc' },
     });
 
     if (!connection) {
@@ -37,18 +106,39 @@ router.post(
       return;
     }
 
-    // Validar token del webhook contra el botToken almacenado
-    const config = connection.config as { botToken?: string } | null;
-    if (!queryToken || !config?.botToken || queryToken !== config.botToken) {
+    const config = connection.config as { botToken?: string; botTokenEnc?: string; webhookSecret?: string } | null;
+
+    // Autenticación del webhook. Esquema nuevo: Telegram reenvía el secret_token
+    // en el header X-Telegram-Bot-Api-Secret-Token (no se expone el botToken en la
+    // URL ni en logs). Fallback legado: token en query comparado (timing-safe)
+    // contra el botToken almacenado (descifrado si está cifrado), para conexiones
+    // creadas antes de este cambio.
+    let authed = false;
+    if (config?.webhookSecret) {
+      const headerSecret = req.header('x-telegram-bot-api-secret-token');
+      authed = !!headerSecret && timingSafeEqualStr(headerSecret, config.webhookSecret);
+    } else {
+      let stored: string | undefined;
+      try {
+        stored = config?.botTokenEnc ? safeDecrypt(config.botTokenEnc) : config?.botToken;
+      } catch {
+        stored = undefined;
+      }
+      authed = !!queryToken && !!stored && timingSafeEqualStr(queryToken, stored);
+    }
+    if (!authed) {
       res.status(403).json({ error: 'Invalid webhook token' });
       return;
     }
 
-    try {
-      await handleUpdate(businessId, req.body);
-    } catch (error) {
-      console.error(`Error procesando update de Telegram para ${businessId}:`, error);
-    }
+    // Encolamos el update (jobId por update_id: Telegram reenvía el mismo update si no
+    // recibe 200 a tiempo, y así no se procesa dos veces). Nunca lanza; sin Redis corre inline.
+    const updateId = (req.body as { update_id?: unknown } | undefined)?.update_id;
+    await enqueue<TelegramUpdateJob>(
+      TELEGRAM_UPDATE_QUEUE,
+      { businessId, update: req.body },
+      { ...(typeof updateId === 'number' ? { jobId: `tg_${businessId}_${updateId}` } : {}), ...INBOUND_RETRY },
+    );
 
     // Siempre responder 200 a Telegram
     res.status(200).json({ ok: true });
@@ -63,6 +153,8 @@ router.post(
 router.post(
   '/connect',
   requireAuth,
+  // Conectar/desconectar el bot cambia a dónde van los mensajes del negocio: solo ADMIN.
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const { botToken } = req.body;
     const businessId = req.auth!.businessId;
@@ -84,13 +176,16 @@ router.post(
       throw new AppError(400, 'Token de bot inválido. Verificá que el token sea correcto.');
     }
 
-    // Construir URL del webhook
+    // Secreto del webhook: se envía a Telegram como secret_token y vuelve en el
+    // header de cada update. Así NO ponemos el botToken en la URL (no se filtra
+    // en access logs / auditoría). URL sin query token.
+    const webhookSecret = crypto.randomBytes(32).toString('hex');
     const baseUrl = process.env.API_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:4000';
-    const webhookUrl = `${baseUrl}/api/telegram/webhook/${businessId}?token=${encodeURIComponent(botToken)}`;
+    const webhookUrl = `${baseUrl}/api/telegram/webhook/${businessId}`;
 
-    // Configurar webhook en Telegram
+    // Configurar webhook en Telegram (con secret_token)
     try {
-      await setWebhook(businessId, webhookUrl);
+      await setWebhook(businessId, webhookUrl, webhookSecret);
     } catch (error) {
       await stopBot(businessId);
       throw new AppError(500, 'No se pudo configurar el webhook. Verificá que la URL sea accesible públicamente.');
@@ -99,11 +194,15 @@ router.post(
     // Guardar o actualizar conexión en la DB
     const existingConnection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
+      orderBy: { id: 'asc' },
     });
 
     const config = {
-      botToken,
+      // botToken CIFRADO en reposo (ya no en claro). webhookSecret autentica el
+      // webhook entrante vía header (ya no hay token en la URL).
+      botTokenEnc: encrypt(botToken),
       webhookUrl,
+      webhookSecret,
       botUsername: bot.botInfo.username,
       botName: bot.botInfo.first_name,
       connectedAt: new Date().toISOString(),
@@ -149,16 +248,27 @@ router.post(
 router.delete(
   '/disconnect',
   requireAuth,
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
-    // Detener el bot
-    await stopBot(businessId);
-
-    // Desactivar conexión en la DB
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
+      orderBy: { id: 'asc' },
     });
+
+    // Detener el bot. Se pasa el token por si el bot vive en OTRA instancia: así
+    // igual se borra el webhook en Telegram.
+    const cfg = connection?.config as { botToken?: string; botTokenEnc?: string } | null;
+    let token: string | undefined;
+    try {
+      token = cfg?.botTokenEnc ? safeDecrypt(cfg.botTokenEnc) : cfg?.botToken;
+    } catch {
+      token = undefined;
+    }
+    await stopBot(businessId, token);
+
+    // Desactivar conexión en la DB
 
     if (connection) {
       await prisma.connection.update({
@@ -178,11 +288,14 @@ router.delete(
 router.get(
   '/status',
   requireAuth,
+  requireStaff,
+  requireCapability('channels'),
   asyncHandler(async (req, res) => {
     const businessId = req.auth!.businessId;
 
     const connection = await prisma.connection.findFirst({
       where: { businessId, type: 'TELEGRAM' },
+      orderBy: { id: 'asc' },
     });
 
     if (!connection || !connection.isActive) {

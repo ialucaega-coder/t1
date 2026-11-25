@@ -13,12 +13,13 @@ router.get(
 
     const [services, products] = await Promise.all([
       prisma.service.findMany({
-        where: { businessId, isActive: true },
+        // deletedAt: null → los dados de baja (baja lógica) no se venden en el POS.
+        where: { businessId, isActive: true, deletedAt: null },
         select: { name: true, price: true },
         orderBy: { name: 'asc' },
       }),
       prisma.product.findMany({
-        where: { businessId, stock: { gt: 0 } },
+        where: { businessId, stock: { gt: 0 }, deletedAt: null },
         select: { name: true, price: true },
         orderBy: { name: 'asc' },
       }),

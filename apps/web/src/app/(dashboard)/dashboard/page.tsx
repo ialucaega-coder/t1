@@ -15,6 +15,10 @@ import { statsApi } from '@/lib/api/index';
 import type { DashboardStats } from '@/types';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
+import { OnboardingChecklist } from '@/components/dashboard/OnboardingChecklist';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 
 const CHANNEL_LABELS: Record<string, { label: string; color: string }> = {
   TELEGRAM: { label: 'Telegram', color: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
@@ -73,6 +77,8 @@ export default function DashboardPage() {
   const { overview, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useStats();
   const { bots, isLoading: botsLoading, error: botsError, refetch: refetchBots, createBot, updateBot, deleteBot } = useBots();
   const { business } = useAuth();
+  const { toast } = useToast();
+  const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   useSocket(business?.id ?? null);
   useSocketEvent('booking:created', () => {
     refetchStats();
@@ -81,17 +87,22 @@ export default function DashboardPage() {
   useSocketEvent('conversation:new-message', () => {
     statsApi.getDashboard().then(setDashboard).catch(() => {});
   });
-  const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newBotName, setNewBotName] = useState('');
   const [newBotChannel, setNewBotChannel] = useState<'TELEGRAM' | 'WHATSAPP' | 'WEBCHAT' | 'INSTAGRAM'>('WHATSAPP');
   const [newBotDesc, setNewBotDesc] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [botToDelete, setBotToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deletingBot, setDeletingBot] = useState(false);
 
   useEffect(() => {
     statsApi.getDashboard().then(setDashboard).catch(() => {});
   }, []);
+
+  // Contador vivo del header: cantidad real de bots (antes era '0 BOTS' fijo).
+  usePageCounter(botsLoading ? null : fmtCounter(bots.length, 'BOT', 'BOTS'));
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -105,22 +116,41 @@ export default function DashboardPage() {
   const handleCreate = async () => {
     if (!newBotName.trim()) return;
     setCreating(true);
+    setCreateError(null);
     try {
       await createBot({ name: newBotName.trim(), description: newBotDesc.trim() || null, channel: newBotChannel });
       setNewBotName('');
       setNewBotDesc('');
       setShowCreate(false);
-    } catch { /* error via hook */ }
+    } catch (err) {
+      // Mostramos el mensaje real del backend (p. ej. el 403 de límite de plan
+      // "Alcanzaste el máximo de bots de tu plan (N)"), no un genérico mudo.
+      setCreateError(err instanceof Error ? err.message : 'No se pudo crear el bot. Intentá de nuevo.');
+    }
     finally { setCreating(false); }
   };
 
   const handleToggleStatus = async (bot: { id: string; status: string }) => {
     const newStatus = bot.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
-    await updateBot(bot.id, { status: newStatus as any });
+    try {
+      await updateBot(bot.id, { status: newStatus as any });
+      toast({ type: 'success', message: newStatus === 'ACTIVE' ? 'Bot activado' : 'Bot pausado' });
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo cambiar el estado del bot' });
+    }
   };
 
   const handleDelete = async (id: string) => {
-    await deleteBot(id);
+    setDeletingBot(true);
+    try {
+      await deleteBot(id);
+      toast({ type: 'success', message: 'Bot eliminado' });
+      setBotToDelete(null);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error && err.message ? err.message : 'No se pudo eliminar el bot' });
+    } finally {
+      setDeletingBot(false);
+    }
   };
 
   if (isLoading) return <LoadingSpinner label="Cargando dashboard..." />;
@@ -131,6 +161,9 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       {error && <ErrorAlert message={error} onRetry={() => { refetchStats(); refetchBots(); }} />}
+
+      {/* Checklist de puesta en marcha (se auto-oculta al completarse o al descartarlo) */}
+      <OnboardingChecklist />
 
       {/* Quick Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -274,7 +307,7 @@ export default function DashboardPage() {
               </span>
             )}
           </div>
-          <button onClick={() => setShowCreate(!showCreate)} className="btn-primary text-xs">
+          <button onClick={() => { setShowCreate(!showCreate); setCreateError(null); }} className="btn-primary text-xs">
             <Plus className="h-3.5 w-3.5" /> Crear bot
           </button>
         </div>
@@ -303,8 +336,14 @@ export default function DashboardPage() {
                 <input type="text" value={newBotDesc} onChange={(e) => setNewBotDesc(e.target.value)} placeholder="Opcional" className="input w-full" />
               </div>
             </div>
+            {createError && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{createError}</span>
+              </div>
+            )}
             <div className="flex justify-end mt-3 gap-2">
-              <button onClick={() => setShowCreate(false)} className="btn-secondary text-xs">Cancelar</button>
+              <button onClick={() => { setShowCreate(false); setCreateError(null); }} className="btn-secondary text-xs">Cancelar</button>
               <button onClick={handleCreate} disabled={creating || !newBotName.trim()} className="btn-primary text-xs disabled:opacity-50">
                 {creating ? 'Creando...' : 'Crear bot'}
               </button>
@@ -373,7 +412,7 @@ export default function DashboardPage() {
                     <button onClick={() => handleToggleStatus(bot)} className="p-1.5 rounded-lg hover:bg-surface-100 text-slate-400 hover:text-white transition-colors" title={bot.status === 'ACTIVE' ? 'Pausar' : 'Activar'}>
                       {bot.status === 'ACTIVE' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                     </button>
-                    <button onClick={() => handleDelete(bot.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors" title="Eliminar">
+                    <button onClick={() => setBotToDelete({ id: bot.id, name: bot.name })} className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors" title="Eliminar" aria-label={`Eliminar bot ${bot.name}`}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -454,6 +493,17 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={botToDelete !== null}
+        onClose={() => setBotToDelete(null)}
+        onConfirm={() => botToDelete && handleDelete(botToDelete.id)}
+        title="¿Eliminar bot?"
+        message={`Vas a eliminar el bot "${botToDelete?.name ?? ''}" con su configuración. Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deletingBot}
+      />
     </div>
   );
 }

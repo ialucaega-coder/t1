@@ -13,6 +13,31 @@ export interface ConversationTurn {
 }
 
 /**
+ * Consumo de tokens reportado por el modelo en una generación (FinOps/telemetría).
+ * Lo devuelven los SDKs (Anthropic: input/output_tokens; OpenAI: prompt/completion).
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Modelo que generó la respuesta (ej: "claude-3-5-sonnet", "gpt-4o"). */
+  model?: string;
+  /** Familia de proveedor (ej: "anthropic", "openai"). */
+  provider?: string;
+}
+
+/**
+ * Imagen adjunta a un mensaje del usuario (superpoder "Oído y vista" — visión).
+ * Se puede pasar por URL pública (http/https) o por base64 embebido.
+ * `mediaType` es opcional para base64 (ej: "image/jpeg"); si no se pasa, se
+ * asume "image/jpeg". Para URLs no hace falta.
+ */
+export interface ImageInput {
+  url?: string;
+  base64?: string;
+  mediaType?: string;
+}
+
+/**
  * Contexto que se le pasa al proveedor de IA para generar una respuesta.
  * Incluye todo lo que el modelo necesita saber sobre el negocio y la charla.
  */
@@ -25,6 +50,19 @@ export interface ConversationContext {
   history: ConversationTurn[];
   /** Prompt de sistema que define la personalidad y reglas del bot. */
   systemPrompt: string;
+  /**
+   * Imágenes adjuntas al último mensaje del usuario (superpoder "Oído y vista").
+   * Solo los proveedores con soporte de visión (ej: Anthropic) las usan; los
+   * demás las ignoran de forma segura.
+   */
+  images?: ImageInput[];
+  /**
+   * Callback opcional para registrar el consumo de tokens de la generación
+   * (FinOps). El proveedor lo invoca con el `usage` real del SDK si está
+   * disponible. Opcional y sin estado compartido: evita acoplar el proveedor
+   * (cacheado y reusado entre requests) a la persistencia.
+   */
+  recordUsage?: (usage: TokenUsage) => void;
 }
 
 /**
@@ -56,4 +94,17 @@ export interface AIProviderConfig {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * URL base alternativa para APIs compatibles con OpenAI (Groq, DeepSeek,
+   * Mistral, Together, Perplexity, Cohere, Gemini, Ollama, LM Studio, etc.).
+   * Si no se pasa, el proveedor OpenAI usa el endpoint oficial.
+   */
+  baseURL?: string;
 }
+
+/**
+ * Timeout por request a un proveedor de IA (ms). Sin esto el SDK espera hasta
+ * 10 minutos y un proveedor lento cuelga handlers y satura el pool. Configurable
+ * con LLM_TIMEOUT_MS; default 30 s (suficiente para una respuesta de chat).
+ */
+export const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) > 0 ? Number(process.env.LLM_TIMEOUT_MS) : 30_000;

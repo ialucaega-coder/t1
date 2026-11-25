@@ -6,7 +6,8 @@ export interface Webhook {
   isActive: boolean;
   url: string;
   events: string[];
-  secret: string | null;
+  // El backend ya no devuelve el secret (se guarda cifrado); solo si está puesto.
+  hasSecret: boolean;
 }
 
 export function getWebhooks() {

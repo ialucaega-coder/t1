@@ -1,18 +1,24 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Search, UserPlus, Users, ChevronLeft, ChevronRight,
   Calendar, ShoppingBag, Mail, Phone, Clock, Trash2,
-  Edit3, X, User, Flame, Thermometer, Snowflake, Download,
+  Edit3, X, User, Flame, Thermometer, Snowflake, Download, Tag as TagIcon,
+  Sparkles, CreditCard, UserCheck,
 } from 'lucide-react';
 import { useClients, useClientDetail } from '@/hooks/use-clients';
 import * as clientsApi from '@/lib/api/clients';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ClientFormModal } from '@/components/clients/ClientFormModal';
+import { clientErrorMessage } from '@/components/clients/client-errors';
+import { TagChip, TagManager, ClientTagEditor } from '@/components/clients/ClientTags';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { useToast } from '@/components/common/Toast';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
+import type { ClientTag, LifecycleStage } from '@/types';
 
 type Interest = 'hot' | 'warm' | 'cold';
 
@@ -46,26 +52,79 @@ function formatDate(dateStr: string): string {
 
 export default function ClientesPage() {
   const [search, setSearch] = useState('');
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
+  const [showTagManager, setShowTagManager] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
   const { toast } = useToast();
 
-  const { clients, total, totalPages, isLoading, error, refetch } = useClients({
-    search: search || undefined,
+  // Debounce: el input responde al instante pero la API recibe la búsqueda recién
+  // 300 ms después de la última tecla (antes: un request por tecla).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1); // la página se reinicia junto con la búsqueda aplicada (un solo request)
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { clients, tagCatalog, total, totalPages, isLoading, error, refetch } = useClients({
+    search: debouncedSearch || undefined,
+    tagId: tagFilter || undefined,
     page,
   });
   const { detail, isLoading: detailLoading, refetchDetail } = useClientDetail(selectedId);
 
+  // Mapa id→etiqueta del catálogo, para pintar los chips de cada cliente.
+  const tagById = new Map<string, ClientTag>(tagCatalog.map((t) => [t.id, t]));
+
+  // Contador vivo del header: total real de clientes.
+  usePageCounter(isLoading ? null : fmtCounter(total, 'CLIENTE', 'CLIENTES'));
+
   async function handleCreate(data: { name: string; email: string; phone: string; notes: string }) {
+    let created: { id: string };
     try {
-      await clientsApi.createClient({ name: data.name, email: data.email, phone: data.phone || undefined });
-      refetch();
-      toast({ type: 'success', message: 'Cliente creado correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al crear cliente' });
+      created = await clientsApi.createClient({ name: data.name, email: data.email, phone: data.phone || undefined });
+    } catch (err) {
+      // Se relanza para que el modal siga abierto con lo que escribió el usuario y
+      // muestre el motivo real del server (409 email duplicado, 403 límite de plan, etc.).
+      throw new Error(clientErrorMessage(err, 'Error al crear cliente'));
     }
+    refetch();
+    // La nota interna vive en el CRM (PUT /clients/:id/note), no en POST /clients.
+    const note = data.notes.trim();
+    if (note) {
+      try {
+        await clientsApi.setClientNote(created.id, note);
+      } catch (err) {
+        toast({ type: 'error', message: `Cliente creado, pero no se pudo guardar la nota: ${clientErrorMessage(err, 'error desconocido')}` });
+        return;
+      }
+    }
+    toast({ type: 'success', message: 'Cliente creado correctamente' });
+  }
+
+  async function handleUpdate(data: { name: string; email: string; phone: string; notes: string }) {
+    if (!detail) return;
+    // El backend solo acepta name/phone en update (email es identidad del cliente).
+    try {
+      // Teléfono vacío = null: borra el teléfono (antes `|| undefined` lo dejaba como estaba).
+      await clientsApi.updateClient(detail.id, { name: data.name, phone: data.phone.trim() || null });
+      // La nota se guarda aparte (CRM), solo si cambió.
+      if (data.notes.trim() !== (detail.note ?? '').trim()) {
+        await clientsApi.setClientNote(detail.id, data.notes.trim());
+      }
+    } catch (err) {
+      throw new Error(clientErrorMessage(err, 'Error al actualizar cliente'));
+    }
+    refetch();
+    refetchDetail();
+    toast({ type: 'success', message: 'Cliente actualizado correctamente' });
   }
 
   async function handleDelete(id: string) {
@@ -75,12 +134,24 @@ export default function ClientesPage() {
       if (selectedId === id) setSelectedId(null);
       refetch();
       toast({ type: 'success', message: 'Cliente eliminado correctamente' });
-    } catch {
-      toast({ type: 'error', message: 'Error al eliminar cliente' });
+    } catch (err) {
+      const msg = clientErrorMessage(err, 'Error al eliminar cliente');
+      toast({
+        type: 'error',
+        message: msg === 'Insufficient permissions' ? 'Solo un administrador puede eliminar clientes' : msg,
+      });
     } finally {
       setDeleting(null);
+      setPendingDelete(null);
     }
   }
+
+  // Memoizado: ClientFormModal reinicia sus campos cuando `initial` cambia de
+  // identidad, y un objeto nuevo en cada render borraría lo que se está tipeando.
+  const editInitial = useMemo(
+    () => (detail ? { name: detail.name, email: detail.email, phone: detail.phone ?? '', notes: detail.note ?? '' } : undefined),
+    [detail],
+  );
 
   if (isLoading && clients.length === 0) return <LoadingSpinner label="Cargando clientes..." />;
 
@@ -98,7 +169,18 @@ export default function ClientesPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => clientsApi.exportCsv().catch(console.error)}
+            onClick={() => setShowTagManager((v) => !v)}
+            className={`btn-secondary text-xs ${showTagManager ? 'text-brand-400 border-brand-400/40' : ''}`}
+            title="Gestionar etiquetas"
+          >
+            <TagIcon className="h-3.5 w-3.5" /> Etiquetas
+          </button>
+          <button
+            onClick={() =>
+              clientsApi.exportCsv().catch((err) =>
+                toast({ type: 'error', message: clientErrorMessage(err, 'Error al exportar los clientes') })
+              )
+            }
             className="btn-secondary text-xs"
             title="Exportar CSV"
           >
@@ -110,6 +192,13 @@ export default function ClientesPage() {
         </div>
       </div>
 
+      {/* Gestor de catálogo de etiquetas (colapsable) */}
+      {showTagManager && (
+        <div className="card">
+          <TagManager tags={tagCatalog} onSaved={() => { refetch(); refetchDetail(); }} />
+        </div>
+      )}
+
       {/* Search */}
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
@@ -117,10 +206,34 @@ export default function ClientesPage() {
           type="text"
           placeholder="Buscar por nombre, email o teléfono..."
           value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          onChange={(e) => setSearch(e.target.value)}
           className="w-full rounded-lg border border-slate-700 bg-surface px-3 py-1.5 pl-9 text-sm text-white placeholder:text-slate-600 focus:border-brand-400/50 focus:outline-none"
         />
       </div>
+
+      {/* Filtro por etiqueta (segmentación tipo respond.io) */}
+      {tagCatalog.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Filtrar:</span>
+          <button
+            onClick={() => { setTagFilter(null); setPage(1); }}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-all ${
+              tagFilter === null ? 'border-brand-400/50 bg-brand-400/10 text-brand-400' : 'border-slate-700 text-slate-400 hover:text-white'
+            }`}
+          >
+            Todos
+          </button>
+          {tagCatalog.map((tag) => (
+            <button
+              key={tag.id}
+              onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(1); }}
+              className="focus:outline-none"
+            >
+              <TagChip tag={tag} active={tagFilter === tag.id || tagFilter === null} />
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Split pane */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" style={{ minHeight: '30rem' }}>
@@ -175,6 +288,14 @@ export default function ClientesPage() {
                       </>
                     )}
                   </div>
+                  {(client.tags?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {client.tags!.map((tagId) => {
+                        const tag = tagById.get(tagId);
+                        return tag ? <TagChip key={tagId} tag={tag} /> : null;
+                      })}
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -249,7 +370,14 @@ export default function ClientesPage() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
-                      onClick={() => handleDelete(detail.id)}
+                      onClick={() => setEditOpen(true)}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-surface-100 transition-colors"
+                      title="Editar cliente"
+                    >
+                      <Edit3 className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => setPendingDelete({ id: detail.id, name: detail.name })}
                       disabled={deleting === detail.id}
                       className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                       title="Eliminar cliente"
@@ -282,6 +410,15 @@ export default function ClientesPage() {
 
               {/* Tabs content */}
               <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+                {/* CRM: etiquetas asignadas + nota interna */}
+                <ClientTagEditor
+                  clientId={detail.id}
+                  catalog={tagCatalog}
+                  assigned={detail.tags ?? []}
+                  note={detail.note ?? ''}
+                  onChanged={() => { refetch(); refetchDetail(); }}
+                />
+
                 {/* Recent bookings */}
                 <div>
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -388,10 +525,29 @@ export default function ClientesPage() {
         </div>
       </div>
 
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        onClose={() => { if (!deleting) setPendingDelete(null); }}
+        onConfirm={() => { if (pendingDelete) handleDelete(pendingDelete.id); }}
+        title="Eliminar cliente"
+        message={`¿Eliminar a ${pendingDelete?.name ?? 'este cliente'}? Deja de aparecer en tu lista y no podrá volver a ingresar con su sesión actual. Sus reservas y órdenes quedan en el historial.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting !== null}
+      />
+
       <ClientFormModal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
         onSave={handleCreate}
+      />
+
+      <ClientFormModal
+        isOpen={editOpen}
+        onClose={() => setEditOpen(false)}
+        onSave={handleUpdate}
+        title="Editar cliente"
+        initial={editInitial}
       />
     </div>
   );

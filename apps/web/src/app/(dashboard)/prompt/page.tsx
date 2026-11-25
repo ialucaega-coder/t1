@@ -13,6 +13,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
 import { EmptyState } from '@/components/common/EmptyState';
 import { Modal } from '@/components/ui/Modal';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const CATEGORIES = ['General', 'Reservas', 'Notificaciones', 'Seguimiento', 'Ventas', 'Soporte'];
 
@@ -33,6 +34,7 @@ export default function PromptPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
+  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
   function openCreate() {
     setEditingId(null);
@@ -80,6 +82,7 @@ export default function PromptPage() {
       toast({ type: 'error', message: 'Error al eliminar el prompt' });
     } finally {
       setDeleting(null);
+      setPromptToDelete(null);
     }
   }
 
@@ -116,7 +119,9 @@ export default function PromptPage() {
 
       <p className="text-sm text-slate-400 max-w-2xl">
         Plantillas de mensaje para tu bot. Usalas como sistema prompt, respuestas rápidas o
-        notificaciones automáticas. Las variables entre {"{ }"} se reemplazan automáticamente.
+        notificaciones automáticas. Las variables entre {"{ }"} (como {"{negocio}"}) son marcadores para que
+        los completes vos al usar la plantilla: hoy solo se reemplazan solas {"{negocio}"} y {"{asistente}"} en
+        el saludo inicial del Asistente de Voz.
       </p>
 
       {/* Grid */}
@@ -172,10 +177,11 @@ export default function PromptPage() {
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
                 <button
-                  onClick={() => handleDelete(prompt.id)}
+                  onClick={() => setPromptToDelete({ id: prompt.id, name: prompt.name })}
                   disabled={deleting === prompt.id}
                   className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                   title="Eliminar"
+                  aria-label={`Eliminar prompt ${prompt.name}`}
                 >
                   {deleting === prompt.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -235,7 +241,7 @@ export default function PromptPage() {
               placeholder={"Hola {nombre} 👋 Bienvenido a {negocio}.\n\n¿En qué te puedo ayudar?"}
             />
             <p className="text-[10px] text-slate-600 mt-1">
-              Usá {"{ }"} para variables: {"{nombre}"}, {"{negocio}"}, {"{fecha}"}, {"{servicio}"}, {"{hora}"}
+              Usá {"{ }"} para marcar datos a completar: {"{nombre}"}, {"{negocio}"}, {"{fecha}"}, {"{servicio}"}, {"{hora}"}
             </p>
           </div>
 
@@ -269,6 +275,17 @@ export default function PromptPage() {
           </div>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        isOpen={promptToDelete !== null}
+        onClose={() => setPromptToDelete(null)}
+        onConfirm={() => promptToDelete && handleDelete(promptToDelete.id)}
+        title="¿Eliminar prompt?"
+        message={`Vas a eliminar el prompt "${promptToDelete?.name ?? ''}". Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={promptToDelete !== null && deleting === promptToDelete.id}
+      />
     </div>
   );
 }

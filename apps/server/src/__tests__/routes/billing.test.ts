@@ -31,14 +31,27 @@ vi.mock('../../services/stripe', () => ({
   cancelSubscription: vi.fn(),
   constructWebhookEvent: vi.fn(),
   handleWebhookEvent: vi.fn(),
+  createPaymentLink: vi.fn(),
+}));
+
+vi.mock('../../services/billing/limits', () => ({
+  getBotCapacity: vi.fn(),
+  getContactCapacity: vi.fn(),
+}));
+
+vi.mock('../../services/billing/quota', () => ({
+  getMessageQuota: vi.fn(),
 }));
 
 import { prisma } from '../../lib/prisma';
+import { getBotCapacity, getContactCapacity } from '../../services/billing/limits';
+import { getMessageQuota } from '../../services/billing/quota';
 import {
   createCheckoutSession,
   createCustomerPortalSession,
   constructWebhookEvent,
   handleWebhookEvent,
+  createPaymentLink,
 } from '../../services/stripe';
 import { billingRouter } from '../../routes/billing';
 import { errorHandler } from '../../middleware/errorHandler';
@@ -214,6 +227,59 @@ describe('routes/billing', () => {
     });
   });
 
+  describe('GET /api/billing/limits', () => {
+    const mock = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+
+    it('consolida bots, contactos y cupo de mensajes del negocio del token', async () => {
+      mock(getBotCapacity).mockResolvedValue({ used: 1, limit: 1, atLimit: true });
+      mock(getContactCapacity).mockResolvedValue({ used: 40, limit: 100, atLimit: false });
+      mock(getMessageQuota).mockResolvedValue({
+        used: 120, limit: 500, remaining: 380, overQuota: false,
+        periodStart: '2026-10-01', periodEnd: null, plan: 'Free',
+      });
+
+      const res = await request(app)
+        .get('/api/billing/limits')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        bots: { used: 1, limit: 1, atLimit: true },
+        contacts: { used: 40, limit: 100, atLimit: false },
+        messages: {
+          used: 120, limit: 500, remaining: 380, overQuota: false,
+          periodStart: '2026-10-01', periodEnd: null, plan: 'Free',
+        },
+      });
+      // Siempre scopeado al businessId del token.
+      expect(getBotCapacity).toHaveBeenCalledWith('biz_1');
+      expect(getContactCapacity).toHaveBeenCalledWith('biz_1');
+      expect(getMessageQuota).toHaveBeenCalledWith('biz_1');
+    });
+
+    it('usa el businessId del token, no uno ajeno', async () => {
+      mock(getBotCapacity).mockResolvedValue({ used: 0, limit: 1, atLimit: false });
+      mock(getContactCapacity).mockResolvedValue({ used: 0, limit: 100, atLimit: false });
+      mock(getMessageQuota).mockResolvedValue({
+        used: 0, limit: 500, remaining: 500, overQuota: false,
+        periodStart: '2026-10-01', periodEnd: null, plan: null,
+      });
+
+      const res = await request(app)
+        .get('/api/billing/limits')
+        .set('Authorization', `Bearer ${otherBusinessAdminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(getBotCapacity).toHaveBeenCalledWith('biz_2');
+    });
+
+    it('devuelve 401 sin token', async () => {
+      const res = await request(app).get('/api/billing/limits');
+      expect(res.status).toBe(401);
+      expect(getBotCapacity).not.toHaveBeenCalled();
+    });
+  });
+
   describe('POST /api/billing/portal', () => {
     it('crea una sesion del customer portal correctamente', async () => {
       (prisma.business.findUniqueOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -252,6 +318,66 @@ describe('routes/billing', () => {
 
       expect(res.status).toBe(401);
       expect(createCustomerPortalSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/billing/payment-link', () => {
+    it('genera un link de pago con datos válidos (ADMIN)', async () => {
+      (createPaymentLink as ReturnType<typeof vi.fn>).mockResolvedValue('https://checkout.stripe.com/pay_123');
+
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ amount: 1500, description: 'Seña de turno' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ url: 'https://checkout.stripe.com/pay_123' });
+      expect(createPaymentLink).toHaveBeenCalledWith('biz_1', {
+        amount: 1500,
+        description: 'Seña de turno',
+        currency: undefined,
+      });
+    });
+
+    it('usa el businessId del token, no uno enviado en el body', async () => {
+      (createPaymentLink as ReturnType<typeof vi.fn>).mockResolvedValue('https://checkout.stripe.com/pay_456');
+
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${otherBusinessAdminToken}`)
+        .send({ amount: 2000, description: 'Producto', businessId: 'biz_1' });
+
+      expect(res.status).toBe(200);
+      expect(createPaymentLink).toHaveBeenCalledWith('biz_2', expect.objectContaining({ amount: 2000 }));
+    });
+
+    it('devuelve 400 si el monto no es positivo', async () => {
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ amount: 0, description: 'Algo' });
+
+      expect(res.status).toBe(400);
+      expect(createPaymentLink).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 400 si falta la descripción', async () => {
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ amount: 1500 });
+
+      expect(res.status).toBe(400);
+      expect(createPaymentLink).not.toHaveBeenCalled();
+    });
+
+    it('devuelve 401 sin token de autenticación', async () => {
+      const res = await request(app)
+        .post('/api/billing/payment-link')
+        .send({ amount: 1500, description: 'Seña' });
+
+      expect(res.status).toBe(401);
+      expect(createPaymentLink).not.toHaveBeenCalled();
     });
   });
 

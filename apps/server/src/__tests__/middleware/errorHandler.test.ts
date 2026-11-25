@@ -89,7 +89,7 @@ describe('middleware/errorHandler - errorHandler', () => {
 
   it('responde 400 con detalles ante un ZodError', () => {
     const issues: ZodIssue[] = [
-      { code: 'invalid_type', expected: 'string', received: 'number', path: ['email'], message: 'Esperado string' },
+      { code: 'invalid_type', expected: 'string', path: ['email'], message: 'Esperado string' },
     ];
     const err = new ZodError(issues);
     const res = createMockRes();
@@ -116,9 +116,9 @@ describe('middleware/errorHandler - errorHandler', () => {
     errorHandler(err, dummyReq, res, dummyNext);
 
     expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.stringContaining('email') })
-    );
+    // Mensaje genérico: no nombra el campo (no confirma qué email/valor ya existe).
+    expect(res.json).toHaveBeenCalledWith({ error: 'Ya existe un registro con esos datos' });
+    expect(JSON.stringify((res.json as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('email');
   });
 
   it('responde 404 ante un error Prisma P2025 (record not found)', () => {
@@ -146,6 +146,38 @@ describe('middleware/errorHandler - errorHandler', () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.stringContaining('Referencia') })
     );
+  });
+
+  it('responde 500 con mensaje de migración ante P2022 (columna inexistente)', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = new Prisma.PrismaClientKnownRequestError('Column does not exist', {
+      code: 'P2022',
+      clientVersion: '5.0.0',
+      meta: { column: 'users.twoFactorEnabled' },
+    });
+    const res = createMockRes();
+
+    errorHandler(err, dummyReq, res, dummyNext);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.stringContaining('migración') })
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('responde 500 ante P2021 (tabla inexistente)', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = new Prisma.PrismaClientKnownRequestError('Table does not exist', {
+      code: 'P2021',
+      clientVersion: '5.0.0',
+    });
+    const res = createMockRes();
+
+    errorHandler(err, dummyReq, res, dummyNext);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    consoleSpy.mockRestore();
   });
 
   it('responde con el statusCode y message de un AppError', () => {

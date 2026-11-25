@@ -1,10 +1,13 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Clock, Zap, Trophy, Github, ThumbsUp, Upload, Code2, Lightbulb } from 'lucide-react';
+import { Send, Bot, User, Clock, Zap, Trophy, Github, ThumbsUp, Upload, Code2, Lightbulb, X, Pencil, Trash2 } from 'lucide-react';
 import { useArena } from '@/hooks/use-arena';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useToast } from '@/components/common/Toast';
+import { usePageCounter, fmtCounter } from '@/stores/page-counter';
 import type { ArenaBuilder, ArenaIdea } from '@/types/arena';
 
 type Tab = 'chat' | 'builders' | 'ideas';
@@ -15,6 +18,7 @@ interface Message {
   text: string;
   timestamp: string;
   responseTime?: number;
+  isError?: boolean;
 }
 
 const testScenarios = [
@@ -27,21 +31,169 @@ const testScenarios = [
 ];
 
 const prizes = [
-  { place: '1er lugar', icon: '1F947', reward: '1 año de Local B+ gratis + 30 min 1-a-1 + grupo privado de WhatsApp' },
+  { place: '1er lugar', icon: '1F947', reward: '1 año de Mr Go + gratis + 30 min 1-a-1 + grupo privado de WhatsApp' },
   { place: '2do lugar', icon: '1F948', reward: '$200 USD + 30 min 1-a-1 + grupo privado de WhatsApp' },
   { place: '3er lugar', icon: '1F949', reward: '30 min 1-a-1 + acceso al grupo privado de WhatsApp' },
 ];
 
 export default function ArenaPage() {
-  const { builders, ideas, isLoading, error, refetch, voteIdea, sendChat } = useArena();
+  const { builders, ideas, isLoading, error, refetch, voteIdea, voteBuilder, createBuilder, updateBuilder, deleteBuilder, createIdea, sendChat } = useArena();
+  const { toast } = useToast();
   const [tab, setTab] = useState<Tab>('chat');
+  // Proponer idea (antes el botón "Proponer idea" no hacía nada).
+  const [showIdeaForm, setShowIdeaForm] = useState(false);
+  const [ideaTitle, setIdeaTitle] = useState('');
+  const [ideaDesc, setIdeaDesc] = useState('');
+  const [ideaCategory, setIdeaCategory] = useState('');
+  const [submittingIdea, setSubmittingIdea] = useState(false);
+
+  // Voto a builders (antes los botones de voto no hacían nada).
+  const [votingId, setVotingId] = useState<string | null>(null);
+
+  // Subir contribución (antes el botón no hacía nada).
+  const [showBuilderForm, setShowBuilderForm] = useState(false);
+  const [builderName, setBuilderName] = useState('');
+  const [builderTitle, setBuilderTitle] = useState('');
+  const [builderDesc, setBuilderDesc] = useState('');
+  const [builderPrompt, setBuilderPrompt] = useState('');
+  const [submittingBuilder, setSubmittingBuilder] = useState(false);
+  // Editar / borrar una contribución (el server lo permite solo a ADMIN).
+  const [editingBuilder, setEditingBuilder] = useState<ArenaBuilder | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ArenaBuilder | null>(null);
+  const [deletingBuilder, setDeletingBuilder] = useState(false);
+  // Builder con el que se prueba el bot en el chat ('' = el bot tal cual está configurado).
+  const [chatBuilderId, setChatBuilderId] = useState('');
+
+  /** Mensaje del server si lo hay; el 403 en inglés se traduce a algo entendible. */
+  function errorText(err: unknown, fallback: string) {
+    const msg = err instanceof Error ? err.message.trim() : '';
+    if (!msg) return fallback;
+    if (msg === 'Insufficient permissions') return 'Solo un administrador puede hacer esto';
+    return msg;
+  }
+
+  function openCreateBuilder() {
+    setEditingBuilder(null);
+    setBuilderName(''); setBuilderTitle(''); setBuilderDesc(''); setBuilderPrompt('');
+    setShowBuilderForm(true);
+  }
+
+  function openEditBuilder(b: ArenaBuilder) {
+    setEditingBuilder(b);
+    setBuilderName(b.name || '');
+    setBuilderTitle(b.title || '');
+    setBuilderDesc(b.description || '');
+    setBuilderPrompt(b.systemPrompt || '');
+    setShowBuilderForm(true);
+  }
+
+  async function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    setDeletingBuilder(true);
+    try {
+      await deleteBuilder(pendingDelete.id);
+      // Si el chat estaba probando justo este builder, vuelve al bot por defecto.
+      if (chatBuilderId === pendingDelete.id) selectChatBuilder('');
+      toast({ type: 'success', message: 'Contribución eliminada' });
+    } catch (err) {
+      toast({ type: 'error', message: errorText(err, 'No se pudo eliminar la contribución') });
+    } finally {
+      setDeletingBuilder(false);
+      setPendingDelete(null);
+    }
+  }
+
+  async function handleVoteBuilder(id: string) {
+    setVotingId(id);
+    try {
+      await voteBuilder(id);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo votar' });
+    } finally {
+      setVotingId(null);
+    }
+  }
+
+  async function handleVoteIdea(id: string) {
+    try {
+      await voteIdea(id);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo votar' });
+    }
+  }
+
+  async function handleCreateBuilder() {
+    const name = builderName.trim();
+    const title = builderTitle.trim();
+    if (!name || !title) {
+      toast({ type: 'error', message: 'Nombre y título son obligatorios' });
+      return;
+    }
+    setSubmittingBuilder(true);
+    try {
+      if (editingBuilder) {
+        await updateBuilder(editingBuilder.id, {
+          name,
+          title,
+          description: builderDesc.trim(),
+          systemPrompt: builderPrompt.trim(),
+        });
+        toast({ type: 'success', message: 'Contribución actualizada' });
+      } else {
+        await createBuilder({
+          name,
+          title,
+          description: builderDesc.trim(),
+          systemPrompt: builderPrompt.trim(),
+          model: 'claude-sonnet-5',
+        });
+        toast({ type: 'success', message: 'Contribución subida — ¡gracias por participar!' });
+      }
+      setBuilderName(''); setBuilderTitle(''); setBuilderDesc(''); setBuilderPrompt('');
+      setEditingBuilder(null);
+      setShowBuilderForm(false);
+    } catch (err) {
+      toast({ type: 'error', message: errorText(err, editingBuilder ? 'No se pudo actualizar la contribución' : 'No se pudo subir la contribución') });
+    } finally {
+      setSubmittingBuilder(false);
+    }
+  }
+
+  usePageCounter(isLoading ? null : fmtCounter(builders.length + ideas.length, 'PROPUESTA', 'PROPUESTAS'));
+
+  async function handleCreateIdea() {
+    const title = ideaTitle.trim();
+    if (!title) {
+      toast({ type: 'error', message: 'El título de la idea es obligatorio' });
+      return;
+    }
+    setSubmittingIdea(true);
+    try {
+      await createIdea({ title, description: ideaDesc.trim(), category: ideaCategory.trim() });
+      toast({ type: 'success', message: 'Idea propuesta — ¡gracias por aportar!' });
+      setIdeaTitle(''); setIdeaDesc(''); setIdeaCategory('');
+      setShowIdeaForm(false);
+    } catch (err) {
+      toast({ type: 'error', message: err instanceof Error ? err.message : 'No se pudo proponer la idea' });
+    } finally {
+      setSubmittingIdea(false);
+    }
+  }
   const [messages, setMessages] = useState<Message[]>([
     { id: '0', role: 'bot', text: '¡Hola! Soy el bot de prueba de tu negocio. Escríbeme algo o selecciona un escenario para probar mis respuestas.', timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) },
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [lastResponseTime, setLastResponseTime] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Cambiar de builder cambia el prompt del bot: la charla anterior ya no corresponde,
+  // así que se empieza una conversación nueva (sin conversationId).
+  function selectChatBuilder(id: string) {
+    setChatBuilderId(id);
+    setConversationId(undefined);
+  }
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -53,16 +205,22 @@ export default function ArenaPage() {
     setIsTyping(true);
     const start = Date.now();
     try {
-      const res = await sendChat(text.trim());
+      // Con un builder elegido, el server suma su systemPrompt al del bot.
+      const res = chatBuilderId
+        ? await sendChat(text.trim(), conversationId, chatBuilderId)
+        : await sendChat(text.trim(), conversationId);
       const elapsed = Date.now() - start;
-      const botMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', text: res?.reply || 'Entendido. Déjame consultar eso y te respondo en un momento.', timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), responseTime: elapsed };
+      if (res?.conversationId) setConversationId(res.conversationId);
+      if (!res?.reply) throw new Error('El bot no devolvió una respuesta');
+      const botMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', text: res.reply, timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), responseTime: elapsed };
       setMessages((prev) => [...prev, botMsg]);
       setLastResponseTime(elapsed);
-    } catch {
-      const elapsed = Date.now() - start;
-      const botMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', text: 'Entendido. Déjame consultar eso y te respondo en un momento. ¿Hay algo más en lo que pueda ayudarte?', timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), responseTime: elapsed };
-      setMessages((prev) => [...prev, botMsg]);
-      setLastResponseTime(elapsed);
+    } catch (err) {
+      // Error real (red, cuota, servidor): se muestra como error, NO como respuesta del bot.
+      const detail = err instanceof Error && err.message ? err.message : 'Error desconocido';
+      const errMsg: Message = { id: (Date.now() + 1).toString(), role: 'bot', isError: true, text: `No se pudo obtener la respuesta del bot: ${detail}`, timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) };
+      setMessages((prev) => [...prev, errMsg]);
+      toast({ type: 'error', message: `No se pudo obtener la respuesta del bot: ${detail}` });
     } finally { setIsTyping(false); }
   };
 
@@ -88,6 +246,21 @@ export default function ArenaPage() {
       {tab === 'chat' && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-1 space-y-3">
+            <div>
+              <label htmlFor="arena-chat-builder" className="mono-label block mb-1.5">PROBAR CON</label>
+              <select
+                id="arena-chat-builder"
+                value={chatBuilderId}
+                onChange={(e) => selectChatBuilder(e.target.value)}
+                disabled={isTyping}
+                className="input w-full text-xs"
+              >
+                <option value="">Mi bot (sin builder)</option>
+                {builders.map((b: ArenaBuilder) => (
+                  <option key={b.id} value={b.id}>{b.title || b.name}</option>
+                ))}
+              </select>
+            </div>
             <p className="mono-label">ESCENARIOS DE PRUEBA</p>
             <div className="space-y-2">
               {testScenarios.map((s) => (
@@ -121,10 +294,12 @@ export default function ArenaPage() {
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   {msg.role === 'bot' && <div className="h-7 w-7 rounded-full bg-brand-400/20 flex items-center justify-center shrink-0 mt-1"><Bot className="h-3.5 w-3.5 text-brand-400" /></div>}
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-brand-400 text-white rounded-br-md' : 'bg-surface-100 text-slate-200 border border-slate-700/50 rounded-bl-md'}`}>
+                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-brand-400 text-white rounded-br-md' : msg.isError ? 'bg-red-500/10 text-red-300 border border-red-500/30 rounded-bl-md' : 'bg-surface-100 text-slate-200 border border-slate-700/50 rounded-bl-md'}`}>
                     <p className="text-sm leading-relaxed">{msg.text}</p>
                     <div className={`flex items-center gap-2 mt-1 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                      <span className={`text-[10px] ${msg.role === 'user' ? 'text-brand-200' : 'text-slate-500'}`}>{msg.timestamp}</span>
+                      {/* La hora del mensaje inicial se calcula al renderizar: server y navegador pueden diferir (minuto o zona
+                          horaria), lo que en producción dispara el error de hidratación #418. */}
+                      <span suppressHydrationWarning className={`text-[10px] ${msg.role === 'user' ? 'text-brand-200' : 'text-slate-500'}`}>{msg.timestamp}</span>
                       {msg.responseTime && <span className="text-[10px] text-slate-500 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />{msg.responseTime}ms</span>}
                     </div>
                   </div>
@@ -175,7 +350,7 @@ export default function ArenaPage() {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <p className="mono-label">PODIO</p>
-                  <button className="btn-primary text-xs"><Upload className="h-3.5 w-3.5" /> Subir contribución</button>
+                  <button onClick={openCreateBuilder} className="btn-primary text-xs"><Upload className="h-3.5 w-3.5" /> Subir contribución</button>
                 </div>
                 {podio.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -186,7 +361,7 @@ export default function ArenaPage() {
                         </div>
                         <h4 className="font-semibold text-white text-sm mb-2">{entry.title}</h4>
                         <p className="text-xs text-slate-400 mb-3">{entry.description || ''}</p>
-                        {entry.github && <a href="#" className="mono-label hover:text-brand-300 flex items-center gap-1 mb-3"><Github className="h-3 w-3" /> GitHub</a>}
+                        {entry.github && <span className="mono-label flex items-center gap-1 mb-3 text-slate-500"><Github className="h-3 w-3" /> GitHub</span>}
                         <div className="flex items-center justify-between pt-3 border-t border-slate-700/50">
                           <div className="flex items-center gap-2">
                             <div className="h-6 w-6 rounded-full bg-brand-400/20 flex items-center justify-center text-[10px] font-bold text-brand-400">
@@ -194,7 +369,11 @@ export default function ArenaPage() {
                             </div>
                             <p className="text-xs text-white">{entry.name || 'Anónimo'}</p>
                           </div>
-                          <button className="flex items-center gap-1 text-slate-400 hover:text-brand-400"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm font-bold">{entry.votes}</span></button>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => openEditBuilder(entry)} aria-label={`Editar ${entry.title}`} title="Editar" className="p-1 rounded text-slate-500 hover:text-white hover:bg-surface-100"><Pencil className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => setPendingDelete(entry)} aria-label={`Eliminar ${entry.title}`} title="Eliminar" className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => handleVoteBuilder(entry.id)} disabled={votingId === entry.id} className="flex items-center gap-1 text-slate-400 hover:text-brand-400 disabled:opacity-50"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm font-bold">{entry.votes}</span></button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -215,7 +394,9 @@ export default function ArenaPage() {
                           {(entry.name || 'U').split(' ').map((n: string) => n[0]).join('')}
                         </div>
                         <div className="flex-1"><p className="text-sm font-medium text-white">{entry.title}</p><p className="text-xs text-slate-500">por {entry.name || 'Anónimo'}</p></div>
-                        <button className="flex items-center gap-1 text-slate-400 hover:text-brand-400"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm">{entry.votes}</span></button>
+                        <button onClick={() => openEditBuilder(entry)} aria-label={`Editar ${entry.title}`} title="Editar" className="p-1 rounded text-slate-500 hover:text-white hover:bg-surface-100"><Pencil className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => setPendingDelete(entry)} aria-label={`Eliminar ${entry.title}`} title="Eliminar" className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => handleVoteBuilder(entry.id)} disabled={votingId === entry.id} className="flex items-center gap-1 text-slate-400 hover:text-brand-400 disabled:opacity-50"><ThumbsUp className="h-3.5 w-3.5" /><span className="text-sm">{entry.votes}</span></button>
                       </div>
                     ))}
                   </div>
@@ -232,13 +413,13 @@ export default function ArenaPage() {
             <div className="text-center py-12">
               <Lightbulb className="h-8 w-8 text-slate-600 mx-auto mb-3" />
               <p className="text-sm text-slate-400">Las ideas de la comunidad aparecerán aquí.</p>
-              <button className="btn-primary text-xs mt-4"><Lightbulb className="h-3.5 w-3.5" /> Proponer idea</button>
+              <button onClick={() => setShowIdeaForm(true)} className="btn-primary text-xs mt-4"><Lightbulb className="h-3.5 w-3.5" /> Proponer idea</button>
             </div>
           ) : (
             <div className="space-y-3">
               {ideas.map((idea: ArenaIdea) => (
                 <div key={idea.id} className="card flex items-center gap-4">
-                  <button onClick={() => voteIdea(idea.id)} className="flex flex-col items-center gap-0.5 text-slate-400 hover:text-brand-400">
+                  <button onClick={() => handleVoteIdea(idea.id)} className="flex flex-col items-center gap-0.5 text-slate-400 hover:text-brand-400">
                     <ThumbsUp className="h-4 w-4" /><span className="text-xs font-bold">{idea.votes || 0}</span>
                   </button>
                   <div className="flex-1">
@@ -248,11 +429,95 @@ export default function ArenaPage() {
                   {idea.category && <span className="badge border text-[9px] bg-brand-400/10 text-brand-400 border-brand-400/20">{idea.category}</span>}
                 </div>
               ))}
-              <button className="btn-primary text-xs"><Lightbulb className="h-3.5 w-3.5" /> Proponer idea</button>
+              <button onClick={() => setShowIdeaForm(true)} className="btn-primary text-xs"><Lightbulb className="h-3.5 w-3.5" /> Proponer idea</button>
             </div>
           )}
         </>
       )}
+
+      {/* Modal proponer idea */}
+      {showIdeaForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={submittingIdea ? undefined : () => setShowIdeaForm(false)} />
+          <div className="relative z-10 w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2"><Lightbulb className="h-4 w-4 text-brand-400" /> Proponer idea</h2>
+              <button onClick={() => setShowIdeaForm(false)} disabled={submittingIdea} className="rounded-lg p-1 text-slate-500 hover:text-white hover:bg-surface-100 transition-colors disabled:opacity-50">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Título</label>
+                <input type="text" value={ideaTitle} onChange={(e) => setIdeaTitle(e.target.value)} placeholder="Ej: Integración con Google Calendar" autoFocus className="input" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Descripción (opcional)</label>
+                <textarea value={ideaDesc} onChange={(e) => setIdeaDesc(e.target.value)} placeholder="Contá cómo te ayudaría..." className="input min-h-[80px] resize-none" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Categoría (opcional)</label>
+                <input type="text" value={ideaCategory} onChange={(e) => setIdeaCategory(e.target.value)} placeholder="Ej: Integraciones, IA, Reservas" className="input" />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button onClick={() => setShowIdeaForm(false)} disabled={submittingIdea} className="btn-secondary text-xs disabled:opacity-50">Cancelar</button>
+              <button onClick={handleCreateIdea} disabled={submittingIdea} className="btn-primary text-xs disabled:opacity-50">
+                {submittingIdea ? 'Enviando...' : 'Proponer idea'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBuilderForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={submittingBuilder ? undefined : () => { setShowBuilderForm(false); setEditingBuilder(null); }} />
+          <div className="relative z-10 w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2"><Upload className="h-4 w-4 text-brand-400" /> {editingBuilder ? 'Editar contribución' : 'Subir contribución'}</h2>
+              <button onClick={() => { setShowBuilderForm(false); setEditingBuilder(null); }} disabled={submittingBuilder} className="rounded-lg p-1 text-slate-500 hover:text-white hover:bg-surface-100 transition-colors disabled:opacity-50">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Tu nombre (autor)</label>
+                <input type="text" value={builderName} onChange={(e) => setBuilderName(e.target.value)} placeholder="Ej: Juan Pérez" autoFocus className="input" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Título del bot</label>
+                <input type="text" value={builderTitle} onChange={(e) => setBuilderTitle(e.target.value)} placeholder="Ej: Agente de reservas express" className="input" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Descripción (opcional)</label>
+                <textarea value={builderDesc} onChange={(e) => setBuilderDesc(e.target.value)} placeholder="¿Qué hace tu bot y por qué es bueno?" className="input min-h-[70px] resize-none" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">System prompt (opcional)</label>
+                <textarea value={builderPrompt} onChange={(e) => setBuilderPrompt(e.target.value)} placeholder="Instrucciones del bot..." className="input min-h-[70px] resize-none" />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button onClick={() => { setShowBuilderForm(false); setEditingBuilder(null); }} disabled={submittingBuilder} className="btn-secondary text-xs disabled:opacity-50">Cancelar</button>
+              <button onClick={handleCreateBuilder} disabled={submittingBuilder} className="btn-primary text-xs disabled:opacity-50">
+                {submittingBuilder ? (editingBuilder ? 'Guardando...' : 'Subiendo...') : editingBuilder ? 'Guardar cambios' : 'Subir contribución'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== null}
+        onClose={() => { if (!deletingBuilder) setPendingDelete(null); }}
+        onConfirm={handleConfirmDelete}
+        title="Eliminar contribución"
+        message={`¿Eliminar "${pendingDelete?.title || pendingDelete?.name || ''}"? Se pierden también sus votos y no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deletingBuilder}
+      />
     </div>
   );
 }

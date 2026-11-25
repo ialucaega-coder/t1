@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { posApi } from '@/lib/api/index';
 import type { QuickItem } from '@/constants/pos';
-import { QUICK_ITEMS } from '@/constants/pos';
 
 export interface UsePosResult {
   items: QuickItem[];
@@ -30,8 +29,9 @@ export function usePos(): UsePosResult {
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Error al cargar productos POS');
-          // Fallback a datos mock cuando la API no está disponible.
-          setItems(QUICK_ITEMS);
+          // Sin datos falsos: ante un error mostramos el error y lista vacía, no
+          // productos simulados.
+          setItems([]);
         }
       } finally {
         if (!cancelled) setIsLoading(false);
